@@ -28,7 +28,7 @@ class ViewTransformer:
 
         source = source.astype(np.float32)
         target = target.astype(np.float32)
-        self.m, _ = cv2.findHomography(source, target)
+        self.m, _ = cv2.findHomography(source, target, cv2.RANSAC, 5.0)
         if self.m is None:
             raise ValueError("Homography matrix could not be calculated.")
 

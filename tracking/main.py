@@ -34,6 +34,7 @@ REFEREE_COLOR_ID = 3
 
 STRIDE = 60
 TARGET_CROP_SAMPLES = 80
+DEFAULT_FPS = 30.0
 CONFIG = SoccerPitchConfiguration()
 
 COLORS = ['#FF1493', '#00BFFF', '#FF6347', '#FFD700']
@@ -469,8 +470,18 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[Fra
         players_team_id = team_classifier.predict(crops)
 
         goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
-        goalkeepers_team_id = resolve_goalkeepers_team_id(
-            players, players_team_id, goalkeepers)
+        if (
+            len(goalkeepers) > 0
+            and len(players) > 0
+            and np.any(players_team_id == 0)
+            and np.any(players_team_id == 1)
+        ):
+            goalkeepers_team_id = resolve_goalkeepers_team_id(
+                players, players_team_id, goalkeepers)
+        else:
+            goalkeepers_team_id = np.full(
+                len(goalkeepers), GOALKEEPER_COLOR_ID, dtype=int
+            )
 
         referees = detections[detections.class_id == REFEREE_CLASS_ID]
 
@@ -622,7 +633,8 @@ def main(
     device: str,
     mode: Mode,
     state_output_path: str = "",
-    state_flush_interval: float = 0.5
+    state_flush_interval: float = 0.5,
+    no_display: bool = False
 ) -> None:
     if mode == Mode.PITCH_DETECTION:
         frame_generator = run_pitch_detection(
@@ -661,6 +673,7 @@ def main(
 
     frame_id = 0
     video_info = sv.VideoInfo.from_video_path(source_video_path)
+    fps = video_info.fps if video_info.fps and video_info.fps > 0 else DEFAULT_FPS
     try:
         with sv.VideoSink(target_video_path, video_info) as sink:
             for frame, state_players in frame_generator:
@@ -670,7 +683,7 @@ def main(
                         FrameState(
                             frame_id=frame_id,
                             timestamp=time.time(),
-                            video_ts=None,
+                            video_ts=frame_id / fps,
                             players=state_players,
                             ball=None,
                             source=mode.value
@@ -678,11 +691,13 @@ def main(
                     )
                     frame_id += 1
 
-                cv2.imshow("frame", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if not no_display:
+                    cv2.imshow("frame", frame)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
     finally:
-        cv2.destroyAllWindows()
+        if not no_display:
+            cv2.destroyAllWindows()
         if persistence is not None:
             persistence.stop()
             persistence.join()
@@ -693,9 +708,11 @@ if __name__ == '__main__':
     parser.add_argument('--source_video_path', type=str, required=True)
     parser.add_argument('--target_video_path', type=str, required=True)
     parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
+    parser.add_argument('--mode', type=lambda x: Mode[x], default=Mode.PLAYER_DETECTION)
     parser.add_argument('--state_output_path', type=str, default='')
     parser.add_argument('--state_flush_interval', type=float, default=0.5)
+    parser.add_argument('--no_display', action='store_true',
+                        help='Disable real-time preview window for headless server environments')
     args = parser.parse_args()
     main(
         source_video_path=args.source_video_path,
@@ -703,5 +720,6 @@ if __name__ == '__main__':
         device=args.device,
         mode=args.mode,
         state_output_path=args.state_output_path,
-        state_flush_interval=args.state_flush_interval
+        state_flush_interval=args.state_flush_interval,
+        no_display=args.no_display
     )

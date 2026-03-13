@@ -14,7 +14,7 @@ class SoccerPitchConfiguration:
     penalty_spot_distance: int = 1100  # [cm]
 
     @property
-    def vertices(self) -> List[Tuple[int, int]]:
+    def vertices(self) -> List[Tuple[float, float]]:
         return [
             (0, 0),  # 1
             (0, (self.width - self.penalty_box_width) / 2),  # 2

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import os
 import threading
 import time
@@ -15,6 +16,8 @@ from typing import (
     Optional,
     Tuple,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Team(Enum):
@@ -81,7 +84,7 @@ class FrameState:
 
     frame_id: int
     timestamp: float
-    video_ts: Optional[float]
+    video_ts: Optional[float] = None
     players: Dict[int, PlayerState] = field(default_factory=dict)
     ball: Optional[BallState] = None
     source: str = "default"
@@ -155,9 +158,10 @@ class GameStateManager:
       都通过 GameStateManager 读写数据，避免直接共享裸字典。
     """
 
-    def __init__(self, max_history: int = 900) -> None:
+    def __init__(self, max_history: int = 900, max_events: int = 500) -> None:
         """
         :param max_history: 帧历史缓存长度，默认 900（约 30fps * 30s）
+        :param max_events: 犯规事件与越位查询的最大缓存数量，默认 500
         """
         # 可重入锁，确保在复杂回调场景中也不会死锁
         self._lock = threading.RLock()
@@ -168,9 +172,9 @@ class GameStateManager:
         self._frame_history: Deque[FrameState] = deque(maxlen=max_history)
         self._frame_index: Dict[int, FrameState] = {}
 
-        # 事件数据
-        self._foul_events: List[FoulEvent] = []
-        self._offside_queries: List[OffsideQuery] = []
+        # 事件数据（有上限，防止长时间运行内存无限增长）
+        self._foul_events: Deque[FoulEvent] = deque(maxlen=max_events)
+        self._offside_queries: Deque[OffsideQuery] = deque(maxlen=max_events)
 
         # 回调列表
         self._frame_callbacks: List[Callable[[FrameState], None]] = []
@@ -219,9 +223,7 @@ class GameStateManager:
             try:
                 cb(frame)
             except Exception:
-                # 这里不抛出异常，确保单个回调失败不会影响整体系统运行
-                # 真正的错误处理/日志记录交由上层集成时实现
-                pass
+                logger.exception("帧回调执行时发生异常")
 
     def add_foul_event(self, event: FoulEvent) -> None:
         """新增犯规事件，并触发对应的回调（线程安全）。"""
@@ -233,7 +235,7 @@ class GameStateManager:
             try:
                 cb(event)
             except Exception:
-                pass
+                logger.exception("犯规事件回调执行时发生异常")
 
     def add_offside_query(self, query: OffsideQuery) -> None:
         """记录一次越位查询请求（线程安全）。"""
@@ -318,7 +320,7 @@ class GameStateManager:
             return []
 
         with self._lock:
-            events = self._foul_events[-last_n:]
+            events = list(self._foul_events)[-last_n:]
         return events
 
     def get_offside_queries(self) -> List[OffsideQuery]:
@@ -492,8 +494,7 @@ class AsyncPersistence(threading.Thread):
                         self._last_frame_id = new_frames[-1].frame_id
 
             except Exception:
-                # 持久化线程的异常不应影响主流程，可在集成时增加日志记录
-                pass
+                logger.exception("AsyncPersistence 持久化时发生异常")
 
             # 休眠一段时间，再进行下一轮刷新
             self._stop_event.wait(self._flush_interval)
