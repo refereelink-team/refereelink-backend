@@ -33,6 +33,7 @@ GOALKEEPER_COLOR_ID = 2
 REFEREE_COLOR_ID = 3
 
 STRIDE = 60
+TARGET_CROP_SAMPLES = 80
 CROPS_COLLECTION_END = 1500
 CONFIG = SoccerPitchConfiguration()
 
@@ -190,11 +191,24 @@ def get_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
     return [sv.crop_image(frame, xyxy) for xyxy in detections.xyxy]
 
 
+def _calculate_crop_stride(video_info: sv.VideoInfo) -> int:
+    """
+    Dynamically derive a frame stride so short videos still yield enough crops.
+    """
+    total_frames = video_info.total_frames or 0
+    if total_frames <= 0:
+        return STRIDE
+    stride = max(1, total_frames // TARGET_CROP_SAMPLES)
+    return min(STRIDE, stride)
+
+
 def collect_player_crops(
     source_video_path: str,
     player_detection_model: YOLO,
     end: Optional[int] = None
 ) -> List[np.ndarray]:
+    video_info = sv.VideoInfo.from_video_path(source_video_path)
+    stride = _calculate_crop_stride(video_info)
     frame_generator = sv.get_video_frames_generator(
         source_path=source_video_path, stride=STRIDE, end=end)
     crops = []
