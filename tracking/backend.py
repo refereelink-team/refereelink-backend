@@ -6,7 +6,6 @@ tracking 底座能力：
 """
 
 import os
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import cv2
@@ -14,21 +13,15 @@ import numpy as np
 import supervision as sv
 from ultralytics import YOLO
 
+from core import ObjectTrack
+
 # 自定义足球检测模型类别约定：
 # 0=球（ball），1=守门员（goalkeeper），2=球员（player），3=裁判（referee）
 BALL_CLASS_ID = 0
 HUMAN_CLASS_IDS = (1, 2, 3)
 
 
-@dataclass
-class TrackedObject:
-    """单帧中一个被追踪目标（像素空间）。"""
-
-    track_id: int
-    class_id: int
-    xyxy: Tuple[int, int, int, int]
-    confidence: float
-    team: str  # "RED" | "BLUE" | "BALL" | "WHITE"
+TrackedObject = ObjectTrack
 
 
 def get_player_team(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> str:

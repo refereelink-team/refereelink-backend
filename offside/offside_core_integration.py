@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 """
-与 `core` 状态中台的适配层。
+与 `core` 状态中台的 packet-first 适配层。
 
 作用：
-- 将本模块中的 Tracklet 列表，转换为统一的 `FrameState` / `PlayerState` / `BallState`；
+- 将本模块中的投影结果转换为统一的 `FramePacket` / `ProjectedObject`；
+- 通过 `GameStateManager.update_packet(...)` 维护 packet 与 frame 快照；
 - 在检测到越位线时，按约定构造 `OffsideQuery` 并写入 `GameStateManager`。
 
 用法示例（伪代码）：
@@ -16,107 +17,77 @@ from __future__ import annotations
     frame_id = 0
     while True:
         ...
-        tracklets = run_detection_and_tracking(...)
+        projected_objects = build_projected_objects(...)
         process_frame_with_core(
             frame_id=frame_id,
             video_ts=None,
             source="OFFSIDE_MODULE",
-            tracklets=tracklets,
+            tracklets=projected_objects,
             game_state=state,
         )
         frame_id += 1
 """
 
 import time
-from typing import List, Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
-from core import (
-    BallState,
-    FrameState,
-    GameStateManager,
-    OffsideQuery,
-    PlayerState,
-    Team,
-)
+from core import FramePacket, GameStateManager, ObjectTrack, OffsideQuery, ProjectedObject
 
-from projection.modeling import ProjectedTracklet
-from offside.judgement import (
-    compute_offside_line,
-    get_attacker_defender_direction,
-)
+from offside.judgement import compute_offside_line, get_attacker_defender_direction
 
 
-def _map_team_str_to_enum(team: str) -> Team:
-    """将本模块内部使用的阵营字符串映射到 `core.Team`。"""
-    if team == "RED":
-        return Team.HOME
-    if team == "BLUE":
-        return Team.AWAY
-    if team == "WHITE":
-        return Team.REFEREE
-    return Team.UNKNOWN
+ProjectedTracklet = ProjectedObject
 
 
-def _build_frame_state_from_tracklets(
+def _build_packet_from_tracklets(
     frame_id: int,
     video_ts: Optional[float],
     source: str,
-    tracklets: List[ProjectedTracklet],
-) -> FrameState:
-    """根据当前帧的 Tracklet 列表构造标准的 `FrameState`。"""
+    tracklets: Iterable[ProjectedTracklet],
+) -> FramePacket:
+    """根据当前帧的投影结果构造标准 `FramePacket`。"""
     timestamp = time.time()
-
-    players: dict[int, PlayerState] = {}
-    ball_state: Optional[BallState] = None
-
-    for t in tracklets:
-        x1, y1, x2, y2 = t.xyxy
-        pixel_x = float((x1 + x2) / 2.0)
-        pixel_y = float(y2)
-
-        if t.team == "BALL":
-            # 足球走 `BallState`，不占用 player_id。
-            ball_state = BallState(
-                pixel_x=pixel_x,
-                pixel_y=pixel_y,
-                field_x=float(t.map_x),
-                field_y=float(t.map_y),
-                speed=0.0,
-                confidence=float(t.confidence),
-            )
-            continue
-
-        team_enum = _map_team_str_to_enum(t.team)
-        players[int(t.track_id)] = PlayerState(
-            player_id=int(t.track_id),
-            team=team_enum,
-            pixel_x=pixel_x,
-            pixel_y=pixel_y,
-            field_x=float(t.map_x),
-            field_y=float(t.map_y),
-            speed=0.0,
+    projected_objects = [
+        ProjectedObject(
+            track_id=int(t.track_id),
+            class_id=int(t.class_id),
+            xyxy=tuple(int(v) for v in t.xyxy),
             confidence=float(t.confidence),
-            jersey_number=None,
+            map_x=float(t.map_x),
+            map_y=float(t.map_y),
+            team=t.team,
         )
-
-    return FrameState(
+        for t in tracklets
+    ]
+    tracked_objects = [
+        ObjectTrack(
+            track_id=obj.track_id,
+            class_id=obj.class_id,
+            xyxy=obj.xyxy,
+            confidence=obj.confidence,
+            team=obj.team,
+        )
+        for obj in projected_objects
+    ]
+    return FramePacket(
         frame_id=frame_id,
         timestamp=timestamp,
         video_ts=video_ts,
-        players=players,
-        ball=ball_state,
-        source=source,
+        source_id=source,
+        tracked_objects=tracked_objects,
+        projection_tracklets=projected_objects,
+        debug_info={"offside_projection_count": len(projected_objects)},
     )
 
 
 def _maybe_build_offside_query(
     frame_id: int,
     frame_ts: float,
-    tracklets: List[ProjectedTracklet],
+    tracklets: Iterable[ProjectedTracklet],
     query_id: Optional[int] = None,
 ) -> Optional[OffsideQuery]:
     """
-    基于当前帧的 Tracklet，按 `judgement` 逻辑尝试构造一次越位查询。
+    基于当前帧的投影结果，按 `judgement` 逻辑尝试构造一次越位查询。
 
     - 根据 RED/BLUE 球员中心位置推断进攻方、防守方与进攻方向；
     - 由防守方后场球员计算出越位线 x（地图坐标）；
@@ -127,9 +98,7 @@ def _maybe_build_offside_query(
         for t in tracklets
         if t.team in ("RED", "BLUE")
     ]
-    attacker_team, defender_team, direction = get_attacker_defender_direction(
-        players_map
-    )
+    attacker_team, defender_team, direction = get_attacker_defender_direction(players_map)
     if not attacker_team or not defender_team or not direction:
         return None
 
@@ -137,7 +106,6 @@ def _maybe_build_offside_query(
     if offside_x is None:
         return None
 
-    # 找出一名“最典型”的越位球员，写入 offending_player_field。
     if direction == "LEFT":
         is_offside = lambda x: x < offside_x
         candidates = sorted(
@@ -181,33 +149,33 @@ def process_frame_with_core(
     frame_id: int,
     video_ts: Optional[float],
     source: str,
-    tracklets: List[ProjectedTracklet],
+    tracklets: list[ProjectedTracklet],
     game_state: GameStateManager,
     emit_offside_query: bool = True,
     offside_query_id: Optional[int] = None,
-) -> None:
+) -> FramePacket:
     """
-    将一帧 Tracklet 写入 `GameStateManager`：
-    - 构造并调用 `update_frame(FrameState)`；
+    将一帧投影结果写入 `GameStateManager`：
+    - 构造并调用 `update_packet(FramePacket)`；
     - 可选地基于当前帧自动生成一次 `OffsideQuery` 并写入。
     """
-    frame_state = _build_frame_state_from_tracklets(
+    packet = _build_packet_from_tracklets(
         frame_id=frame_id,
         video_ts=video_ts,
         source=source,
         tracklets=tracklets,
     )
-    game_state.update_frame(frame_state)
+    game_state.update_packet(packet)
 
     if not emit_offside_query:
-        return
+        return packet
 
     query = _maybe_build_offside_query(
         frame_id=frame_id,
-        frame_ts=frame_state.timestamp,
+        frame_ts=packet.timestamp,
         tracklets=tracklets,
         query_id=offside_query_id,
     )
     if query is not None:
         game_state.add_offside_query(query)
-
+    return packet

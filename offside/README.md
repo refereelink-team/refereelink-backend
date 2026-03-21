@@ -6,19 +6,19 @@
 
 - `run_var_video.py`：越位单帧可视化入口（检测跟踪 -> 投影 -> 判定 -> 输出关键帧结果）。
 - `judgement.py`：越位线、攻守方向、出界/门线等规则判定逻辑。
-- `offside_core_integration.py`：把本模块结果写入 `core`（`FrameState` / `OffsideQuery`）。
+- `offside_core_integration.py`：将投影结果封装为 `FramePacket` 并写入 `core.GameStateManager`。
 
 ## 2. 负责什么
 
 - 基于球场平面坐标执行越位相关判定。
 - 生成关键帧判罚结果（`frame.jpg` / `map.jpg` / `json`）。
-- 可选把关键帧状态与越位查询写入 `core` 状态中台。
+- 可选把关键帧 packet 与 `OffsideQuery` 写入 `core` 状态中台。
 
 ## 3. 引用了哪些模块（出向依赖）
 
-- `tracking.backend`：获取检测/跟踪能力和 `TrackedObject` 数据源。
-- `projection.homography` + `projection.modeling`：获取投影能力和 `ProjectedTracklet`。
-- `core`：可选状态写入（`GameStateManager`、`AsyncPersistence`、`FrameState`、`OffsideQuery`）。
+- `tracking.backend`：在单帧分析模式下获取底层检测/跟踪能力。
+- `projection.homography` + `projection.modeling`：获取投影能力与 `ProjectedObject`。
+- `core`：通过 `GameStateManager.update_packet(...)` 写入统一状态，并附加 `OffsideQuery`。
 - `offside` 内部模块：`judgement`、`offside_core_integration` 等。
 
 ## 4. 被哪些模块引用（入向依赖）
@@ -36,13 +36,18 @@
 - `projection`：几何层（坐标映射、投影建模）
 - `offside`：规则层（越位线、攻守方向、判罚与可视化）
 
-这样可以保证：
+## 6. packet-first 状态接入
 
-- 标定/投影调整只改 `projection`；
-- 规则/判罚策略调整只改 `offside`；
-- 两者解耦，便于独立迭代与测试。
+`offside_core_integration.py` 当前流程为：
 
-## 6. 用法（单帧越位可视化）
+1. 接收投影后的对象列表；
+2. 构造 `FramePacket(tracked_objects + projection_tracklets)`；
+3. 调用 `GameStateManager.update_packet(packet)`；
+4. 按需追加 `OffsideQuery`。
+
+因此越位模块已不再以 `FrameState -> update_frame(...)` 作为主链路。
+
+## 7. 用法（单帧越位可视化）
 
 ```bash
 python main.py offside offside/test.mp4 \

@@ -46,22 +46,6 @@ class GameStateManager:
             for fid in obsolete_packet_ids:
                 self._packet_index.pop(fid, None)
 
-    def update_frame(self, frame: FrameState) -> None:
-        with self._lock:
-            if self._start_time is None:
-                self._start_time = time.time()
-            self._current_frame = frame
-            self._frame_history.append(frame)
-            self._frame_index[frame.frame_id] = frame
-            self._total_frames += 1
-            self._prune_indexes()
-            callbacks = list(self._frame_callbacks)
-        for cb in callbacks:
-            try:
-                cb(frame)
-            except Exception:
-                pass
-
     def update_packet(
         self,
         packet: FramePacket,

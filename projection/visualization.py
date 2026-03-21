@@ -17,11 +17,6 @@ import numpy as np
 from projection.homography import HomographyAdapter, build_default_homography
 from projection.modeling import ProjectedTracklet, project_tracked_objects
 from core import ObjectTrack, ProjectedObject
-from tracking.backend import (
-    BALL_CLASS_ID,
-    build_detector_and_tracker,
-    run_detection_and_tracking,
-)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_MODEL_PATH = os.path.join(
@@ -189,16 +184,23 @@ def run_projection_video_pipeline(
     conf_thresh: float = 0.22,
     device: str = "auto",
 ) -> None:
+    """
+    独立 projection CLI 也复用统一 packet 主链路：
+    tracking/main.py -> FramePacket.tracked_objects -> projection 渲染。
+
+    `model_path` 与 `conf_thresh` 参数保留仅为兼容旧 CLI；当前实现以
+    tracking 主流程的模型配置为准。
+    """
     if homography is None:
         homography = build_default_homography()
     selected_device = _resolve_device(device)
 
-    cap = open_video_capture(video_path)
-    if not cap.isOpened():
-        print("错误：无法打开视频文件，请检查路径与格式。", file=sys.stderr)
-        return
+    import supervision as sv
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or frame_rate
+    from tracking.main import run_player_team_classification_packets
+
+    video_info = sv.VideoInfo.from_video_path(video_path)
+    fps = float(video_info.fps or frame_rate)
     field_img = load_field_map(field_map_path)
     map_h, map_w = field_img.shape[:2]
 
@@ -211,27 +213,18 @@ def run_projection_video_pipeline(
             break
     if writer is None or not writer.isOpened():
         print("错误：无法创建输出视频，请检查路径与编码器。", file=sys.stderr)
-        cap.release()
         return
 
-    model, tracker = build_detector_and_tracker(
-        model_path=model_path,
-        frame_rate=int(fps),
+    frame_stream = run_player_team_classification_packets(
+        source_video_path=video_path,
         device=selected_device,
     )
 
     frame_idx = 0
     try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        for packet in frame_stream:
             frame_idx += 1
-
-            tracked_objects = run_detection_and_tracking(
-                model, tracker, frame, conf_thresh=conf_thresh
-            )
-            display_map = render_projection_frame(tracked_objects, field_img, homography)
+            display_map = render_projection_frame(packet.tracked_objects, field_img, homography)
             writer.write(display_map)
 
             if show_live:
@@ -239,7 +232,6 @@ def run_projection_video_pipeline(
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
     finally:
-        cap.release()
         writer.release()
         if show_live:
             cv2.destroyAllWindows()
