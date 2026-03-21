@@ -34,6 +34,7 @@ REFEREE_COLOR_ID = 3
 
 STRIDE = 60
 TARGET_CROP_SAMPLES = 80
+CROPS_COLLECTION_END = 1500
 CONFIG = SoccerPitchConfiguration()
 
 COLORS = ['#FF1493', '#00BFFF', '#FF6347', '#FFD700']
@@ -203,12 +204,13 @@ def _calculate_crop_stride(video_info: sv.VideoInfo) -> int:
 
 def collect_player_crops(
     source_video_path: str,
-    player_detection_model: YOLO
+    player_detection_model: YOLO,
+    end: Optional[int] = None
 ) -> List[np.ndarray]:
     video_info = sv.VideoInfo.from_video_path(source_video_path)
     stride = _calculate_crop_stride(video_info)
     frame_generator = sv.get_video_frames_generator(
-        source_path=source_video_path, stride=stride)
+        source_path=source_video_path, stride=STRIDE, end=end)
     crops = []
     for frame in tqdm(frame_generator, desc='collecting player crops'):
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
@@ -452,7 +454,8 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[Fra
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
     crops = collect_player_crops(
         source_video_path=source_video_path,
-        player_detection_model=player_detection_model
+        player_detection_model=player_detection_model,
+        end=CROPS_COLLECTION_END
     )
     team_classifier = TeamClassifier(device=device)
     team_classifier.fit(crops)
@@ -501,7 +504,8 @@ def run_radar(source_video_path: str, device: str) -> Iterator[FrameResult]:
     pitch_detection_model = YOLO(PITCH_DETECTION_MODEL_PATH).to(device=device)
     crops = collect_player_crops(
         source_video_path=source_video_path,
-        player_detection_model=player_detection_model
+        player_detection_model=player_detection_model,
+        end=CROPS_COLLECTION_END
     )
     team_classifier = TeamClassifier(device=device)
     team_classifier.fit(crops)
@@ -578,7 +582,8 @@ def run_player_team_classification(
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
     crops = collect_player_crops(
         source_video_path=source_video_path,
-        player_detection_model=player_detection_model
+        player_detection_model=player_detection_model,
+        end=CROPS_COLLECTION_END
     )
 
     team_classifier = TeamClassifier(device=device)
