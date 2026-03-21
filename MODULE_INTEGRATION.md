@@ -4,10 +4,10 @@
 
 ## 1. 接入原则
 
-- 保持 `core` 作为统一状态中台
-- 新模块与旧模块通过 `GameStateManager` 交换数据
-- 读写分离：计算模块产出状态，展示/导出模块消费状态
-- 尽量不改已有主流程接口，优先“旁路接入”
+- 保持 `core.packet.FramePacket` 作为主链路统一逐帧交换对象
+- 保持 `core.state.FrameState` 作为稳定业务状态快照
+- `GameStateManager` / `AsyncPersistence` 作为消费层，避免反向主导实时主循环
+- 新模块优先“读取一个 packet，补充一个 packet”
 
 ## 2. 推荐目录
 
@@ -15,74 +15,62 @@
 
 ## 3. 最小接入步骤
 
-1. 定义输入输出契约  
-输入通常是检测结果、帧图像、历史状态；输出建议归一到 `PlayerState` / `BallState` / 事件结构。
+1. 读取 `FramePacket`
+   读取已有字段（如 `tracked_objects`、`players`、`projection_tracklets`、`projection_frame`）。
 
-2. 在主循环中构造标准状态  
-将新模块输出映射到 `FrameState`，并调用 `game_state.update_frame(frame_state)`。
+2. 在模块内补充 `FramePacket`
+   将你的分析结果补充到 `events`、`debug_info`、`metrics` 或新的可选字段中。
 
-3. 如有事件输出  
-调用 `add_foul_event` 或 `add_offside_query`，必要时新增事件类型。
+3. 如需稳定状态落盘或历史查询
+   调用 `frame_state_from_packet(packet)`，再将结果写入 `GameStateManager.update_packet(packet)` 或 `update_frame(frame_state)`。
 
-4. 如需异步落盘  
-复用 `AsyncPersistence`，或新增独立后台线程。
+4. 如需异步落盘
+   复用 `AsyncPersistence`，或新增独立后台线程。
 
 ## 4. 代码模板（示意）
 
 ```python
-from core import GameStateManager, FrameState
 import time
+
+from core import FramePacket, GameStateManager
 
 state = GameStateManager()
 
-def process_one_frame(frame_id: int, players_dict):
-    frame_state = FrameState(
+def process_one_frame(frame_id: int, frame, tracked_objects):
+    packet = FramePacket(
         frame_id=frame_id,
         timestamp=time.time(),
-        video_ts=None,
-        players=players_dict,
-        ball=None,
-        source="NEW_MODULE",
+        source_id="NEW_MODULE",
+        raw_frame=frame,
+        tracked_objects=tracked_objects,
     )
-    state.update_frame(frame_state)
+    state.update_packet(packet)
 ```
 
 ## 5. 回调式扩展（推荐）
 
-你可以在不改核心逻辑的情况下添加订阅者：
-
 ```python
-def on_new_frame(frame_state):
+def on_new_packet(packet):
     # 做二次分析、告警、统计等
     pass
 
-state.on_frame(on_new_frame)
+state.on_packet(on_new_packet)
 ```
 
 ## 6. 数据结构扩展策略
 
-- 小范围扩展优先使用可选字段（`Optional`）
-- 不破坏已有字段语义与默认值
+- 实时字段优先加到 `FramePacket`
+- 稳定业务字段优先加到 `FrameState` / 事件结构
 - 变更后同步更新：
-  - `core/state.py` 注释
-  - `core/__init__.py` 导出
+  - `core/packet.py`
+  - `core/state.py`
+  - `core/__init__.py`
   - 文档（`core/README.md`）
 
 ## 7. 接入完成检查清单
 
-- 新模块可独立运行并产出稳定结果
+- 新模块可独立运行并稳定补充 `FramePacket`
 - 主流程无明显性能回退
 - `FrameState` / 事件结构字段完整
 - CSV 输出可用且字段语义正确
 - 异常不会导致主循环崩溃
-
-## 8. 常见问题
-
-- `ModuleNotFoundError: core`  
-  先执行 `pip install -e .`，并尽量从仓库根目录运行。
-
-- 新模块拖慢主流程  
-  将耗时逻辑放到异步线程或回调消费者中。
-
-- 状态字段不一致  
-  统一走 `core` 的 dataclass，不在模块内定义同名“影子结构”。
