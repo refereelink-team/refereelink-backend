@@ -9,3 +9,14 @@ sentencepiece
 protobuf
 ultralytics
 gdown
+gdown
+numpy>=1.24.0
+opencv-python>=4.8.0
+protobuf
+scikit-learn
+sentencepiece
+supervision>=0.22.0
+tqdm
+transformers
+ultralytics>=8.3.0
+umap-learn

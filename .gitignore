@@ -157,3 +157,12 @@ Desktop.ini
 # Local backups
 backup/
 
+# model weights
+*.pt
+*.pth
+
+# videos
+*.mp4
+
+# outputs
+tracking/data/

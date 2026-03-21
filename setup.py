@@ -16,6 +16,20 @@ def read_requirements(file_path: pathlib.Path) -> list[str]:
     return requirements
 
 
+base_packages = setuptools.find_packages(
+    include=[
+        "core",
+        "core.*",
+        "tracking",
+        "tracking.*",
+        "offside",
+        "offside.*",
+        "projection",
+        "projection.*",
+    ]
+)
+
+
 setuptools.setup(
     name="sports-main",
     version="0.2.0",
@@ -24,7 +38,7 @@ setuptools.setup(
     long_description=README,
     long_description_content_type="text/markdown",
     license="MIT",
-    packages=setuptools.find_packages(include=["core", "core.*", "tracking", "tracking.*"]),
+    packages=base_packages,
     include_package_data=True,
     install_requires=read_requirements(HERE / "requirements.txt"),
     extras_require={
