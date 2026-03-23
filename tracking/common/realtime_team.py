@@ -160,12 +160,18 @@ def extract_color_feature(crop: np.ndarray) -> Optional[ColorFeatureSample]:
 
 @dataclass
 class TeamAssignmentSmoother:
-    decay: float = 0.90
-    confidence_boost: float = 1.4
-    min_update_confidence: float = DEFAULT_UPDATE_CONFIDENCE
-    switch_margin: float = 0.55
+    decay: float = 0.92
+    confidence_boost: float = 1.5
+    min_update_confidence: float = 0.35
+    switch_margin: float = 0.65
+    min_switch_streak: int = 3
+    warmup_frames: int = 2
     scores: Dict[int, np.ndarray] = field(default_factory=dict)
     stable_labels: Dict[int, int] = field(default_factory=dict)
+    candidate_labels: Dict[int, int] = field(default_factory=dict)
+    candidate_streaks: Dict[int, int] = field(default_factory=dict)
+    track_ages: Dict[int, int] = field(default_factory=dict)
+    low_confidence_streaks: Dict[int, int] = field(default_factory=dict)
 
     def update(
         self,
@@ -184,19 +190,50 @@ class TeamAssignmentSmoother:
             else:
                 score = score * self.decay
 
-            if confidence >= self.min_update_confidence:
+            track_age = self.track_ages.get(track_id, 0) + 1
+            self.track_ages[track_id] = track_age
+
+            is_confident = float(confidence) >= self.min_update_confidence
+            if is_confident:
                 score[int(label)] += self.confidence_boost * float(confidence)
+                self.low_confidence_streaks[track_id] = 0
+            else:
+                self.low_confidence_streaks[track_id] = self.low_confidence_streaks.get(track_id, 0) + 1
 
             previous_label = self.stable_labels.get(track_id)
             candidate = int(np.argmax(score))
             sorted_score = np.sort(score)
             margin = float(sorted_score[-1] - sorted_score[-2]) if len(sorted_score) > 1 else float(sorted_score[-1])
+
             if previous_label is None:
                 stable_label = candidate
-            elif candidate != previous_label and margin < self.switch_margin:
+                self.candidate_labels.pop(track_id, None)
+                self.candidate_streaks.pop(track_id, None)
+            elif not is_confident:
                 stable_label = previous_label
+            elif candidate == previous_label:
+                stable_label = previous_label
+                self.candidate_labels.pop(track_id, None)
+                self.candidate_streaks.pop(track_id, None)
+            elif margin < self.switch_margin or track_age <= self.warmup_frames:
+                stable_label = previous_label
+                self.candidate_labels[track_id] = candidate
+                self.candidate_streaks[track_id] = 0
             else:
-                stable_label = candidate
+                previous_candidate = self.candidate_labels.get(track_id)
+                if previous_candidate == candidate:
+                    streak = self.candidate_streaks.get(track_id, 0) + 1
+                else:
+                    streak = 1
+                self.candidate_labels[track_id] = candidate
+                self.candidate_streaks[track_id] = streak
+
+                if streak >= self.min_switch_streak:
+                    stable_label = candidate
+                    self.candidate_labels.pop(track_id, None)
+                    self.candidate_streaks.pop(track_id, None)
+                else:
+                    stable_label = previous_label
 
             self.scores[track_id] = score
             self.stable_labels[track_id] = stable_label
