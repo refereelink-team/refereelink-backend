@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Iterable, Optional
 
 import cv2
 import numpy as np
 
 from projection.homography import HomographyAdapter, build_default_homography
 from projection.modeling import ProjectedTracklet, project_tracked_objects
+from core import ObjectTrack, ProjectedObject
 from tracking.backend import (
     BALL_CLASS_ID,
     build_detector_and_tracker,
@@ -98,6 +99,85 @@ def draw_projected_tracklets(
         )
 
 
+def build_projected_objects(
+    tracked_objects: list[ObjectTrack],
+    homography: Optional[HomographyAdapter] = None,
+) -> list[ProjectedObject]:
+    if homography is None:
+        homography = build_default_homography()
+
+    tracklets = project_tracked_objects(tracked_objects, homography)
+    return [
+        ProjectedObject(
+            track_id=int(t.track_id),
+            class_id=int(t.class_id),
+            xyxy=t.xyxy,
+            confidence=float(t.confidence),
+            map_x=float(t.map_x),
+            map_y=float(t.map_y),
+            team=t.team,
+        )
+        for t in tracklets
+    ]
+
+
+def render_projection_frame(
+    tracked_objects: list[ObjectTrack],
+    field_img: np.ndarray,
+    homography: Optional[HomographyAdapter] = None,
+) -> np.ndarray:
+    if homography is None:
+        homography = build_default_homography()
+
+    display_map = field_img.copy()
+    tracklets = build_projected_objects(tracked_objects, homography)
+    draw_projected_tracklets(display_map, tracklets)
+    return display_map
+
+
+def run_projection_video_pipeline_from_tracks(
+    tracked_objects_stream: Iterable[list[ObjectTrack]],
+    output_path: str,
+    fps: float,
+    homography: Optional[HomographyAdapter] = None,
+    field_map_path: str = "field_map.png",
+    show_live: bool = True,
+) -> None:
+    if homography is None:
+        homography = build_default_homography()
+
+    field_img = load_field_map(field_map_path)
+    map_h, map_w = field_img.shape[:2]
+
+    writer = None
+    for fourcc_name in ("mp4v", "XVID", "MJPG"):
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
+        w = cv2.VideoWriter(output_path, fourcc, fps, (map_w, map_h))
+        if w.isOpened():
+            writer = w
+            break
+    if writer is None or not writer.isOpened():
+        print("错误：无法创建输出视频，请检查路径与编码器。", file=sys.stderr)
+        return
+
+    frame_idx = 0
+    try:
+        for tracked_objects in tracked_objects_stream:
+            frame_idx += 1
+            display_map = render_projection_frame(tracked_objects, field_img, homography)
+            writer.write(display_map)
+            if show_live:
+                cv2.imshow("Projection 2D Map", display_map)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    finally:
+        writer.release()
+        if show_live:
+            cv2.destroyWindow("Projection 2D Map")
+
+    print(f"已写入 {output_path}，共 {frame_idx} 帧。")
+
+
 def run_projection_video_pipeline(
     video_path: str,
     output_path: str = "projection_2d.mp4",
@@ -151,10 +231,7 @@ def run_projection_video_pipeline(
             tracked_objects = run_detection_and_tracking(
                 model, tracker, frame, conf_thresh=conf_thresh
             )
-            tracklets = project_tracked_objects(tracked_objects, homography)
-
-            display_map = field_img.copy()
-            draw_projected_tracklets(display_map, tracklets)
+            display_map = render_projection_frame(tracked_objects, field_img, homography)
             writer.write(display_map)
 
             if show_live:

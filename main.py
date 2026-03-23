@@ -59,6 +59,86 @@ def _run_tracking(args: argparse.Namespace) -> None:
     )
 
 
+
+
+def _run_tracking_and_projection(args: argparse.Namespace) -> None:
+    import cv2
+
+    import supervision as sv
+
+    from core import AsyncPersistence, GameStateManager
+    from projection.visualization import build_projected_objects, render_projection_frame
+    from tracking.main import run_player_team_classification_packets
+
+    _ensure_tracking_assets()
+    selected_device = _resolve_device(args.device)
+    if args.device == "auto":
+        print(f"[device] auto selected: {selected_device}")
+
+    video_info = sv.VideoInfo.from_video_path(args.source_video_path)
+    fps = float(video_info.fps or 30)
+    field_img = cv2.imread(args.field)
+    if field_img is None:
+        from projection.visualization import load_field_map
+
+        field_img = load_field_map(args.field)
+    map_h, map_w = field_img.shape[:2]
+
+    projection_writer = None
+    for fourcc_name in ("mp4v", "XVID", "MJPG"):
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
+        writer = cv2.VideoWriter(args.projection_output_path, fourcc, fps, (map_w, map_h))
+        if writer.isOpened():
+            projection_writer = writer
+            break
+    if projection_writer is None or not projection_writer.isOpened():
+        raise RuntimeError("无法创建 projection 输出视频，请检查路径与编码器。")
+
+    frame_stream = run_player_team_classification_packets(
+        source_video_path=args.source_video_path,
+        device=selected_device,
+    )
+
+    game_state = None
+    persistence = None
+    if args.state_output_path:
+        game_state = GameStateManager()
+        persistence = AsyncPersistence(
+            game_state=game_state,
+            output_path=args.state_output_path,
+            flush_interval=args.state_flush_interval,
+        )
+        persistence.start()
+
+    try:
+        with sv.VideoSink(args.tracking_output_path, video_info) as tracking_sink:
+            for packet in frame_stream:
+                tracking_sink.write_frame(packet.annotated_frame)
+                packet.projection_tracklets = build_projected_objects(packet.tracked_objects)
+                projection_frame = render_projection_frame(
+                    tracked_objects=packet.tracked_objects,
+                    field_img=field_img,
+                )
+                packet.projection_frame = projection_frame
+                projection_writer.write(projection_frame)
+
+                if game_state is not None:
+                    game_state.update_packet(packet)
+
+                if not args.no_show:
+                    cv2.imshow("Tracking", packet.annotated_frame)
+                    cv2.imshow("Projection 2D Map", projection_frame)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+    finally:
+        projection_writer.release()
+        if persistence is not None:
+            persistence.stop()
+            persistence.join()
+        if not args.no_show:
+            cv2.destroyAllWindows()
+
+
 def _run_offside(args: argparse.Namespace) -> None:
     from offside.run_var_video import run_single_frame_pipeline
 
@@ -115,6 +195,21 @@ def _run_modules(
     state_flush_interval: float,
 ) -> None:
     ordered: List[str] = list(dict.fromkeys(modules))
+
+    if ordered[:2] == ["tracking", "projection"]:
+        shared_args = argparse.Namespace(
+            source_video_path=source_video_path,
+            tracking_output_path=tracking_output_path,
+            projection_output_path=projection_output_path,
+            device=device,
+            field=field,
+            no_show=no_show,
+            state_output_path=state_output_path,
+            state_flush_interval=state_flush_interval,
+        )
+        _run_tracking_and_projection(shared_args)
+        ordered = ordered[2:]
+
     for module_name in ordered:
         if module_name == "tracking":
             tracking_args = argparse.Namespace(

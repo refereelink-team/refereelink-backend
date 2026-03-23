@@ -5,7 +5,7 @@
 ## 1. 模块结构
 
 - `backend.py`：底座能力（YOLO 检测 + ByteTrack 跟踪），输出 `TrackedObject`。
-- `main.py`：球员/队伍识别主流程，可选写入 `core` 状态。
+- `main.py`：球员/队伍识别主流程（现改为轻量颜色原型 + track 平滑），可选写入 `core` 状态。
 - `common/`：通用组件（队伍分类、可视化等）。
 - `annotators/`、`configs/`：绘制与配置。
 - `data/`：模型和样例视频资源。
@@ -18,7 +18,7 @@
 
 ## 3. 引用了哪些模块（出向依赖）
 
-- `tracking/main.py` 引用 `core`（`GameStateManager`、`FrameState`、`AsyncPersistence`）用于可选状态输出。
+- `tracking/main.py` 引用 `core`（`FramePacket`、`GameStateManager`、`AsyncPersistence`）用于逐帧中间结果输出与可选状态持久化。
 - `tracking` 内部不引用 `projection` 与 `offside`。
 
 ## 4. 被哪些模块引用（入向依赖）

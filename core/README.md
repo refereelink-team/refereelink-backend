@@ -1,30 +1,40 @@
 # core 模块 README
 
-`core` 是项目的**状态中台**：定义统一数据结构，并提供线程安全状态管理与异步落盘能力。
+`core` 现在被拆分为三层：
+
+1. **中间结果包层**：`packet.py`，定义 `FramePacket`、`ObjectTrack`、`ProjectedObject`、`FrameMetrics`。
+2. **状态快照层**：`state.py`，定义稳定业务语义对象 `Team`、`PlayerState`、`BallState`、`FrameState`、`FoulEvent`、`OffsideQuery`，并提供 `frame_state_from_packet` 适配函数。
+3. **状态管理与持久化层**：`store.py` 提供 `GameStateManager`，`persistence.py` 提供 `AsyncPersistence`。
 
 ## 1. 模块结构
 
-- `state.py`：核心数据结构与管理器实现（`Team`、`PlayerState`、`FrameState`、`OffsideQuery`、`GameStateManager`、`AsyncPersistence`）。
+- `packet.py`：实时主链路的统一逐帧交换对象。
+- `state.py`：稳定业务状态快照与事件对象。
+- `store.py`：线程安全状态仓库，同时支持 `FramePacket` 与 `FrameState`。
+- `persistence.py`：异步持久化线程。
 - `__init__.py`：统一导出对外 API。
 
-## 2. 负责什么
+## 2. 设计目标
 
-- 定义跨模块共享的标准状态契约（球员、球、帧、事件）。
-- 提供统一状态读写入口（`GameStateManager`）。
-- 提供异步持久化（`AsyncPersistence`，CSV 输出）。
+- 主处理链路优先传递 `FramePacket`；
+- 持久化、查询、历史回放优先消费 `FrameState`；
+- 通过 `frame_state_from_packet` 把实时逐帧中间结果抽取为稳定状态快照；
+- `GameStateManager` 同时缓存 packet 与 frame，方便前端实时消费和赛后分析。
 
-## 3. 引用了哪些模块（出向依赖）
+## 3. 推荐数据流
 
-- 标准库（`threading`、`dataclasses`、`csv` 等）。
-- **不依赖** `tracking` / `projection` / `offside`（保持中立底座）。
+```text
+tracking -> FramePacket -> projection/offside/frontend -> FramePacket
+                                     |
+                                     v
+                         frame_state_from_packet
+                                     |
+                                     v
+                    GameStateManager / AsyncPersistence
+```
 
-## 4. 被哪些模块引用（入向依赖）
+## 4. 边界约束
 
-- `tracking/main.py`：写入 `FrameState`，可选启用 `AsyncPersistence`。
-- `offside/offside_core_integration.py`：把越位流程产物映射到 `FrameState` / `OffsideQuery`。
-- `offside/run_var_video.py`：在关键帧流程中可选创建 `GameStateManager` 与 `AsyncPersistence`。
-
-## 5. 边界约束
-
-- `core` 只做“状态定义 + 状态管理 + 持久化”，不做检测、投影、越位业务判定。
-- 上层模块通过 `core` 交换数据，避免相互直接共享可变结构。
+- `packet.py` 是实时主链路契约，应保持轻量、可扩展。
+- `state.py` 是稳定业务语义层，应尽量避免频繁破坏式变更。
+- `store.py` / `persistence.py` 是消费层，不应该反向主导上游模块的逐帧主循环。

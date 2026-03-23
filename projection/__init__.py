@@ -11,7 +11,12 @@ from .homography import (
     build_default_homography,
 )
 from .modeling import ProjectedTracklet, project_tracked_objects
-from .visualization import run_projection_video_pipeline
+from .visualization import (
+    build_projected_objects,
+    render_projection_frame,
+    run_projection_video_pipeline,
+    run_projection_video_pipeline_from_tracks,
+)
 
 __all__ = [
     "HomographyAdapter",
@@ -20,5 +25,8 @@ __all__ = [
     "build_default_homography",
     "ProjectedTracklet",
     "project_tracked_objects",
+    "build_projected_objects",
+    "render_projection_frame",
     "run_projection_video_pipeline",
+    "run_projection_video_pipeline_from_tracks",
 ]

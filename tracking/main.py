@@ -11,7 +11,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core import AsyncPersistence, FrameState, GameStateManager, PlayerState, Team
+from core import AsyncPersistence, FramePacket, GameStateManager, ObjectTrack, PlayerState, Team
 
 PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLAYER_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, "data/football-player-detection.pt")
@@ -28,7 +28,7 @@ REFEREE_COLOR_ID = 3
 CROP_SAMPLE_RATIO = 0.10
 MIN_CROP_SAMPLES = 48
 MAX_CROP_SAMPLES = 240
-CROPS_COLLECTION_END = 1500
+CROPS_COLLECTION_END = 240
 
 COLORS = ["#FF1493", "#00BFFF", "#FF6347", "#FFD700"]
 MODE_NAME = "PLAYER_TEAM_CLASSIFICATION"
@@ -71,6 +71,14 @@ def _team_from_color(color_id: int, class_id: int) -> Team:
     if color_id == TEAM_1_COLOR_ID:
         return Team.AWAY
     return Team.UNKNOWN
+
+
+def _tracked_team_name(team: Team) -> str:
+    if team == Team.HOME:
+        return "RED"
+    if team == Team.AWAY:
+        return "BLUE"
+    return "WHITE"
 
 
 def _build_state_players(
@@ -133,6 +141,44 @@ def _build_team_overrides(detections, color_lookup: np.ndarray) -> Dict[int, Tea
     return team_overrides
 
 
+def _build_tracked_objects(
+    detections,
+    team_overrides: Dict[int, Team],
+) -> List[ObjectTrack]:
+    if len(detections) == 0:
+        return []
+
+    class_ids = (
+        detections.class_id
+        if detections.class_id is not None
+        else np.full(len(detections), PLAYER_CLASS_ID, dtype=int)
+    )
+    confidences = detections.confidence
+    tracked_objects: List[ObjectTrack] = []
+    for i in range(len(detections)):
+        class_id = int(class_ids[i])
+        if class_id not in {PLAYER_CLASS_ID, GOALKEEPER_CLASS_ID, REFEREE_CLASS_ID}:
+            continue
+
+        player_id = _resolve_player_id(detections, i)
+        team = team_overrides.get(
+            player_id,
+            Team.REFEREE if class_id == REFEREE_CLASS_ID else Team.UNKNOWN,
+        )
+        x1, y1, x2, y2 = detections.xyxy[i]
+        confidence = float(confidences[i]) if confidences is not None else 0.0
+        tracked_objects.append(
+            ObjectTrack(
+                track_id=player_id,
+                class_id=class_id,
+                xyxy=(int(x1), int(y1), int(x2), int(y2)),
+                confidence=confidence,
+                team=_tracked_team_name(team),
+            )
+        )
+    return tracked_objects
+
+
 def _resolve_sampling_plan(total_frames: int, end: Optional[int]) -> Tuple[int, Optional[int]]:
     if total_frames <= 0:
         return 1, end
@@ -188,16 +234,20 @@ def resolve_goalkeepers_team_id(players, players_team_id: np.ndarray, goalkeeper
     return np.array(goalkeepers_team_id)
 
 
-def build_role_team_detections(frame: np.ndarray, detections, team_classifier):
+def build_role_team_detections(frame: np.ndarray, detections, team_model, smoother):
     import supervision as sv
 
     players = detections[detections.class_id == PLAYER_CLASS_ID]
     player_crops = [sv.crop_image(frame, xyxy) for xyxy in players.xyxy]
-    players_team_id = (
-        team_classifier.predict(player_crops)
-        if len(player_crops) > 0
-        else np.array([], dtype=int)
-    )
+    if len(player_crops) > 0:
+        raw_players_team_id = team_model.predict(player_crops)
+        player_track_ids = [
+            _resolve_player_id(players, idx)
+            for idx in range(len(players))
+        ]
+        players_team_id = smoother.update(player_track_ids, raw_players_team_id)
+    else:
+        players_team_id = np.array([], dtype=int)
 
     goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
     referees = detections[detections.class_id == REFEREE_CLASS_ID]
@@ -232,12 +282,12 @@ def build_role_team_detections(frame: np.ndarray, detections, team_classifier):
     return merged_detections, draw_color_lookup, state_color_lookup
 
 
-def run_player_team_classification(
+def run_player_team_classification_packets(
     source_video_path: str, device: str
-) -> Iterator[FrameResult]:
+) -> Iterator[FramePacket]:
     import supervision as sv
     from ultralytics import YOLO
-    from tracking.common.team import TeamClassifier
+    from tracking.common.realtime_team import TeamAssignmentSmoother, TeamPrototypeModel
 
     ellipse_annotator = sv.EllipseAnnotator(
         color=sv.ColorPalette.from_hex(COLORS),
@@ -259,18 +309,19 @@ def run_player_team_classification(
         end=CROPS_COLLECTION_END,
     )
 
-    team_classifier = TeamClassifier(device=device)
-    team_classifier.fit(crops)
+    team_model = TeamPrototypeModel.fit(crops)
+    smoother = TeamAssignmentSmoother()
 
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
+    frame_index = 0
     for frame in frame_generator:
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         detections = tracker.update_with_detections(detections)
 
         detections, color_lookup, state_lookup = build_role_team_detections(
-            frame=frame, detections=detections, team_classifier=team_classifier
+            frame=frame, detections=detections, team_model=team_model, smoother=smoother
         )
         labels = [str(tracker_id) for tracker_id in detections.tracker_id]
 
@@ -286,7 +337,28 @@ def run_player_team_classification(
         )
         state_teams = _build_team_overrides(detections=detections, color_lookup=state_lookup)
         state_players = _build_state_players(detections=detections, team_overrides=state_teams)
-        yield annotated_frame, state_players
+        tracked_objects = _build_tracked_objects(detections=detections, team_overrides=state_teams)
+        frame_index += 1
+        yield FramePacket(
+            frame_id=frame_index,
+            timestamp=time.time(),
+            video_ts=None,
+            source_id=MODE_NAME,
+            raw_frame=frame,
+            annotated_frame=annotated_frame,
+            tracked_objects=tracked_objects,
+            players=state_players,
+        )
+
+
+def run_player_team_classification(
+    source_video_path: str, device: str
+) -> Iterator[FrameResult]:
+    for packet in run_player_team_classification_packets(
+        source_video_path=source_video_path,
+        device=device,
+    ):
+        yield packet.annotated_frame, packet.players
 
 
 def main(
@@ -303,7 +375,7 @@ def main(
     if device == "auto":
         print(f"[device] auto selected: {selected_device}")
 
-    frame_generator = run_player_team_classification(
+    frame_generator = run_player_team_classification_packets(
         source_video_path=source_video_path, device=selected_device
     )
 
@@ -318,26 +390,15 @@ def main(
         )
         persistence.start()
 
-    frame_id = 0
     video_info = sv.VideoInfo.from_video_path(source_video_path)
     try:
         with sv.VideoSink(target_video_path, video_info) as sink:
-            for frame, state_players in frame_generator:
-                sink.write_frame(frame)
+            for packet in frame_generator:
+                sink.write_frame(packet.annotated_frame)
                 if game_state is not None:
-                    game_state.update_frame(
-                        FrameState(
-                            frame_id=frame_id,
-                            timestamp=time.time(),
-                            video_ts=None,
-                            players=state_players,
-                            ball=None,
-                            source=MODE_NAME,
-                        )
-                    )
-                    frame_id += 1
+                    game_state.update_packet(packet)
 
-                cv2.imshow("frame", frame)
+                cv2.imshow("frame", packet.annotated_frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
     finally:
