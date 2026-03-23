@@ -63,6 +63,7 @@ def _run_tracking(args: argparse.Namespace) -> None:
 
 def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     import cv2
+    from time import perf_counter
 
     import supervision as sv
 
@@ -113,17 +114,35 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     try:
         with sv.VideoSink(args.tracking_output_path, video_info) as tracking_sink:
             for packet in frame_stream:
-                tracking_sink.write_frame(packet.annotated_frame)
+                project_started = perf_counter()
                 packet.projection_tracklets = build_projected_objects(packet.tracked_objects)
+                packet.metrics.project_ms = (perf_counter() - project_started) * 1000.0
+
+                render_started = perf_counter()
                 projection_frame = render_projection_frame(
                     tracked_objects=packet.tracked_objects,
                     field_img=field_img,
                 )
+                packet.metrics.render_ms += (perf_counter() - render_started) * 1000.0
                 packet.projection_frame = projection_frame
+
+                tracking_sink.write_frame(packet.annotated_frame)
                 projection_writer.write(projection_frame)
 
                 if game_state is not None:
+                    persist_started = perf_counter()
                     game_state.update_packet(packet)
+                    packet.metrics.persist_ms = (perf_counter() - persist_started) * 1000.0
+
+                packet.metrics.total_ms = (
+                    packet.metrics.detect_ms
+                    + packet.metrics.track_ms
+                    + packet.metrics.classify_ms
+                    + packet.metrics.project_ms
+                    + packet.metrics.render_ms
+                    + packet.metrics.persist_ms
+                )
+                packet.metrics.fps = float(1000.0 / packet.metrics.total_ms) if packet.metrics.total_ms > 0 else 0.0
 
                 if not args.no_show:
                     cv2.imshow("Tracking", packet.annotated_frame)

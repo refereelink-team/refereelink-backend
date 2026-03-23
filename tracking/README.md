@@ -5,7 +5,7 @@
 ## 1. 模块结构
 
 - `backend.py`：底座能力（YOLO 检测 + ByteTrack 跟踪），输出 `TrackedObject`。
-- `main.py`：球员/队伍识别主流程（现改为轻量颜色原型 + track 平滑），可选写入 `core` 状态。
+- `main.py`：球员/队伍识别主流程（现改为轻量颜色原型 + track 平滑），并按帧回填 `FrameMetrics` 性能指标，可选写入 `core` 状态。
 - `common/`：通用组件（队伍分类、可视化等）。
 - `annotators/`、`configs/`：绘制与配置。
 - `data/`：模型和样例视频资源。

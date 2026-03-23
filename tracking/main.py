@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import time
+from time import perf_counter
 from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
@@ -239,15 +240,22 @@ def build_role_team_detections(frame: np.ndarray, detections, team_model, smooth
 
     players = detections[detections.class_id == PLAYER_CLASS_ID]
     player_crops = [sv.crop_image(frame, xyxy) for xyxy in players.xyxy]
+    classification_stats = {"player_crop_count": float(len(player_crops))}
     if len(player_crops) > 0:
-        raw_players_team_id = team_model.predict(player_crops)
+        prediction_batch = team_model.predict(player_crops)
         player_track_ids = [
             _resolve_player_id(players, idx)
             for idx in range(len(players))
         ]
-        players_team_id = smoother.update(player_track_ids, raw_players_team_id)
+        players_team_id = smoother.update(
+            player_track_ids,
+            prediction_batch.labels,
+            prediction_batch.confidences,
+        )
+        classification_stats["mean_team_confidence"] = float(prediction_batch.confidences.mean())
     else:
         players_team_id = np.array([], dtype=int)
+        classification_stats["mean_team_confidence"] = 0.0
 
     goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
     referees = detections[detections.class_id == REFEREE_CLASS_ID]
@@ -279,7 +287,7 @@ def build_role_team_detections(frame: np.ndarray, detections, team_model, smooth
         + [REFEREE_COLOR_ID] * len(referees),
         dtype=int,
     )
-    return merged_detections, draw_color_lookup, state_color_lookup
+    return merged_detections, draw_color_lookup, state_color_lookup, classification_stats
 
 
 def run_player_team_classification_packets(
@@ -309,22 +317,35 @@ def run_player_team_classification_packets(
         end=CROPS_COLLECTION_END,
     )
 
+    init_started = perf_counter()
     team_model = TeamPrototypeModel.fit(crops)
     smoother = TeamAssignmentSmoother()
+    init_ms = (perf_counter() - init_started) * 1000.0
 
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     frame_index = 0
     for frame in frame_generator:
+        frame_started = perf_counter()
+
+        detect_started = perf_counter()
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
+        detect_ms = (perf_counter() - detect_started) * 1000.0
+
+        track_started = perf_counter()
         detections = sv.Detections.from_ultralytics(result)
         detections = tracker.update_with_detections(detections)
+        track_ms = (perf_counter() - track_started) * 1000.0
 
-        detections, color_lookup, state_lookup = build_role_team_detections(
+        classify_started = perf_counter()
+        detections, color_lookup, state_lookup, classification_stats = build_role_team_detections(
             frame=frame, detections=detections, team_model=team_model, smoother=smoother
         )
+        classify_ms = (perf_counter() - classify_started) * 1000.0
+
         labels = [str(tracker_id) for tracker_id in detections.tracker_id]
 
+        annotate_started = perf_counter()
         annotated_frame = frame.copy()
         annotated_frame = ellipse_annotator.annotate(
             annotated_frame, detections, custom_color_lookup=color_lookup
@@ -335,11 +356,13 @@ def run_player_team_classification_packets(
             labels=labels,
             custom_color_lookup=color_lookup,
         )
+        annotate_ms = (perf_counter() - annotate_started) * 1000.0
         state_teams = _build_team_overrides(detections=detections, color_lookup=state_lookup)
         state_players = _build_state_players(detections=detections, team_overrides=state_teams)
         tracked_objects = _build_tracked_objects(detections=detections, team_overrides=state_teams)
         frame_index += 1
-        yield FramePacket(
+        total_ms = (perf_counter() - frame_started) * 1000.0
+        packet = FramePacket(
             frame_id=frame_index,
             timestamp=time.time(),
             video_ts=None,
@@ -349,6 +372,16 @@ def run_player_team_classification_packets(
             tracked_objects=tracked_objects,
             players=state_players,
         )
+        packet.metrics.detect_ms = detect_ms
+        packet.metrics.track_ms = track_ms
+        packet.metrics.classify_ms = classify_ms
+        packet.metrics.render_ms = annotate_ms
+        packet.metrics.total_ms = total_ms
+        packet.metrics.fps = float(1000.0 / total_ms) if total_ms > 0 else 0.0
+        packet.metrics.extra.update(classification_stats)
+        packet.metrics.extra["init_team_model_ms"] = init_ms
+        packet.metrics.extra.update(team_model.init_stats)
+        yield packet
 
 
 def run_player_team_classification(
