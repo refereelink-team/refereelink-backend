@@ -14,9 +14,18 @@ from typing import Iterable, Optional
 import cv2
 import numpy as np
 
-from projection.dynamic_projector import create_dynamic_projector
+from projection.coords import (
+    FIELD_MAP_HEIGHT,
+    FIELD_MAP_WIDTH,
+    PITCH_BOTTOM,
+    PITCH_LEFT,
+    PITCH_RIGHT,
+    PITCH_TOP,
+    field_meter_center_to_map_pixel,
+)
 from projection.homography import HomographyAdapter, build_default_homography
 from projection.modeling import ProjectedTracklet, project_tracked_objects
+from projection.sn_projection_backend import create_projection_engine
 from core import ObjectTrack, ProjectedObject
 from tracking.backend import (
     BALL_CLASS_ID,
@@ -52,10 +61,16 @@ def load_field_map(field_path: str = "field_map.png") -> np.ndarray:
     img = cv2.imread(field_path)
     if img is not None:
         return img
-    w, h = 800, 533
+    w, h = FIELD_MAP_WIDTH, FIELD_MAP_HEIGHT
     img = np.zeros((h, w, 3), dtype=np.uint8)
     img[:] = (50, 150, 50)
-    cv2.rectangle(img, (0, 0), (w - 1, h - 1), (255, 255, 255), 2)
+    cv2.rectangle(
+        img,
+        (int(PITCH_LEFT), int(PITCH_TOP)),
+        (int(PITCH_RIGHT), int(PITCH_BOTTOM)),
+        (255, 255, 255),
+        2,
+    )
     return img
 
 
@@ -71,7 +86,10 @@ def draw_projected_tracklets(
     tracklets: list[ProjectedTracklet],
 ) -> None:
     for t in tracklets:
-        mx, my = int(t.map_x), int(t.map_y)
+        mx_f, my_f = field_meter_center_to_map_pixel(t.map_x, t.map_y)
+        mx, my = int(mx_f), int(my_f)
+        if mx < 0 or mx >= display_map.shape[1] or my < 0 or my >= display_map.shape[0]:
+            continue
         if t.class_id == BALL_CLASS_ID or t.team == "BALL":
             cv2.circle(display_map, (mx, my), 8, (0, 215, 255), -1)
             cv2.putText(
@@ -230,7 +248,8 @@ def draw_keypoints_on_field(
                 continue
 
             try:
-                map_x, map_y = homography.pixel_to_map(kp.pt[0], kp.pt[1])
+                field_x, field_y = homography.pixel_to_field_meters(kp.pt[0], kp.pt[1])
+                map_x, map_y = field_meter_center_to_map_pixel(field_x, field_y)
                 mx, my = int(map_x), int(map_y)
 
                 if 0 <= mx < display.shape[1] and 0 <= my < display.shape[0]:
@@ -332,8 +351,14 @@ def run_projection_video_pipeline(
     frame_rate: int = 30,
     conf_thresh: float = 0.22,
     device: str = "auto",
+    dynamic: bool = False,
+    recalib_interval: int = 10,
+    calibration: str = "",
+    calib_backend: str = "nbjw",
+    use_prev_homography: bool = True,
+    debug: bool = False,
 ) -> None:
-    if homography is None:
+    if homography is None and not calibration:
         homography = build_default_homography()
     selected_device = _resolve_device(device)
 
@@ -363,6 +388,15 @@ def run_projection_video_pipeline(
         frame_rate=int(fps),
         device=selected_device,
     )
+    engine = create_projection_engine(
+        calib_backend=calib_backend,
+        dynamic=dynamic or calib_backend in {"nbjw", "pnl"},
+        recalib_interval=recalib_interval,
+        calibration_path=calibration,
+        field_path=field_map_path,
+        debug=debug,
+        use_prev_homography=use_prev_homography,
+    )
 
     frame_idx = 0
     try:
@@ -375,7 +409,8 @@ def run_projection_video_pipeline(
             tracked_objects = run_detection_and_tracking(
                 model, tracker, frame, conf_thresh=conf_thresh
             )
-            display_map = render_projection_frame(tracked_objects, field_img, homography)
+            H_adapter = homography if homography is not None else engine.update(frame)
+            display_map = render_projection_frame(tracked_objects, field_img, H_adapter)
             writer.write(display_map)
 
             if show_live:

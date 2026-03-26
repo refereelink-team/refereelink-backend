@@ -208,7 +208,7 @@ def project_tracked_objects(
         foot_u, foot_v = extract_footpoint(obj)
 
         # 投影到 2D 球场
-        map_x, map_y = homography.pixel_to_map(foot_u, foot_v)
+        map_x, map_y = homography.pixel_to_field_meters(foot_u, foot_v)
 
         # 可选：轨迹平滑
         if track_smoother is not None:

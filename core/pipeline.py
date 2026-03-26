@@ -1,46 +1,38 @@
 """
 Parallel processing pipeline for real-time tracking and projection.
-
-This module provides a frame buffer and parallel processing capability that allows
-tracking and projection to run concurrently, enabling real-time display of both views.
 """
 
 from __future__ import annotations
 
 import queue
 import threading
-import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Optional
-from core import FramePacket
-import numpy as np
+from typing import Callable, Iterator, List, Optional
+
+from .packet import FramePacket
 
 
 @dataclass
 class FrameBuffer:
-    """Thread-safe frame buffer for producer-consumer pattern.
+    """Thread-safe frame buffer for producer-consumer pattern."""
 
-    Attributes:
-        maxsize: Maximum number of frames to buffer (prevents memory buildup)
-        get_timeout: Timeout for getting frames from buffer
-    """
-
-    _buffer: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=3))
+    maxsize: int = 3
     get_timeout: float = 1.0
+    _buffer: queue.Queue = field(init=False)
     _closed: bool = False
 
+    def __post_init__(self) -> None:
+        self._buffer = queue.Queue(maxsize=self.maxsize)
+
     def put(self, packet: FramePacket, timeout: float = 1.0) -> None:
-        """Add a packet to the buffer (blocking)."""
         if self._closed:
             return
         try:
             self._buffer.put(packet, timeout=timeout)
         except queue.Full:
-            # Drop frame if buffer is full (prevents backing up)
             pass
 
     def get(self, timeout: Optional[float] = None) -> Optional[FramePacket]:
-        """Get a packet from the buffer (blocking)."""
         if self._closed and self._buffer.empty():
             return None
         try:
@@ -49,24 +41,17 @@ class FrameBuffer:
             return None
 
     def close(self) -> None:
-        """Signal that no more frames will be produced."""
         self._closed = True
 
     def qsize(self) -> int:
-        """Get approximate buffer size."""
         return self._buffer.qsize()
 
     def is_empty(self) -> bool:
-        """Check if buffer is empty."""
         return self._buffer.empty()
 
 
 class ParallelPipeline:
-    """Parallel processing pipeline with frame buffer for real-time display.
-
-    This pipeline allows tracking (producer) and projection (consumer) to run
-    concurrently, enabling real-time display of both views.
-    """
+    """Parallel processing pipeline with frame buffer for real-time display."""
 
     def __init__(
         self,
@@ -75,7 +60,7 @@ class ParallelPipeline:
     ):
         self.buffer = FrameBuffer(maxsize=max_buffer_size)
         self._producer_thread: Optional[threading.Thread] = None
-        self._consumer_thread: Optional[thread.Thread] = None
+        self._consumer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._producer_callback = producer_callback
         self._packets: List[FramePacket] = []
@@ -87,7 +72,6 @@ class ParallelPipeline:
         device: str,
         is_camera: bool = False,
     ) -> None:
-        """Start the tracking producer in a separate thread."""
         from tracking.main import run_player_team_classification_packets
 
         def producer():
@@ -112,8 +96,6 @@ class ParallelPipeline:
         self,
         project_callback: Callable[[FramePacket], FramePacket],
     ) -> None:
-        """Start the projection consumer in a separate thread."""
-
         def consumer():
             while not self._stop_event.is_set():
                 packet = self.buffer.get(timeout=0.1)
@@ -121,11 +103,9 @@ class ParallelPipeline:
                     if self.buffer._closed:
                         break
                     continue
-                # Apply projection to the packet
                 processed_packet = project_callback(packet)
                 with self._lock:
                     self._packets.append(processed_packet)
-                    # Keep only last N packets
                     if len(self._packets) > 10:
                         self._packets = self._packets[-10:]
 
@@ -133,7 +113,6 @@ class ParallelPipeline:
         self._consumer_thread.start()
 
     def stop(self) -> None:
-        """Stop all threads and processing."""
         self._stop_event.set()
         if self._producer_thread:
             self._producer_thread.join(timeout=2.0)
@@ -141,14 +120,12 @@ class ParallelPipeline:
             self._consumer_thread.join(timeout=2.0)
 
     def get_latest_packet(self) -> Optional[FramePacket]:
-        """Get the latest processed packet."""
         with self._lock:
             if self._packets:
                 return self._packets[-1]
         return None
 
     def get_packets(self) -> List[FramePacket]:
-        """Get all processed packets."""
         with self._lock:
             return list(self._packets)
 
@@ -158,38 +135,65 @@ def create_parallel_pipeline(
     device: str,
     is_camera: bool = False,
     project_callback: Optional[Callable[[FramePacket], FramePacket]] = None,
+    field_map_path: str = "field_map.png",
+    calib_backend: str = "nbjw",
+    dynamic: bool = False,
+    recalib_interval: int = 10,
+    calibration: str = "",
+    debug: bool = False,
+    use_prev_homography: bool = True,
 ) -> ParallelPipeline:
-    """Create and start a parallel processing pipeline.
-
-    Args:
-        source: Video path or camera index
-        device: Device to run inference on (cuda, mps, cpu)
-        is_camera: Whether source is a camera
-        project_callback: Optional callback to process each frame
-
-    Returns:
-        Started ParallelPipeline instance
-    """
-    from projection.visualization import build_projected_objects, render_projection_frame
+    """Create and start a parallel processing pipeline."""
+    from projection.sn_projection_backend import create_projection_engine
+    from projection.visualization import (
+        build_projected_objects,
+        load_field_map,
+        render_projection_frame,
+    )
 
     pipeline = ParallelPipeline(max_buffer_size=3)
 
-    # Default projection callback if not provided
-    def default_project_callback(packet: FramePacket) -> FramePacket:
-        from projection.visualization import load_field_map
-        import cv2
+    field_img = load_field_map(field_map_path)
+    engine = create_projection_engine(
+        calib_backend=calib_backend,
+        dynamic=dynamic or calib_backend in {"nbjw", "pnl"},
+        recalib_interval=recalib_interval,
+        calibration_path=calibration,
+        field_path=field_map_path,
+        debug=debug,
+        use_prev_homography=use_prev_homography,
+    )
 
-        field_img = load_field_map("field_map.png")
-        packet.projection_tracklets = build_projected_objects(packet.tracked_objects)
+    def _sync_players(packet: FramePacket) -> None:
+        if not packet.players or not packet.projection_tracklets:
+            return
+        projected_by_id = {
+            int(t.track_id): t
+            for t in packet.projection_tracklets
+            if t.team != "BALL"
+        }
+        for player_id, player_state in packet.players.items():
+            projected = projected_by_id.get(int(player_id))
+            if projected is None:
+                continue
+            player_state.field_x = float(projected.map_x)
+            player_state.field_y = float(projected.map_y)
+
+    def default_project_callback(packet: FramePacket) -> FramePacket:
+        h_adapter = engine.update(packet.raw_frame)
+        packet.projection_tracklets = build_projected_objects(
+            packet.tracked_objects,
+            homography=h_adapter,
+        )
+        _sync_players(packet)
         packet.projection_frame = render_projection_frame(
             tracked_objects=packet.tracked_objects,
             field_img=field_img,
+            homography=h_adapter,
         )
         return packet
 
     callback = project_callback or default_project_callback
-
     pipeline.start_producer(source, device, is_camera)
     pipeline.start_consumer(callback)
-
     return pipeline

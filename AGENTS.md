@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -17,52 +17,30 @@ This is a football (soccer) video analysis project with modules for:
 python -m venv .venv && source .venv/bin/activate
 pip install -U pip && pip install -r requirements.txt && pip install -e .
 
-# Download required models (auto-downloaded if missing)
+# Download required models
 cd tracking && ./setup.sh
 
-# Run tracking (with state CSV output)
-python main.py tracking \
-  --source_video_path tracking/data/2e57b9_0.mp4 \
-  --target_video_path output.mp4 \
-  --state_output_path state.csv \
-  --state_flush_interval 0.5
+# Run tracking
+python main.py tracking --source_video_path tracking/data/2e57b9_0.mp4 --target_video_path output.mp4
 
 # Run tracking with camera input
-python main.py tracking --source_video_path 0 --target_video_path output.mp4 --is_camera
+python main.py tracking --source_video_path 0 --target_video_path output.mp4
 
 # Run projection (2D field visualization)
 python main.py projection tracking/data/2e57b9_0.mp4 -o projection/projection_2d.mp4 --field field_map.png
 
-# Run projection with dynamic calibration (for moving camera)
-python main.py projection tracking/data/2e57b9_0.mp4 -o out.mp4 --field field_map.png --dynamic --recalib_interval 30
-
 # Run offside detection
 python main.py offside offside/test.mp4 --frame_index 120 --output_dir offside/output --field field_map.png
 
-# Run multiple modules (tracking + projection + offside)
-python main.py modules \
-  --modules tracking projection offside \
-  --source_video_path tracking/data/2e57b9_0.mp4 \
-  --tracking_output_path tracking.mp4 \
-  --projection_output_path projection.mp4 \
-  --offside_frame_index 120 \
-  --offside_output_dir offside_output
-
-# Run multiple modules with camera input
-python main.py modules --modules tracking projection --source_video_path 0 --is_camera
-
-# Run full pipeline (tracking + projection + offside)
+# Run full pipeline
 python main.py pipeline --source_video_path tracking/data/2e57b9_0.mp4
 ```
 
 ## Camera Input Support
 
-Numeric `source_video_path` values are interpreted as camera indices (0, 1, etc.). The `modules` command supports camera input with `--is_camera`:
-
-```bash
-# Real-time tracking + projection (dual window)
-python main.py modules --modules tracking projection --source_video_path 0 --is_camera
-```
+The `run_player_team_classification_packets` function in `tracking/main.py` supports both video files and camera inputs:
+- Video file: Pass file path as usual
+- Camera: Pass camera index (0, 1, etc.) - the function automatically detects numeric strings as camera indices
 
 For camera input, a default team prototype model is used (no pre-collected crops required).
 
@@ -90,17 +68,7 @@ The pipeline uses a thread-safe frame buffer (max 3 frames) to allow tracking an
 
 ## Architecture
 
-Data flows through the system as `FramePacket` objects, with `GameStateManager` providing state persistence:
-
-```
-tracking → FramePacket → projection/offside/frontend → FramePacket
-                                      │
-                                      v
-                          frame_state_from_packet
-                                      │
-                                      v
-                    GameStateManager / AsyncPersistence
-```
+The system uses a unified `FramePacket` as the main data exchange object through the pipeline:
 
 1. **tracking** produces `ObjectTrack` objects (pixel-space detections with team labels)
 2. **projection** transforms pixels to 2D field coordinates via homography, outputs `ProjectedObject`
@@ -110,18 +78,6 @@ tracking → FramePacket → projection/offside/frontend → FramePacket
 
 - `core/packet.py`: `FramePacket` - the main frame data carrier with fields like `tracked_objects`, `players`, `ball`, `projection_tracklets`, `metrics`
 - `core/state.py`: `FrameState`, `PlayerState`, `BallState` - stable business state snapshots; `Team` enum (HOME, AWAY, REFEREE, UNKNOWN)
-
-### Extending with Callbacks
-
-```python
-state = GameStateManager()
-
-def on_new_packet(packet):
-    # Custom analysis, alerts, statistics
-    pass
-
-state.on_packet(on_new_packet)  # Register callback for packet stream
-```
 
 ### Adding New Modules
 

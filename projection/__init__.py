@@ -15,7 +15,10 @@ projection: 球场投影建模模块。
 from .calibrator import FieldCalibrator, FieldLineDetector, LineFallbackDetector
 from .dynamic_projector import DynamicProjector, create_dynamic_projector
 from .homography import (
+    COORD_SYSTEM_MAP_PIXEL,
+    COORD_SYSTEM_METER_CENTER,
     DEFAULT_DST_PTS,
+    DEFAULT_DST_PTS_METER_CENTER,
     DEFAULT_SRC_PTS,
     HomographyAdapter,
     HomographyEstimator,
@@ -24,6 +27,8 @@ from .homography import (
     HomographySmoother,
     HomographyState,
     build_default_homography,
+    build_default_meter_homography,
+    template_to_field_points_center,
     template_to_image_points,
 )
 from .keypoint_manager import KeypointManager, PITCH_KEYPOINT_IDS, TrackedKeypoint
@@ -35,6 +40,7 @@ from .modeling import (
     project_tracked_objects,
 )
 from .shot_change_detector import ShotChangeDetector
+from .sn_projection_backend import ProjectionEngine, SNCalibrationProjector, create_projection_engine
 from .visualization import (
     build_projected_objects,
     render_projection_frame,
@@ -47,6 +53,8 @@ from .visualization import (
 
 __all__ = [
     # Homography
+    "COORD_SYSTEM_MAP_PIXEL",
+    "COORD_SYSTEM_METER_CENTER",
     "HomographyAdapter",
     "HomographySmoother",
     "HomographyState",
@@ -56,7 +64,10 @@ __all__ = [
     "template_to_image_points",
     "DEFAULT_SRC_PTS",
     "DEFAULT_DST_PTS",
+    "DEFAULT_DST_PTS_METER_CENTER",
     "build_default_homography",
+    "build_default_meter_homography",
+    "template_to_field_points_center",
     # Keypoint Manager
     "KeypointManager",
     "TrackedKeypoint",
@@ -81,4 +92,8 @@ __all__ = [
     # Dynamic Projector
     "DynamicProjector",
     "create_dynamic_projector",
+    # SN-like backends
+    "SNCalibrationProjector",
+    "ProjectionEngine",
+    "create_projection_engine",
 ]
