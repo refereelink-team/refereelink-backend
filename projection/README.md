@@ -30,17 +30,17 @@
 
 ## 5. 与 offside 的分工（重点）
 
-- `projection` 只解决**“坐标变换与几何建模”**：
+- `projection` 只解决**”坐标变换与几何建模”**：
   - 输入：像素空间 `TrackedObject`
   - 输出：球场空间 `ProjectedTracklet`
-  - 不做任何“是否越位/是否出界”结论
+  - 不做任何”是否越位/是否出界”结论
 
-- `offside` 只解决**“规则判定与业务流程”**：
+- `offside` 只解决**”规则判定与业务流程”**：
   - 消费 `ProjectedTracklet`
   - 计算越位线、进攻方向、出界/门线结果
   - 进行可视化和关键帧判罚输出
 
-一句话：`projection` 负责“把点投对”，`offside` 负责“按规则判对”。
+一句话：`projection` 负责”把点投对”，`offside` 负责”按规则判对”。
 
 ## 6. 用法（2D 投影视频）
 
@@ -48,4 +48,10 @@
 python main.py projection tracking/data/2e57b9_0.mp4 \
   -o projection/projection_2d.mp4 \
   --field field_map.png
+
+# 实时模式（显示窗口）
+python main.py modules --modules tracking projection \
+  --source_video_path 0 \
+  --is_camera \
+  --no-show
 ```

@@ -128,6 +128,21 @@ python main.py pipeline \
   --source_video_path tracking/data/2e57b9_0.mp4
 ```
 
+### 摄像头实时输入（新增）
+
+```bash
+# 实时 tracking（摄像头）
+python main.py tracking \
+  --source_video_path 0 \
+  --is_camera
+
+# 实时 tracking + projection（双窗口显示）
+python main.py modules \
+  --modules tracking projection \
+  --source_video_path 0 \
+  --is_camera
+```
+
 启用状态输出（tracking 示例）：
 
 ```bash
@@ -142,10 +157,10 @@ python main.py tracking \
 ## 6. 参数说明（统一入口）
 
 - `--device`：默认 `auto`，按 `cuda > mps > cpu` 自动选择；也可手动指定
-- `tracking` 子命令：`--source_video_path`、`--target_video_path`（固定运行 `PLAYER_TEAM_CLASSIFICATION`）
+- `tracking` 子命令：`--source_video_path`、`--target_video_path`（固定运行 `PLAYER_TEAM_CLASSIFICATION`）、`--is_camera`（摄像头模式）
 - `projection` 子命令：`input`、`--output`、`--field`
 - `offside` 子命令：`input`、`--frame_index`、`--output_dir`、`--field`
-- `modules`：`--modules tracking projection offside` 可顺序运行一个或多个模块
+- `modules`：`--modules tracking projection offside` 可顺序运行一个或多个模块，`--is_camera` 启用摄像头模式
 - `pipeline`：固定执行 tracking + projection + offside
 - 通用：`--state_output_path` / `--state_flush_interval` 启用 core 状态导出
 

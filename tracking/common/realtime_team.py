@@ -12,6 +12,9 @@ MIN_TORSO_AREA = 14 * 14
 MIN_FEATURE_CONFIDENCE = 0.18
 DEFAULT_UPDATE_CONFIDENCE = 0.30
 
+# Cache optimization: bbox change threshold in pixels
+BBOX_CHANGE_THRESHOLD = 15
+
 
 @dataclass
 class ColorFeatureSample:
@@ -31,6 +34,22 @@ class TeamPredictionBatch:
 class TeamPrototypeModel:
     centers: np.ndarray
     init_stats: Dict[str, float] = field(default_factory=dict)
+
+    def __init__(self, centers: Optional[np.ndarray] = None, init_stats: Optional[Dict[str, float]] = None):
+        """Create a TeamPrototypeModel without fitting - use provided centers or defaults."""
+        if centers is None:
+            # Default fallback centers (same as in fit() when not enough samples)
+            centers = np.array(
+                [
+                    [0.05, 0.75, 0.80, 0.55, 0.75, 0.02, 0.05, 0.05],
+                    [0.60, 0.75, 0.80, 0.45, 0.30, 0.02, 0.05, 0.05],
+                ],
+                dtype=np.float32,
+            )
+        self.centers = centers
+        if init_stats is None:
+            init_stats = {"init_fallback": 1.0, "init_total_crops": 0, "init_valid_crops": 0}
+        self.init_stats = init_stats
 
     @classmethod
     def fit(cls, crops: Iterable[np.ndarray]) -> "TeamPrototypeModel":
@@ -239,3 +258,85 @@ class TeamAssignmentSmoother:
             self.stable_labels[track_id] = stable_label
             smoothed.append(stable_label)
         return np.asarray(smoothed, dtype=int)
+
+
+@dataclass
+class CachedTeamClassifier:
+    """Cached team classifier that avoids redundant color feature extraction.
+
+    Caches classification results per track_id and only recomputes when:
+    1. New track_id appears (first time seeing this player)
+    2. Detection bbox position changes beyond threshold
+
+    This significantly reduces:
+    - cv2.cvtColor operations (HSV + LAB conversion per crop)
+    - Team model prediction calls
+    """
+    model: TeamPrototypeModel
+    cache: Dict[int, Tuple[int, float, np.ndarray]] = field(default_factory=dict)
+    # track_id -> (label, confidence, last_bbox_xyxy)
+    threshold: float = BBOX_CHANGE_THRESHOLD
+
+    def predict(self, crops: List[np.ndarray], track_ids: List[int], bboxes: List[np.ndarray]) -> TeamPredictionBatch:
+        """Predict team labels with caching based on track_id and bbox changes.
+
+        Args:
+            crops: List of player crop images
+            track_ids: List of track IDs for each crop
+            bboxes: List of bbox xyxy arrays for each crop
+
+        Returns:
+            TeamPredictionBatch with labels and confidences
+        """
+        labels: List[int] = []
+        confidences: List[float] = []
+
+        for crop, track_id, bbox in zip(crops, track_ids, bboxes):
+            cached = self.cache.get(track_id)
+            needs_update = True
+
+            if cached is not None:
+                cached_label, cached_conf, cached_bbox = cached
+                # Compute bbox center distance
+                curr_center = np.array([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2])
+                prev_center = np.array([(cached_bbox[0] + cached_bbox[2]) / 2, (cached_bbox[1] + cached_bbox[3]) / 2])
+                dist = np.linalg.norm(curr_center - prev_center)
+
+                if dist < self.threshold:
+                    # Cache hit: reuse previous classification
+                    labels.append(cached_label)
+                    confidences.append(cached_conf)
+                    needs_update = False
+
+            if needs_update:
+                # Cache miss: compute color feature and predict
+                sample = extract_color_feature(crop)
+                if sample is None:
+                    label = cached[0] if cached else 0
+                    conf = cached[1] if cached else 0.0
+                else:
+                    label, margin_conf = self.model.predict_feature(sample.feature)
+                    conf = float(np.clip(0.55 * sample.confidence + 0.45 * margin_conf, 0.0, 1.0))
+
+                labels.append(label)
+                confidences.append(conf)
+
+                # Update cache
+                self.cache[track_id] = (label, conf, bbox.copy())
+
+        return TeamPredictionBatch(
+            labels=np.asarray(labels, dtype=int),
+            confidences=np.asarray(confidences, dtype=np.float32),
+        )
+
+    def reset_cache(self, track_id: Optional[int] = None) -> None:
+        """Reset cache for specific track_id or all track_ids."""
+        if track_id is None:
+            self.cache.clear()
+        else:
+            self.cache.pop(track_id, None)
+
+    def get_cached_label(self, track_id: int) -> Optional[int]:
+        """Get cached label for track_id without computing."""
+        cached = self.cache.get(track_id)
+        return cached[0] if cached else None

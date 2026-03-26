@@ -5,7 +5,7 @@
 ## 1. 模块结构
 
 - `backend.py`：底座能力（YOLO 检测 + ByteTrack 跟踪），输出 `TrackedObject`。
-- `main.py`：球员/队伍识别主流程（现改为轻量颜色原型 + track 平滑），并按帧回填 `FrameMetrics` 性能指标，可选写入 `core` 状态。
+- `main.py`：球员/队伍识别主流程（现改为轻量颜色原型 + track 平滑），并按帧回填 `FrameMetrics` 性能指标，可选写入 `core` 状态。支持视频文件和摄像头输入。
 - `common/`：通用组件（队伍分类、可视化等）。
 - `annotators/`、`configs/`：绘制与配置。
 - `data/`：模型和样例视频资源。
@@ -15,6 +15,7 @@
 - 目标检测与多目标跟踪。
 - 为每个目标提供像素框、ID、置信度、粗粒度队伍标签（如 `RED/BLUE/BALL`）。
 - 给上游模块提供统一输入对象（`TrackedObject`）。
+- **新增**：支持摄像头实时输入（`run_player_team_classification_packets` 的 `is_camera` 参数）。
 
 ## 3. 引用了哪些模块（出向依赖）
 
@@ -30,6 +31,16 @@
 
 ## 5. 边界约束
 
-- `tracking` 只做“像素空间感知”，不做：
+- `tracking` 只做”像素空间感知”，不做：
   - 像素到球场坐标的映射（这是 `projection` 职责）
   - 越位/出界规则判定（这是 `offside` 职责）
+
+## 6. 用法
+
+```bash
+# 视频文件输入
+python main.py tracking --source_video_path tracking/data/2e57b9_0.mp4 --target_video_path output.mp4
+
+# 摄像头实时输入
+python main.py tracking --source_video_path 0 --target_video_path output.mp4 --is_camera
+```

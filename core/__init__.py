@@ -1,5 +1,6 @@
 from .packet import FrameMetrics, FramePacket, ObjectTrack, ProjectedObject
 from .persistence import AsyncPersistence
+from .pipeline import FrameBuffer, ParallelPipeline, create_parallel_pipeline
 from .state import (
     BallState,
     FoulEvent,
@@ -25,4 +26,7 @@ __all__ = [
     "frame_state_from_packet",
     "GameStateManager",
     "AsyncPersistence",
+    "FrameBuffer",
+    "ParallelPipeline",
+    "create_parallel_pipeline",
 ]

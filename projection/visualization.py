@@ -14,6 +14,7 @@ from typing import Iterable, Optional
 import cv2
 import numpy as np
 
+from projection.dynamic_projector import create_dynamic_projector
 from projection.homography import HomographyAdapter, build_default_homography
 from projection.modeling import ProjectedTracklet, project_tracked_objects
 from core import ObjectTrack, ProjectedObject
@@ -97,6 +98,149 @@ def draw_projected_tracklets(
             (255, 255, 255),
             1,
         )
+
+
+# 颜色定义 for keypoint visualization
+KEYPOINT_COLORS = {
+    # 角点 - 红色
+    "top_left_corner": (0, 0, 255),
+    "top_right_corner": (0, 0, 255),
+    "bottom_left_corner": (0, 0, 255),
+    "bottom_right_corner": (0, 0, 255),
+    # 禁区角点 - 黄色
+    "penalty_top_left": (0, 255, 255),
+    "penalty_top_right": (0, 255, 255),
+    "penalty_bottom_left": (0, 255, 255),
+    "penalty_bottom_right": (0, 255, 255),
+    # 中线点 - 绿色
+    "mid_top": (0, 255, 0),
+    "mid_bottom": (0, 255, 0),
+    "mid_left": (0, 255, 0),
+    "mid_right": (0, 255, 0),
+}
+
+
+def draw_keypoints_on_frame(
+    frame: np.ndarray,
+    keypoints: dict,
+    show_labels: bool = True,
+    radius: int = 8,
+) -> np.ndarray:
+    """在原始视频帧上绘制检测到的球场关键点
+
+    Args:
+        frame: BGR 视频帧
+        keypoints: {keypoint_id: TrackedKeypoint}
+        show_labels: 是否显示关键点标签
+        radius: 绘制半径
+
+    Returns:
+        绘制了关键点的帧
+    """
+    display = frame.copy()
+
+    for keypoint_id, kp in keypoints.items():
+        if not kp.visible:
+            continue
+
+        x, y = int(kp.pt[0]), int(kp.pt[1])
+
+        # 确保在帧范围内
+        if x < 0 or x >= display.shape[1] or y < 0 or y >= display.shape[0]:
+            continue
+
+        # 获取颜色
+        color = KEYPOINT_COLORS.get(keypoint_id, (255, 255, 255))
+
+        # 绘制圆圈
+        cv2.circle(display, (x, y), radius, color, -1)
+
+        # 绘制边框
+        cv2.circle(display, (x, y), radius, (255, 255, 255), 2)
+
+        if show_labels:
+            # 绘制标签
+            label = keypoint_id.replace("_", " ")
+            cv2.putText(
+                display,
+                label,
+                (x + radius + 4, y + 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                color,
+                1,
+            )
+
+    return display
+
+
+def draw_keypoints_on_field(
+    field_img: np.ndarray,
+    keypoints: dict,
+    homography: Optional[HomographyAdapter] = None,
+    show_labels: bool = True,
+    radius: int = 8,
+) -> np.ndarray:
+    """在2D球场图上绘制关键点的模板位置（用于调试对应关系）
+
+    Args:
+        field_img: 2D球场图像
+        keypoints: {keypoint_id: TrackedKeypoint} - 图像上的关键点
+        homography: 单应矩阵（用于将关键点投影到球场）
+        show_labels: 是否显示关键点标签
+        radius: 绘制半径
+
+    Returns:
+        绘制了关键点的球场图
+    """
+    display = field_img.copy()
+
+    # 绘制模板关键点位置（固定位置）
+    from projection.homography import template_to_image_points
+    template_pts = template_to_image_points()
+
+    for keypoint_id, template_pt in template_pts.items():
+        x, y = int(template_pt[0]), int(template_pt[1])
+
+        # 确保在球场图范围内
+        if x < 0 or x >= display.shape[1] or y < 0 or y >= display.shape[0]:
+            continue
+
+        color = KEYPOINT_COLORS.get(keypoint_id, (255, 255, 255))
+
+        # 绘制圆圈（空心，表示模板位置）
+        cv2.circle(display, (x, y), radius, color, 2)
+
+        if show_labels:
+            label = keypoint_id.replace("_", " ")
+            cv2.putText(
+                display,
+                label,
+                (x + radius + 4, y + 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                color,
+                1,
+            )
+
+    # 如果有 homography，可以额外绘制投影后的关键点位置
+    if homography is not None:
+        for keypoint_id, kp in keypoints.items():
+            if not kp.visible:
+                continue
+
+            try:
+                map_x, map_y = homography.pixel_to_map(kp.pt[0], kp.pt[1])
+                mx, my = int(map_x), int(map_y)
+
+                if 0 <= mx < display.shape[1] and 0 <= my < display.shape[0]:
+                    # 绘制实心圆，表示投影位置
+                    color = KEYPOINT_COLORS.get(keypoint_id, (255, 255, 255))
+                    cv2.circle(display, (mx, my), radius - 2, color, -1)
+            except Exception:
+                pass
+
+    return display
 
 
 def build_projected_objects(
