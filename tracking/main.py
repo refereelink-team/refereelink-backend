@@ -307,35 +307,25 @@ def build_role_team_detections(
 
 
 def run_player_team_classification_packets(
-    source_video_path: str, device: str, is_camera: bool = False
+    source_video_path: str, device: str
 ) -> Iterator[FramePacket]:
     import supervision as sv
     from ultralytics import YOLO
     from tracking.common.realtime_team import CachedTeamClassifier, TeamAssignmentSmoother, TeamPrototypeModel
 
-    # Check if source is a camera (numeric string or "0", "1", etc.)
-    is_camera = is_camera or (source_video_path.isdigit() and int(source_video_path) >= 0)
-
     selected_device = _resolve_device(device)
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=selected_device)
 
-    # For camera input, we can't pre-collect crops - use default team model
-    if is_camera:
-        # Use default team assignment without pre-collected crops
-        team_model = TeamPrototypeModel()
-        smoother = TeamAssignmentSmoother()
-        init_ms = 0.0
-    else:
-        # Original video-based logic: collect crops first
-        crops = collect_player_crops(
-            source_video_path=source_video_path,
-            player_detection_model=player_detection_model,
-            end=CROPS_COLLECTION_END,
-        )
-        init_started = perf_counter()
-        team_model = TeamPrototypeModel.fit(crops)
-        smoother = TeamAssignmentSmoother()
-        init_ms = (perf_counter() - init_started) * 1000.0
+    # Collect crops for team model initialization
+    crops = collect_player_crops(
+        source_video_path=source_video_path,
+        player_detection_model=player_detection_model,
+        end=CROPS_COLLECTION_END,
+    )
+    init_started = perf_counter()
+    team_model = TeamPrototypeModel.fit(crops)
+    smoother = TeamAssignmentSmoother()
+    init_ms = (perf_counter() - init_started) * 1000.0
 
     # Create cached classifier for real-time performance optimization
     cached_classifier = CachedTeamClassifier(model=team_model)
@@ -352,29 +342,17 @@ def run_player_team_classification_packets(
         text_position=sv.Position.BOTTOM_CENTER,
     )
 
-    # Setup frame source based on input type
-    if is_camera:
-        import cv2
-        cap = cv2.VideoCapture(int(source_video_path) if source_video_path.isdigit() else source_video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"Cannot open camera: {source_video_path}")
-    else:
-        frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
 
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     frame_index = 0
 
     # Main processing loop
     while True:
-        if is_camera:
-            ret, frame = cap.read()
-            if not ret:
-                break
-        else:
-            try:
-                frame = next(frame_generator)
-            except StopIteration:
-                break
+        try:
+            frame = next(frame_generator)
+        except StopIteration:
+            break
 
         frame_started = perf_counter()
 
@@ -451,7 +429,7 @@ def main(
     device: str = "auto",
     state_output_path: str = "",
     state_flush_interval: float = 0.5,
-    is_camera: bool = False,
+    no_show: bool = False,
 ) -> None:
     import cv2
     import supervision as sv
@@ -460,11 +438,8 @@ def main(
     if device == "auto":
         print(f"[device] auto selected: {selected_device}")
 
-    # Determine if source is camera (numeric string like "0", "1", etc.)
-    is_camera_input = is_camera or (source_video_path.isdigit() and int(source_video_path) >= 0)
-
     frame_generator = run_player_team_classification_packets(
-        source_video_path=source_video_path, device=selected_device, is_camera=is_camera_input
+        source_video_path=source_video_path, device=selected_device
     )
 
     game_state: Optional[GameStateManager] = None
@@ -478,10 +453,10 @@ def main(
         )
         persistence.start()
 
-    # Setup video output only if target path is provided and not camera mode
+    # Setup video output only if target path is provided
     video_info = None
     sink = None
-    if target_video_path and not is_camera_input:
+    if target_video_path:
         video_info = sv.VideoInfo.from_video_path(source_video_path)
         sink = sv.VideoSink(target_video_path, video_info)
 
@@ -493,26 +468,30 @@ def main(
                     if game_state is not None:
                         game_state.update_packet(packet)
 
-                    cv2.imshow("frame", packet.annotated_frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
+                    if not no_show:
+                        cv2.imshow("frame", packet.annotated_frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            break
         else:
-            # Realtime mode (camera or no output path)
+            # Headless mode (no output path) - process frames without display
             for packet in frame_generator:
                 if game_state is not None:
                     game_state.update_packet(packet)
 
-                cv2.imshow("frame", packet.annotated_frame)
-                # Print realtime FPS
-                print(f"FPS: {packet.metrics.fps:.1f} | "
-                      f"Det: {packet.metrics.detect_ms:.0f}ms | "
-                      f"Track: {packet.metrics.track_ms:.0f}ms | "
-                      f"Class: {packet.metrics.classify_ms:.0f}ms",
-                      end="\r")
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if not no_show:
+                    cv2.imshow("frame", packet.annotated_frame)
+                    print(
+                        f"FPS: {packet.metrics.fps:.1f} | "
+                        f"Det: {packet.metrics.detect_ms:.0f}ms | "
+                        f"Track: {packet.metrics.track_ms:.0f}ms | "
+                        f"Class: {packet.metrics.classify_ms:.0f}ms",
+                        end="\r",
+                    )
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
     finally:
-        cv2.destroyAllWindows()
+        if not no_show:
+            cv2.destroyAllWindows()
         if persistence is not None:
             persistence.stop()
             persistence.join()
@@ -527,7 +506,6 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--state_output_path", type=str, default="")
     parser.add_argument("--state_flush_interval", type=float, default=0.5)
-    parser.add_argument("--is_camera", action="store_true", help="Treat source as camera index (0, 1, ...)")
     parser.add_argument("--no_show", action="store_true", help="Don't display windows")
     args = parser.parse_args()
     main(
@@ -536,5 +514,5 @@ if __name__ == "__main__":
         device=args.device,
         state_output_path=args.state_output_path,
         state_flush_interval=args.state_flush_interval,
-        is_camera=args.is_camera,
+        no_show=args.no_show,
     )

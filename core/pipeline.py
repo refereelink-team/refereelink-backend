@@ -70,7 +70,6 @@ class ParallelPipeline:
         self,
         source: str,
         device: str,
-        is_camera: bool = False,
     ) -> None:
         from tracking.main import run_player_team_classification_packets
 
@@ -79,7 +78,6 @@ class ParallelPipeline:
                 for packet in run_player_team_classification_packets(
                     source_video_path=source,
                     device=device,
-                    is_camera=is_camera,
                 ):
                     if self._stop_event.is_set():
                         break
@@ -133,7 +131,6 @@ class ParallelPipeline:
 def create_parallel_pipeline(
     source: str,
     device: str,
-    is_camera: bool = False,
     project_callback: Optional[Callable[[FramePacket], FramePacket]] = None,
     field_map_path: str = "field_map.png",
     calib_backend: str = "nbjw",
@@ -194,6 +191,6 @@ def create_parallel_pipeline(
         return packet
 
     callback = project_callback or default_project_callback
-    pipeline.start_producer(source, device, is_camera)
+    pipeline.start_producer(source, device)
     pipeline.start_consumer(callback)
     return pipeline

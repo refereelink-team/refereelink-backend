@@ -1,6 +1,7 @@
 import argparse
 import os
 import subprocess
+import sys
 from typing import Iterable, List
 
 
@@ -74,12 +75,13 @@ def _run_tracking(args: argparse.Namespace) -> None:
         device=selected_device,
         state_output_path=args.state_output_path,
         state_flush_interval=args.state_flush_interval,
-        is_camera=args.is_camera,
+        no_show=args.no_show,
     )
 
 
 def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     import cv2
+    import numpy as np
     from time import perf_counter
 
     import supervision as sv
@@ -99,10 +101,6 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     selected_device = _resolve_device(args.device)
     if args.device == "auto":
         print(f"[device] auto selected: {selected_device}")
-
-    is_camera = args.is_camera or (
-        args.source_video_path.isdigit() and int(args.source_video_path) >= 0
-    )
 
     field_img = cv2.imread(args.field)
     if field_img is None:
@@ -131,11 +129,11 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     )
 
     video_info = None
-    if not is_camera and (args.projection_output_path or args.tracking_output_path):
+    if args.projection_output_path or args.tracking_output_path or args.calibration_video:
         video_info = sv.VideoInfo.from_video_path(args.source_video_path)
 
     projection_writer = None
-    if args.projection_output_path and not is_camera:
+    if args.projection_output_path:
         fps = float(video_info.fps or 30)
         for fourcc_name in ("mp4v", "XVID", "MJPG"):
             fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
@@ -151,10 +149,30 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
         if projection_writer is None or not projection_writer.isOpened():
             raise RuntimeError("Failed to create projection output video writer.")
 
+    calib_video_writer = None
+    if args.calibration_video:
+        fps = float(video_info.fps or 30)
+        orig_h = int(video_info.height)
+        orig_w = int(video_info.width)
+        composite_w = orig_w * 2
+        composite_h = orig_h
+        for fourcc_name in ("mp4v", "XVID", "MJPG"):
+            fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
+            writer = cv2.VideoWriter(
+                args.calibration_video,
+                fourcc,
+                fps,
+                (composite_w, composite_h),
+            )
+            if writer.isOpened():
+                calib_video_writer = writer
+                break
+        if calib_video_writer is None:
+            print("Warning: Failed to create calibration video writer.", file=sys.stderr)
+
     frame_stream = run_player_team_classification_packets(
         source_video_path=args.source_video_path,
         device=selected_device,
-        is_camera=is_camera,
     )
 
     game_state = None
@@ -171,9 +189,10 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     def _process_packet(packet):
         project_started = perf_counter()
         h_adapter = projection_engine.update(packet.raw_frame)
-        keypoints = projection_engine.get_keypoints() if args.debug else {}
+        keypoints = projection_engine.get_keypoints()
 
-        if args.debug and keypoints:
+        # Always draw keypoints on annotated frame when available
+        if keypoints:
             packet.annotated_frame = draw_keypoints_on_frame(
                 packet.annotated_frame,
                 keypoints,
@@ -193,7 +212,7 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
             field_img=field_img,
             homography=h_adapter,
         )
-        if args.debug and keypoints:
+        if keypoints:
             projection_frame = draw_keypoints_on_field(
                 projection_frame,
                 keypoints,
@@ -221,20 +240,31 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
             if packet.metrics.total_ms > 0
             else 0.0
         )
-        return projection_frame
+        return projection_frame, keypoints
 
     try:
         tracking_sink = None
-        if args.tracking_output_path and not is_camera:
+        if args.tracking_output_path:
             tracking_sink = sv.VideoSink(args.tracking_output_path, video_info)
 
         if tracking_sink:
             with tracking_sink:
                 for packet in frame_stream:
-                    projection_frame = _process_packet(packet)
+                    projection_frame, keypoints = _process_packet(packet)
                     tracking_sink.write_frame(packet.annotated_frame)
                     if projection_writer:
                         projection_writer.write(projection_frame)
+                    if calib_video_writer is not None and keypoints:
+                        # Left: annotated frame with keypoint overlay
+                        # Right: 2D field with template keypoint positions
+                        calib_left = packet.annotated_frame
+                        # Resize projection frame to match annotated frame height
+                        target_h = calib_left.shape[0]
+                        scale = target_h / projection_frame.shape[0]
+                        new_w = int(projection_frame.shape[1] * scale)
+                        calib_right = cv2.resize(projection_frame, (new_w, target_h))
+                        calib_composite = np.hstack([calib_left, calib_right])
+                        calib_video_writer.write(calib_composite)
 
                     if not args.no_show:
                         cv2.imshow("Tracking", packet.annotated_frame)
@@ -242,8 +272,17 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             break
         else:
+            # Headless mode - process frames without display
             for packet in frame_stream:
-                projection_frame = _process_packet(packet)
+                projection_frame, keypoints = _process_packet(packet)
+                if calib_video_writer is not None and keypoints:
+                    calib_left = packet.annotated_frame
+                    target_h = calib_left.shape[0]
+                    scale = target_h / projection_frame.shape[0]
+                    new_w = int(projection_frame.shape[1] * scale)
+                    calib_right = cv2.resize(projection_frame, (new_w, target_h))
+                    calib_composite = np.hstack([calib_left, calib_right])
+                    calib_video_writer.write(calib_composite)
                 if not args.no_show:
                     cv2.imshow("Tracking", packet.annotated_frame)
                     cv2.imshow("Projection 2D Map", projection_frame)
@@ -260,6 +299,8 @@ def _run_tracking_and_projection(args: argparse.Namespace) -> None:
     finally:
         if projection_writer:
             projection_writer.release()
+        if calib_video_writer is not None:
+            calib_video_writer.release()
         if persistence is not None:
             persistence.stop()
             persistence.join()
@@ -327,13 +368,13 @@ def _run_modules(
     no_show: bool,
     state_output_path: str,
     state_flush_interval: float,
-    is_camera: bool = False,
     dynamic: bool = False,
     recalib_interval: int = 10,
     calibration: str = "",
     calib_backend: str = "nbjw",
     use_prev_homography: bool = True,
     debug: bool = False,
+    calibration_video: str = "",
 ) -> None:
     ordered: List[str] = list(dict.fromkeys(modules))
 
@@ -342,12 +383,12 @@ def _run_modules(
             source_video_path=source_video_path,
             tracking_output_path=tracking_output_path,
             projection_output_path=projection_output_path,
+            calibration_video=calibration_video,
             device=device,
             field=field,
             no_show=no_show,
             state_output_path=state_output_path,
             state_flush_interval=state_flush_interval,
-            is_camera=is_camera,
             dynamic=dynamic,
             recalib_interval=recalib_interval,
             calibration=calibration,
@@ -366,7 +407,7 @@ def _run_modules(
                 device=device,
                 state_output_path=state_output_path,
                 state_flush_interval=state_flush_interval,
-                is_camera=is_camera,
+                no_show=no_show,
             )
             _run_tracking(tracking_args)
             continue
@@ -417,11 +458,6 @@ def build_parser() -> argparse.ArgumentParser:
     tracking_parser.add_argument("--device", type=str, default="auto")
     tracking_parser.add_argument("--state_output_path", type=str, default="")
     tracking_parser.add_argument("--state_flush_interval", type=float, default=0.5)
-    tracking_parser.add_argument(
-        "--is_camera",
-        action="store_true",
-        help="Treat source_video_path as camera index (0, 1, ...)",
-    )
     tracking_parser.add_argument("--no_show", action="store_true", help="Do not display windows")
     tracking_parser.set_defaults(handler=_run_tracking)
 
@@ -431,7 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
     projection_parser.add_argument("--model", default="tracking/data/football-player-detection.pt")
     projection_parser.add_argument("--field", default="field_map.png")
     projection_parser.add_argument("--device", type=str, default="auto")
-    projection_parser.add_argument("--no-show", action="store_true")
+    projection_parser.add_argument("--no_show", action="store_true")
     projection_parser.add_argument("--calibration", type=str, default="")
     projection_parser.add_argument("--dynamic", action="store_true")
     projection_parser.add_argument("--recalib_interval", type=int, default=10)
@@ -458,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     offside_parser.add_argument("--model", default="tracking/data/football-player-detection.pt")
     offside_parser.add_argument("--field", default="field_map.png")
     offside_parser.add_argument("--device", type=str, default="auto")
-    offside_parser.add_argument("--no-show", action="store_true")
+    offside_parser.add_argument("--no_show", action="store_true")
     offside_parser.add_argument("--state_output_path", default="")
     offside_parser.add_argument("--state_flush_interval", type=float, default=0.5)
     offside_parser.set_defaults(handler=_run_offside)
@@ -477,6 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
     modules_parser.add_argument("--source_video_path", type=str, required=True)
     modules_parser.add_argument("--tracking_output_path", type=str, default="")
     modules_parser.add_argument("--projection_output_path", type=str, default="")
+    modules_parser.add_argument("--calibration_video", type=str, default="", help="Output path for calibration debug video (keypoints on original + field view, side-by-side)")
     modules_parser.add_argument(
         "--offside_output_dir",
         type=str,
@@ -486,10 +523,9 @@ def build_parser() -> argparse.ArgumentParser:
     modules_parser.add_argument("--device", type=str, default="auto")
     modules_parser.add_argument("--model", type=str, default="tracking/data/football-player-detection.pt")
     modules_parser.add_argument("--field", type=str, default="field_map.png")
-    modules_parser.add_argument("--no-show", action="store_true")
+    modules_parser.add_argument("--no_show", action="store_true")
     modules_parser.add_argument("--state_output_path", type=str, default="")
     modules_parser.add_argument("--state_flush_interval", type=float, default=0.5)
-    modules_parser.add_argument("--is_camera", action="store_true")
     modules_parser.add_argument("--calibration", type=str, default="")
     modules_parser.add_argument("--dynamic", action="store_true")
     modules_parser.add_argument("--recalib_interval", type=int, default=10)
@@ -513,6 +549,7 @@ def build_parser() -> argparse.ArgumentParser:
             source_video_path=args.source_video_path,
             tracking_output_path=args.tracking_output_path,
             projection_output_path=args.projection_output_path,
+            calibration_video=args.calibration_video,
             offside_output_dir=args.offside_output_dir,
             offside_frame_index=args.offside_frame_index,
             device=args.device,
@@ -521,7 +558,6 @@ def build_parser() -> argparse.ArgumentParser:
             no_show=args.no_show,
             state_output_path=args.state_output_path,
             state_flush_interval=args.state_flush_interval,
-            is_camera=args.is_camera,
             dynamic=args.dynamic,
             recalib_interval=args.recalib_interval,
             calibration=args.calibration,
@@ -535,6 +571,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_parser.add_argument("--source_video_path", type=str, required=True)
     pipeline_parser.add_argument("--tracking_output_path", type=str, default="")
     pipeline_parser.add_argument("--projection_output_path", type=str, default="")
+    pipeline_parser.add_argument("--calibration_video", type=str, default="", help="Output path for calibration debug video (keypoints on original + field view, side-by-side)")
     pipeline_parser.add_argument(
         "--offside_output_dir",
         type=str,
@@ -544,10 +581,9 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_parser.add_argument("--device", type=str, default="auto")
     pipeline_parser.add_argument("--model", type=str, default="tracking/data/football-player-detection.pt")
     pipeline_parser.add_argument("--field", type=str, default="field_map.png")
-    pipeline_parser.add_argument("--no-show", action="store_true")
+    pipeline_parser.add_argument("--no_show", action="store_true")
     pipeline_parser.add_argument("--state_output_path", type=str, default="")
     pipeline_parser.add_argument("--state_flush_interval", type=float, default=0.5)
-    pipeline_parser.add_argument("--is_camera", action="store_true")
     pipeline_parser.add_argument("--calibration", type=str, default="")
     pipeline_parser.add_argument("--dynamic", action="store_true")
     pipeline_parser.add_argument("--recalib_interval", type=int, default=10)
@@ -571,6 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
             source_video_path=args.source_video_path,
             tracking_output_path=args.tracking_output_path,
             projection_output_path=args.projection_output_path,
+            calibration_video=args.calibration_video,
             offside_output_dir=args.offside_output_dir,
             offside_frame_index=args.offside_frame_index,
             device=args.device,
@@ -579,7 +616,6 @@ def build_parser() -> argparse.ArgumentParser:
             no_show=args.no_show,
             state_output_path=args.state_output_path,
             state_flush_interval=args.state_flush_interval,
-            is_camera=args.is_camera,
             dynamic=args.dynamic,
             recalib_interval=args.recalib_interval,
             calibration=args.calibration,

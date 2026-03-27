@@ -186,6 +186,36 @@ def extract_footpoint(obj: TrackedObject) -> Tuple[float, float]:
     return foot_u, foot_v
 
 
+def project_single_bbox_multi(
+    bbox_ltrb: Tuple[float, float, float, float],
+    homography: HomographyAdapter,
+) -> Tuple[float, float]:
+    """将单个 bbox 的 3 个脚点投影到 2D 球场并取平均。
+
+    使用 HomographyAdapter.pixel_to_field_meters 直接将图像像素投影到球场米坐标，
+    比单点点投影更鲁棒。
+
+    Args:
+        bbox_ltrb: (left, top, right, bottom) 像素坐标
+        homography: 单应矩阵适配器
+
+    Returns:
+        (map_x, map_y): 球场坐标（米，中心原点）
+    """
+    l, t, r, b = bbox_ltrb
+    # 3 个脚点：左下角、右下角、底边中点
+    bl_u, bl_v = l, b
+    br_u, br_v = r, b
+    bm_u, bm_v = l + (r - l) / 2.0, b
+
+    # 直接投影到球场米坐标并取平均
+    x_bl, y_bl = homography.pixel_to_field_meters(bl_u, bl_v)
+    x_br, y_br = homography.pixel_to_field_meters(br_u, br_v)
+    x_bm, y_bm = homography.pixel_to_field_meters(bm_u, bm_v)
+
+    return (x_bl + x_br + x_bm) / 3.0, (y_bl + y_br + y_bm) / 3.0
+
+
 def project_tracked_objects(
     tracked_objects: List[TrackedObject],
     homography: HomographyAdapter,
@@ -204,11 +234,8 @@ def project_tracked_objects(
     projected: List[ProjectedTracklet] = []
 
     for obj in tracked_objects:
-        # 提取脚点
-        foot_u, foot_v = extract_footpoint(obj)
-
-        # 投影到 2D 球场
-        map_x, map_y = homography.pixel_to_field_meters(foot_u, foot_v)
+        # 使用 SN-style 多点点投影（3 点平均，更鲁棒）
+        map_x, map_y = project_single_bbox_multi(obj.xyxy, homography)
 
         # 可选：轨迹平滑
         if track_smoother is not None:

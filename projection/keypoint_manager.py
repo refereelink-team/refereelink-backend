@@ -14,8 +14,6 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from projection.homography import PITCH_KEYPOINT_TEMPLATE
-
 # 球场语义关键点定义
 # 注意：YOLO 模型输出的顺序与此不同，需要通过 KEYPOINT_ORDER_MAP 映射
 PITCH_KEYPOINT_IDS = [
