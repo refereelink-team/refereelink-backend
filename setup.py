@@ -28,7 +28,8 @@ setuptools.setup(
         "scikit-learn",
         "tqdm",
         "sentencepiece",
-        "protobuf"
+        "protobuf",
+        "PySide6==6.10.2",
     ],
     extras_require={
         'tests': [

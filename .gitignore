@@ -157,3 +157,7 @@ Desktop.ini
 # Downloads
 *.mp4
 *.pt
+
+# Agents
+AGENTS.md
+CLAUDE.md

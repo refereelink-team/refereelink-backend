@@ -52,6 +52,20 @@ Available modes:
 - `PLAYER_TRACKING`
 - `TEAM_CLASSIFICATION`
 - `RADAR`
+- `RADAR_DASHBOARD`
+
+`RADAR_DASHBOARD` uses a PySide6 + QML frontend with a larger tracking view on
+the left, a smaller 2D pitch projection on the right, and a runtime log panel
+across the bottom. The tracking view also overlays pitch keypoints. It still
+writes the composed dashboard video to `--target_video_path`.
+
+```bash
+python3 app/main.py \
+  --source_video_path assets/data/2e57b9_0.mp4 \
+  --target_video_path out.mp4 \
+  --device cpu \
+  --mode RADAR_DASHBOARD
+```
 
 ## Notes
 

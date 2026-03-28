@@ -1,6 +1,7 @@
 import os
-from typing import List
+from typing import List, Sequence
 
+import cv2
 import numpy as np
 import supervision as sv
 
@@ -68,6 +69,48 @@ def normalize_proxy_env() -> None:
         value = os.environ.get(key)
         if value and value.startswith('socks://'):
             os.environ[key] = value.replace('socks://', 'socks5://', 1)
+
+
+def annotate_pitch_keypoints(
+    frame: np.ndarray,
+    xy: np.ndarray,
+    labels: Sequence[str],
+) -> np.ndarray:
+    annotated_frame = frame.copy()
+    for index, point in enumerate(xy):
+        if point[0] <= 1 or point[1] <= 1:
+            continue
+
+        label = labels[index] if index < len(labels) else str(index + 1)
+        color = sv.Color.from_hex(CONFIG.colors[index % len(CONFIG.colors)]).as_bgr()
+        center = (int(point[0]), int(point[1]))
+
+        cv2.circle(
+            annotated_frame,
+            center,
+            5,
+            color,
+            thickness=-1,
+        )
+        cv2.circle(
+            annotated_frame,
+            center,
+            8,
+            (20, 20, 20),
+            thickness=1,
+        )
+        cv2.putText(
+            annotated_frame,
+            label,
+            (center[0] + 6, center[1] - 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (245, 245, 245),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return annotated_frame
 
 
 def get_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
@@ -143,4 +186,19 @@ def render_radar(
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 3],
         face_color=sv.Color.from_hex(COLORS[3]), radius=20, pitch=radar)
+    return radar
+
+
+def render_empty_radar(message: str = 'RADAR UNAVAILABLE') -> np.ndarray:
+    radar = draw_pitch(config=CONFIG)
+    cv2.putText(
+        radar,
+        message,
+        (40, 80),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.1,
+        sv.Color.WHITE.as_bgr(),
+        2,
+        cv2.LINE_AA,
+    )
     return radar

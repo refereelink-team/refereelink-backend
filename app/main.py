@@ -4,12 +4,6 @@ from enum import Enum
 import cv2
 import supervision as sv
 
-from app.modes.ball_detection import run_ball_detection
-from app.modes.pitch_detection import run_pitch_detection
-from app.modes.player_detection import run_player_detection
-from app.modes.player_tracking import run_player_tracking
-from app.modes.radar import run_radar
-from app.modes.team_classification import run_team_classification
 from app.runtime import normalize_proxy_env
 
 
@@ -23,27 +17,50 @@ class Mode(Enum):
     PLAYER_TRACKING = 'PLAYER_TRACKING'
     TEAM_CLASSIFICATION = 'TEAM_CLASSIFICATION'
     RADAR = 'RADAR'
+    RADAR_DASHBOARD = 'RADAR_DASHBOARD'
 
 
 def main(source_video_path: str, target_video_path: str, device: str, mode: Mode) -> None:
     normalize_proxy_env()
 
+    if mode == Mode.RADAR_DASHBOARD:
+        from app.modes.radar_dashboard import run_radar_dashboard
+
+        run_radar_dashboard(
+            source_video_path=source_video_path,
+            target_video_path=target_video_path,
+            device=device,
+        )
+        return
+
     if mode == Mode.PITCH_DETECTION:
+        from app.modes.pitch_detection import run_pitch_detection
+
         frame_generator = run_pitch_detection(
             source_video_path=source_video_path, device=device)
     elif mode == Mode.PLAYER_DETECTION:
+        from app.modes.player_detection import run_player_detection
+
         frame_generator = run_player_detection(
             source_video_path=source_video_path, device=device)
     elif mode == Mode.BALL_DETECTION:
+        from app.modes.ball_detection import run_ball_detection
+
         frame_generator = run_ball_detection(
             source_video_path=source_video_path, device=device)
     elif mode == Mode.PLAYER_TRACKING:
+        from app.modes.player_tracking import run_player_tracking
+
         frame_generator = run_player_tracking(
             source_video_path=source_video_path, device=device)
     elif mode == Mode.TEAM_CLASSIFICATION:
+        from app.modes.team_classification import run_team_classification
+
         frame_generator = run_team_classification(
             source_video_path=source_video_path, device=device)
     elif mode == Mode.RADAR:
+        from app.modes.radar import run_radar
+
         frame_generator = run_radar(
             source_video_path=source_video_path, device=device)
     else:
