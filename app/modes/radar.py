@@ -14,13 +14,13 @@ from app.constants.classes import (
     STRIDE,
 )
 from app.constants.paths import PITCH_DETECTION_MODEL_PATH, PLAYER_DETECTION_MODEL_PATH
+from app.geometry.pitch_projection import PitchProjectionEngine, PitchProjectionResult
 from app.runtime import (
     CONFIG,
     ELLIPSE_ANNOTATOR,
     ELLIPSE_LABEL_ANNOTATOR,
-    annotate_pitch_keypoints,
+    annotate_pitch_observations,
     get_crops,
-    render_empty_radar,
     render_radar,
     resolve_goalkeepers_team_id,
 )
@@ -39,6 +39,7 @@ class RadarFrameData:
     goalkeeper_count: int
     referee_count: int
     radar_available: bool
+    homography_status: str
 
 
 def emit_radar_log(log_callback: RadarLogCallback, message: str) -> None:
@@ -47,7 +48,7 @@ def emit_radar_log(log_callback: RadarLogCallback, message: str) -> None:
 
 
 def format_radar_frame_summary(update: RadarFrameData) -> str:
-    radar_status = 'ok' if update.radar_available else 'fallback'
+    radar_status = update.homography_status if update.radar_available else 'fallback'
     return (
         f"frame={update.frame_index} total={update.detections_total} "
         f"players={update.player_count} goalkeepers={update.goalkeeper_count} "
@@ -59,7 +60,7 @@ def render_tracked_frame(
     frame: np.ndarray,
     detections: sv.Detections,
     color_lookup: np.ndarray,
-    keypoints_xy: np.ndarray,
+    projection: PitchProjectionResult,
 ) -> np.ndarray:
     labels = [str(tracker_id) for tracker_id in detections.tracker_id]
 
@@ -73,10 +74,9 @@ def render_tracked_frame(
         labels=labels,
         custom_color_lookup=color_lookup,
     )
-    tracked_frame = annotate_pitch_keypoints(
+    tracked_frame = annotate_pitch_observations(
         tracked_frame,
-        xy=keypoints_xy,
-        labels=CONFIG.labels,
+        observations=projection.tracking_observations,
     )
     return tracked_frame
 
@@ -103,6 +103,8 @@ def iter_radar_analysis(
     device: str,
     log_callback: RadarLogCallback = None,
 ) -> Iterator[RadarFrameData]:
+    video_info = sv.VideoInfo.from_video_path(source_video_path)
+    projection_engine = PitchProjectionEngine(config=CONFIG, fps=video_info.fps)
     emit_radar_log(log_callback, 'loading player detection model')
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
     emit_radar_log(log_callback, 'loading pitch detection model')
@@ -155,24 +157,25 @@ def iter_radar_analysis(
             + goalkeepers_team_id.tolist()
             + [REFEREE_CLASS_ID] * len(referees)
         )
+        projection = projection_engine.update(frame=frame, keypoints=keypoints)
 
         tracked_frame = render_tracked_frame(
             frame=frame,
             detections=merged_detections,
             color_lookup=color_lookup,
-            keypoints_xy=keypoints.xy[0],
+            projection=projection,
         )
 
-        radar_available = True
-        try:
-            radar_frame = render_radar(merged_detections, keypoints, color_lookup)
-        except ValueError as error:
-            radar_available = False
-            radar_frame = render_empty_radar(message='RADAR UNAVAILABLE')
-            emit_radar_log(
-                log_callback,
-                f'frame={frame_index} radar projection failed: {error}',
-            )
+        radar_frame = render_radar(
+            detections=merged_detections,
+            projection=projection,
+            color_lookup=color_lookup,
+        )
+        radar_available = projection.available
+        if projection.homography_status == 'unavailable':
+            emit_radar_log(log_callback, f'frame={frame_index} radar projection unavailable')
+        elif projection.homography_status == 'stale':
+            emit_radar_log(log_callback, f'frame={frame_index} reusing stale homography')
 
         update = RadarFrameData(
             frame_index=frame_index,
@@ -183,6 +186,7 @@ def iter_radar_analysis(
             goalkeeper_count=len(goalkeepers),
             referee_count=len(referees),
             radar_available=radar_available,
+            homography_status=projection.homography_status,
         )
         emit_radar_log(log_callback, format_radar_frame_summary(update))
         yield update

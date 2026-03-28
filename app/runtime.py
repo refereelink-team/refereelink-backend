@@ -1,5 +1,5 @@
 import os
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -8,10 +8,16 @@ import supervision as sv
 from app.annotators.pitch import draw_pitch, draw_points_on_pitch
 from app.config.pitch import SoccerPitchConfiguration
 from app.constants.colors import COLORS
-from app.geometry.view import ViewTransformer
+from app.geometry.pitch_projection import (
+    PitchKeypointObservation,
+    ProjectedPitchKeypoint,
+    PitchProjectionResult,
+)
 
 
 CONFIG = SoccerPitchConfiguration()
+PITCH_DRAW_PADDING = 50
+PITCH_DRAW_SCALE = 0.1
 
 VERTEX_LABEL_ANNOTATOR = sv.VertexLabelAnnotator(
     color=[sv.Color.from_hex(color) for color in CONFIG.colors],
@@ -78,39 +84,141 @@ def annotate_pitch_keypoints(
 ) -> np.ndarray:
     annotated_frame = frame.copy()
     for index, point in enumerate(xy):
-        if point[0] <= 1 or point[1] <= 1:
-            continue
-
-        label = labels[index] if index < len(labels) else str(index + 1)
-        color = sv.Color.from_hex(CONFIG.colors[index % len(CONFIG.colors)]).as_bgr()
-        center = (int(point[0]), int(point[1]))
-
-        cv2.circle(
+        _draw_video_keypoint_marker(
             annotated_frame,
-            center,
-            5,
-            color,
-            thickness=-1,
+            point=point,
+            label=labels[index] if index < len(labels) else str(index + 1),
+            color=sv.Color.from_hex(CONFIG.colors[index % len(CONFIG.colors)]).as_bgr(),
         )
-        cv2.circle(
+
+    return annotated_frame
+
+
+def annotate_pitch_observations(
+    frame: np.ndarray,
+    observations: Sequence[PitchKeypointObservation],
+) -> np.ndarray:
+    annotated_frame = frame.copy()
+    for observation in observations:
+        _draw_video_keypoint_marker(
             annotated_frame,
+            point=np.array(observation.image_xy, dtype=np.float32),
+            label=observation.reference.label,
+            color=sv.Color.from_hex(observation.reference.color).as_bgr(),
+        )
+    return annotated_frame
+
+
+def _draw_video_keypoint_marker(
+    frame: np.ndarray,
+    point: np.ndarray,
+    label: str,
+    color: Tuple[int, int, int],
+) -> None:
+    if point[0] <= 1 or point[1] <= 1:
+        return
+
+    center = (int(point[0]), int(point[1]))
+    cv2.circle(
+        frame,
+        center,
+        5,
+        color,
+        thickness=-1,
+    )
+    cv2.circle(
+        frame,
+        center,
+        8,
+        (20, 20, 20),
+        thickness=1,
+    )
+    cv2.putText(
+        frame,
+        label,
+        (center[0] + 6, center[1] - 6),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.35,
+        (245, 245, 245),
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def _get_valid_pitch_keypoint_mask(xy: np.ndarray) -> np.ndarray:
+    return (xy[:, 0] > 1) & (xy[:, 1] > 1)
+
+
+def _project_pitch_point_to_canvas(
+    point: Sequence[float],
+    padding: int = PITCH_DRAW_PADDING,
+    scale: float = PITCH_DRAW_SCALE,
+) -> Tuple[int, int]:
+    return (
+        int(point[0] * scale) + padding,
+        int(point[1] * scale) + padding,
+    )
+
+
+def draw_reference_pitch_keypoints(
+    pitch: np.ndarray,
+    labels: Sequence[str],
+    padding: int = PITCH_DRAW_PADDING,
+    scale: float = PITCH_DRAW_SCALE,
+) -> np.ndarray:
+    annotated_pitch = pitch.copy()
+    for index, point in enumerate(CONFIG.vertices):
+        center = _project_pitch_point_to_canvas(point, padding=padding, scale=scale)
+        label = labels[index] if index < len(labels) else str(index + 1)
+        cv2.circle(
+            annotated_pitch,
             center,
-            8,
-            (20, 20, 20),
-            thickness=1,
+            12,
+            (245, 245, 245),
+            thickness=2,
         )
         cv2.putText(
-            annotated_frame,
+            annotated_pitch,
             label,
-            (center[0] + 6, center[1] - 6),
+            (center[0] + 10, center[1] + 12),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.35,
+            0.32,
             (245, 245, 245),
             1,
             cv2.LINE_AA,
         )
+    return annotated_pitch
 
-    return annotated_frame
+
+def draw_detected_pitch_keypoints_on_pitch(
+    pitch: np.ndarray,
+    observations: Sequence[ProjectedPitchKeypoint],
+    padding: int = PITCH_DRAW_PADDING,
+    scale: float = PITCH_DRAW_SCALE,
+) -> np.ndarray:
+    annotated_pitch = pitch.copy()
+    for observation in observations:
+        center = _project_pitch_point_to_canvas(
+            observation.projected_world_xy,
+            padding=padding,
+            scale=scale,
+        )
+        color = sv.Color.from_hex(observation.reference.color).as_bgr()
+        cv2.circle(
+            annotated_pitch,
+            center,
+            7,
+            color,
+            thickness=-1,
+        )
+        cv2.circle(
+            annotated_pitch,
+            center,
+            9,
+            (20, 20, 20),
+            thickness=1,
+        )
+    return annotated_pitch
 
 
 def get_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
@@ -162,18 +270,59 @@ def resolve_goalkeepers_team_id(
 
 def render_radar(
     detections: sv.Detections,
-    keypoints: sv.KeyPoints,
-    color_lookup: np.ndarray
+    projection: PitchProjectionResult,
+    color_lookup: np.ndarray,
 ) -> np.ndarray:
-    mask = (keypoints.xy[0][:, 0] > 1) & (keypoints.xy[0][:, 1] > 1)
-    transformer = ViewTransformer(
-        source=keypoints.xy[0][mask].astype(np.float32),
-        target=np.array(CONFIG.vertices)[mask].astype(np.float32)
-    )
-    xy = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER)
-    transformed_xy = transformer.transform_points(points=xy)
-
     radar = draw_pitch(config=CONFIG)
+    radar = draw_reference_pitch_keypoints(radar, labels=CONFIG.labels)
+
+    if projection.homography_status == 'fresh':
+        radar = draw_detected_pitch_keypoints_on_pitch(
+            radar,
+            observations=projection.projected_keypoints,
+        )
+    elif projection.homography_status == 'stale':
+        cv2.putText(
+            radar,
+            'STALE HOMOGRAPHY',
+            (40, 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            sv.Color.WHITE.as_bgr(),
+            2,
+            cv2.LINE_AA,
+        )
+
+    if projection.homography is None:
+        cv2.putText(
+            radar,
+            'RADAR UNAVAILABLE',
+            (40, 120),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            sv.Color.WHITE.as_bgr(),
+            2,
+            cv2.LINE_AA,
+        )
+        return radar
+
+    xy = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER).astype(np.float32)
+    if xy.size == 0:
+        transformed_xy = xy
+    else:
+        transformed_xy = cv2.perspectiveTransform(
+            xy.reshape(-1, 1, 2),
+            projection.homography,
+        ).reshape(-1, 2)
+        pitch_mask = (
+            (transformed_xy[:, 0] >= 0)
+            & (transformed_xy[:, 0] <= CONFIG.length)
+            & (transformed_xy[:, 1] >= 0)
+            & (transformed_xy[:, 1] <= CONFIG.width)
+        )
+        transformed_xy = transformed_xy[pitch_mask]
+        color_lookup = color_lookup[pitch_mask]
+
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 0],
         face_color=sv.Color.from_hex(COLORS[0]), radius=20, pitch=radar)
@@ -191,6 +340,7 @@ def render_radar(
 
 def render_empty_radar(message: str = 'RADAR UNAVAILABLE') -> np.ndarray:
     radar = draw_pitch(config=CONFIG)
+    radar = draw_reference_pitch_keypoints(radar, labels=CONFIG.labels)
     cv2.putText(
         radar,
         message,
