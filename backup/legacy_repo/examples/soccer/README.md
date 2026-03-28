@@ -12,6 +12,9 @@ pip install -r requirements.txt
 ./setup.sh
 ```
 
+`./setup.sh` downloads model weights into `/weights` at the repository root and
+stores sample videos in `examples/soccer/data/`.
+
 ## ⚽ datasets
 
 Original data comes from the [DFL - Bundesliga Data Shootout](https://www.kaggle.com/competitions/dfl-bundesliga-data-shootout) 

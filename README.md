@@ -1,51 +1,59 @@
-<div align="center">
+# Soccer Analysis
 
-  <h1>sports</h1>
+This repository is a soccer-only restructuring of the original `sports` project.
+The code paths are organized by function instead of by reusable package plus example.
 
-[notebooks](https://github.com/roboflow/notebooks) | [inference](https://github.com/roboflow/inference) | [autodistill](https://github.com/autodistill/autodistill) | [maestro](https://github.com/roboflow/multimodal-maestro)
+## Structure
 
-</div>
-
-## 👋 hello
-
-In sports, every centimeter and every second matter. That's why Roboflow decided to use sports as a testing ground to push our object detection, image segmentation, keypoint detection, and foundational models to their limits. This repository contains reusable tools that can be applied in sports and beyond.
-
-## 🥵 challenges
-
-Are you also a fan of computer vision and sports?  We welcome contributions from anyone who shares our passion! Together, we can build powerful open-source tools for sports analytics. Here are the main challenges we're looking to tackle:
-
-- **Ball tracking:** Tracking the ball is extremely difficult due to its small size and rapid movements, especially in high-resolution videos.
-- **Reading jersey numbers:** Accurately reading player jersey numbers is often hampered by blurry videos, players turning away, or other objects obscuring the numbers.
-- **Player tracking:** Maintaining consistent player identification throughout a game is a challenge due to frequent occlusions caused by other players or objects on the field.
-- **Player re-identification:** Re-identifying players who have left and re-entered the frame is tricky, especially with moving cameras or when players are visually similar.
-- **Camera calibration:** Accurately calibrating camera views is crucial for extracting advanced statistics like player speed and distance traveled. This is a complex task due to the dynamic nature of sports and varying camera angles.
-
-## 💻 install
-
-We don't have a Python package yet. Install from source in a
-[**Python>=3.8**](https://www.python.org/) environment.
-
-```bash
-pip install git+https://github.com/roboflow/sports.git
+```text
+app/
+  annotators/      pitch drawing helpers
+  classification/  team classification
+  config/          soccer pitch configuration
+  constants/       class IDs, colors, asset paths
+  geometry/        homography helpers
+  modes/           runnable analysis modes
+  tracking/        ball tracking helpers
+  main.py          CLI entry point
+assets/
+  data/            sample videos
+  weights/         model weights
+tools/
+  setup_assets.sh  downloads weights and sample videos
+backup/
+  legacy_repo/     preserved pre-migration structure for reference
+notebooks/         model-training workflows
 ```
 
-## ⚽ datasets
+## Install
 
-| use case                               | dataset                                                                                                                                                           |
-|:---------------------------------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| ⚽ soccer player detection              | [![Download Dataset](https://app.roboflow.com/images/download-dataset-badge.svg)](https://universe.roboflow.com/roboflow-jvuqo/football-players-detection-3zvbc)  |
-| ⚽ soccer ball detection                | [![Download Dataset](https://app.roboflow.com/images/download-dataset-badge.svg)](https://universe.roboflow.com/roboflow-jvuqo/football-ball-detection-rejhg)     |
-| ⚽ soccer pitch keypoint detection      | [![Download Dataset](https://app.roboflow.com/images/download-dataset-badge.svg)](https://universe.roboflow.com/roboflow-jvuqo/football-field-detection-f07vi)    |
-| 🏀 basketball court keypoint detection | [![Download Dataset](https://app.roboflow.com/images/download-dataset-badge.svg)](https://universe.roboflow.com/roboflow-jvuqo/basketball-court-detection-2)      |
-| 🏀 basketball jersey numbers ocr       | [![Download Dataset](https://app.roboflow.com/images/download-dataset-badge.svg)](https://universe.roboflow.com/roboflow-jvuqo/basketball-jersey-numbers-ocr)     |
+```bash
+python3 -m pip install -e .
+python3 -m pip install -e ".[tests]"
+python3 -m pip install -r requirements.txt
+./tools/setup_assets.sh #下载权重和示例视频，如果有了就不用再运行
+```
 
+## Run
 
-Visit [Roboflow Universe](https://universe.roboflow.com/) and explore other sport-related datasets.
+```bash
+python3 app/main.py \
+  --source_video_path assets/data/2e57b9_0.mp4 \
+  --target_video_path out.mp4 \
+  --device cuda \
+  --mode PLAYER_DETECTION
+```
 
-## 🔥 demos
+Available modes:
 
-https://github.com/roboflow/sports/assets/26109316/7ad414dd-cc4e-476d-9af3-02dfdf029205
+- `PITCH_DETECTION`
+- `PLAYER_DETECTION`
+- `BALL_DETECTION`
+- `PLAYER_TRACKING`
+- `TEAM_CLASSIFICATION`
+- `RADAR`
 
-## 🏆 contribution
+## Notes
 
-We love your input! [Let us know](https://github.com/roboflow/sports/issues) what else we should build!
+- `backup/legacy_repo/` keeps the previous layout as migration reference.
+- Large media and model weights are still kept outside version control.

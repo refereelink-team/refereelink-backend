@@ -1,9 +1,10 @@
 import pathlib
-
 import setuptools
 
-
+# The directory containing this file
 HERE = pathlib.Path(__file__).parent
+
+# The text of the README file
 README = (HERE / "README.md").read_text(encoding="utf-8")
 
 setuptools.setup(
@@ -17,7 +18,7 @@ setuptools.setup(
     author="Piotr Skalski",
     author_email="piotr.skalski92@gmail.com",
     license='MIT',
-    packages=setuptools.find_packages(include=['app', 'app.*']),
+    packages=setuptools.find_packages(),
     include_package_data=True,
     install_requires=[
         "supervision",

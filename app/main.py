@@ -1,0 +1,75 @@
+import argparse
+from enum import Enum
+
+import cv2
+import supervision as sv
+
+from app.modes.ball_detection import run_ball_detection
+from app.modes.pitch_detection import run_pitch_detection
+from app.modes.player_detection import run_player_detection
+from app.modes.player_tracking import run_player_tracking
+from app.modes.radar import run_radar
+from app.modes.team_classification import run_team_classification
+from app.runtime import normalize_proxy_env
+
+
+class Mode(Enum):
+    """
+    Enum class representing different modes of operation for Soccer AI video analysis.
+    """
+    PITCH_DETECTION = 'PITCH_DETECTION'
+    PLAYER_DETECTION = 'PLAYER_DETECTION'
+    BALL_DETECTION = 'BALL_DETECTION'
+    PLAYER_TRACKING = 'PLAYER_TRACKING'
+    TEAM_CLASSIFICATION = 'TEAM_CLASSIFICATION'
+    RADAR = 'RADAR'
+
+
+def main(source_video_path: str, target_video_path: str, device: str, mode: Mode) -> None:
+    normalize_proxy_env()
+
+    if mode == Mode.PITCH_DETECTION:
+        frame_generator = run_pitch_detection(
+            source_video_path=source_video_path, device=device)
+    elif mode == Mode.PLAYER_DETECTION:
+        frame_generator = run_player_detection(
+            source_video_path=source_video_path, device=device)
+    elif mode == Mode.BALL_DETECTION:
+        frame_generator = run_ball_detection(
+            source_video_path=source_video_path, device=device)
+    elif mode == Mode.PLAYER_TRACKING:
+        frame_generator = run_player_tracking(
+            source_video_path=source_video_path, device=device)
+    elif mode == Mode.TEAM_CLASSIFICATION:
+        frame_generator = run_team_classification(
+            source_video_path=source_video_path, device=device)
+    elif mode == Mode.RADAR:
+        frame_generator = run_radar(
+            source_video_path=source_video_path, device=device)
+    else:
+        raise NotImplementedError(f"Mode {mode} is not implemented.")
+
+    video_info = sv.VideoInfo.from_video_path(source_video_path)
+    with sv.VideoSink(target_video_path, video_info) as sink:
+        for frame in frame_generator:
+            sink.write_frame(frame)
+
+            cv2.imshow("frame", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+        cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='')
+    parser.add_argument('--source_video_path', type=str, required=True)
+    parser.add_argument('--target_video_path', type=str, required=True)
+    parser.add_argument('--device', type=str, default='cpu')
+    parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
+    args = parser.parse_args()
+    main(
+        source_video_path=args.source_video_path,
+        target_video_path=args.target_video_path,
+        device=args.device,
+        mode=args.mode
+    )

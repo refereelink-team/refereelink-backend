@@ -2,6 +2,8 @@
 
 # Get the directory where the script is located
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+REPO_ROOT="$( cd "$DIR/../.." && pwd )"
+WEIGHTS_DIR="$REPO_ROOT/weights"
 
 # Check if 'data' directory does not exist and then create it
 if [[ ! -e $DIR/data ]]; then
@@ -10,10 +12,17 @@ else
     echo "'data' directory already exists."
 fi
 
+# Check if 'weights' directory does not exist and then create it
+if [[ ! -e $WEIGHTS_DIR ]]; then
+    mkdir "$WEIGHTS_DIR"
+else
+    echo "'weights' directory already exists."
+fi
+
 # download the models
-gdown -O "$DIR/data/football-ball-detection.pt" "https://drive.google.com/uc?id=1isw4wx-MK9h9LMr36VvIWlJD6ppUvw7V"
-gdown -O "$DIR/data/football-player-detection.pt" "https://drive.google.com/uc?id=17PXFNlx-jI7VjVo_vQnB1sONjRyvoB-q"
-gdown -O "$DIR/data/football-pitch-detection.pt" "https://drive.google.com/uc?id=1Ma5Kt86tgpdjCTKfum79YMgNnSjcoOyf"
+gdown -O "$WEIGHTS_DIR/football-ball-detection.pt" "https://drive.google.com/uc?id=1isw4wx-MK9h9LMr36VvIWlJD6ppUvw7V"
+gdown -O "$WEIGHTS_DIR/football-player-detection.pt" "https://drive.google.com/uc?id=17PXFNlx-jI7VjVo_vQnB1sONjRyvoB-q"
+gdown -O "$WEIGHTS_DIR/football-pitch-detection.pt" "https://drive.google.com/uc?id=1Ma5Kt86tgpdjCTKfum79YMgNnSjcoOyf"
 
 # download the videos
 gdown -O "$DIR/data/0bfacc_0.mp4" "https://drive.google.com/uc?id=12TqauVZ9tLAv8kWxTTBFWtgt2hNQ4_ZF"

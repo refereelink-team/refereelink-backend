@@ -1,0 +1,1 @@
+"""Soccer analysis application package."""

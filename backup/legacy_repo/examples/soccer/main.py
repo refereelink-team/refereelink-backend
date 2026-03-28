@@ -1,4 +1,5 @@
 import argparse
+import inspect
 from enum import Enum
 from typing import Iterator, List
 
@@ -16,9 +17,14 @@ from sports.common.view import ViewTransformer
 from sports.configs.soccer import SoccerPitchConfiguration
 
 PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PLAYER_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-player-detection.pt')
-PITCH_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-pitch-detection.pt')
-BALL_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-ball-detection.pt')
+REPO_ROOT_DIR = os.path.abspath(os.path.join(PARENT_DIR, '..', '..'))
+WEIGHTS_DIR = os.path.join(REPO_ROOT_DIR, 'weights')
+PLAYER_DETECTION_MODEL_PATH = os.path.join(
+    WEIGHTS_DIR, 'football-player-detection.pt')
+PITCH_DETECTION_MODEL_PATH = os.path.join(
+    WEIGHTS_DIR, 'football-pitch-detection.pt')
+BALL_DETECTION_MODEL_PATH = os.path.join(
+    WEIGHTS_DIR, 'football-ball-detection.pt')
 
 BALL_CLASS_ID = 0
 GOALKEEPER_CLASS_ID = 1
@@ -80,6 +86,23 @@ class Mode(Enum):
     PLAYER_TRACKING = 'PLAYER_TRACKING'
     TEAM_CLASSIFICATION = 'TEAM_CLASSIFICATION'
     RADAR = 'RADAR'
+
+
+def normalize_proxy_env() -> None:
+    """
+    Normalize proxy environment variables for libraries expecting socks5 scheme.
+
+    Some tools export SOCKS proxies as "socks://...", while httpx/huggingface
+    expects "socks5://...".
+    """
+    proxy_env_keys = [
+        'http_proxy', 'https_proxy', 'all_proxy',
+        'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+    ]
+    for key in proxy_env_keys:
+        value = os.environ.get(key)
+        if value and value.startswith('socks://'):
+            os.environ[key] = value.replace('socks://', 'socks5://', 1)
 
 
 def get_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
@@ -224,11 +247,17 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
         result = ball_detection_model(image_slice, imgsz=640, verbose=False)[0]
         return sv.Detections.from_ultralytics(result)
 
-    slicer = sv.InferenceSlicer(
-        callback=callback,
-        overlap_filter_strategy=sv.OverlapFilter.NONE,
-        slice_wh=(640, 640),
-    )
+    slicer_kwargs = {
+        'callback': callback,
+        'slice_wh': (640, 640),
+    }
+    slicer_signature = inspect.signature(sv.InferenceSlicer.__init__)
+    if 'overlap_filter' in slicer_signature.parameters:
+        slicer_kwargs['overlap_filter'] = sv.OverlapFilter.NONE
+    else:
+        slicer_kwargs['overlap_filter_strategy'] = sv.OverlapFilter.NONE
+
+    slicer = sv.InferenceSlicer(**slicer_kwargs)
 
     for frame in frame_generator:
         detections = slicer(frame).with_nms(threshold=0.1)
@@ -387,6 +416,8 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
 
 
 def main(source_video_path: str, target_video_path: str, device: str, mode: Mode) -> None:
+    normalize_proxy_env()
+
     if mode == Mode.PITCH_DETECTION:
         frame_generator = run_pitch_detection(
             source_video_path=source_video_path, device=device)
