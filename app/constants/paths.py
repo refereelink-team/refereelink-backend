@@ -10,3 +10,4 @@ WEIGHTS_DIR = ASSETS_DIR / 'weights'
 PLAYER_DETECTION_MODEL_PATH = str(WEIGHTS_DIR / 'football-player-detection.pt')
 PITCH_DETECTION_MODEL_PATH = str(WEIGHTS_DIR / 'football-pitch-detection.pt')
 BALL_DETECTION_MODEL_PATH = str(WEIGHTS_DIR / 'football-ball-detection.pt')
+FOUL_MODEL_PATH = str(WEIGHTS_DIR / 'mvfoul.pth.tar')

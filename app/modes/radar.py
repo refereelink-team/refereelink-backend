@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Callable, Iterator, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 import supervision as sv
@@ -40,6 +40,9 @@ class RadarFrameData:
     referee_count: int
     radar_available: bool
     homography_status: str
+    # Optional foul prediction — populated when a MVFoul checkpoint is provided.
+    # Typed as Any to avoid a hard import of fouls_far at module load time.
+    foul_prediction: Optional[Any] = field(default=None)
 
 
 def emit_radar_log(log_callback: RadarLogCallback, message: str) -> None:
@@ -102,6 +105,7 @@ def iter_radar_analysis(
     source_video_path: str,
     device: str,
     log_callback: RadarLogCallback = None,
+    foul_checkpoint_path: Optional[str] = None,
 ) -> Iterator[RadarFrameData]:
     video_info = sv.VideoInfo.from_video_path(source_video_path)
     projection_engine = PitchProjectionEngine(config=CONFIG, fps=video_info.fps)
@@ -109,6 +113,13 @@ def iter_radar_analysis(
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
     emit_radar_log(log_callback, 'loading pitch detection model')
     pitch_detection_model = YOLO(PITCH_DETECTION_MODEL_PATH).to(device=device)
+
+    foul_detector = None
+    if foul_checkpoint_path is not None:
+        from app.foul_detection.detector import FoulDetector
+        emit_radar_log(log_callback, 'loading foul detection model')
+        foul_detector = FoulDetector(checkpoint_path=foul_checkpoint_path, device=device)
+        emit_radar_log(log_callback, 'foul detection model ready')
 
     emit_radar_log(log_callback, 'collecting player crops for team classifier')
     frame_generator = sv.get_video_frames_generator(
@@ -159,6 +170,10 @@ def iter_radar_analysis(
         )
         projection = projection_engine.update(frame=frame, keypoints=keypoints)
 
+        foul_prediction = None
+        if foul_detector is not None:
+            foul_prediction = foul_detector.update(frame)
+
         tracked_frame = render_tracked_frame(
             frame=frame,
             detections=merged_detections,
@@ -187,14 +202,33 @@ def iter_radar_analysis(
             referee_count=len(referees),
             radar_available=radar_available,
             homography_status=projection.homography_status,
+            foul_prediction=foul_prediction,
         )
         emit_radar_log(log_callback, format_radar_frame_summary(update))
         yield update
 
 
-def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
-    for update in iter_radar_analysis(source_video_path=source_video_path, device=device):
-        yield overlay_radar_on_frame(
+def run_radar(
+    source_video_path: str,
+    device: str,
+    foul_checkpoint_path: Optional[str] = None,
+) -> Iterator[np.ndarray]:
+    for update in iter_radar_analysis(
+        source_video_path=source_video_path,
+        device=device,
+        foul_checkpoint_path=foul_checkpoint_path,
+    ):
+        combined = overlay_radar_on_frame(
             tracked_frame=update.tracked_frame,
             radar_frame=update.radar_frame,
         )
+        if update.foul_prediction is not None:
+            from offside.foul_overlay import _hud_show_prediction, draw_foul_hud
+            if _hud_show_prediction(
+                update.foul_prediction,
+                min_offence_confidence=0.48,
+                min_action_confidence=0.45,
+                strict_hud_filter=True,
+            ):
+                draw_foul_hud(combined, update.foul_prediction)  # in-place
+        yield combined

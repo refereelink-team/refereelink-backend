@@ -1,5 +1,6 @@
 import argparse
 from enum import Enum
+from typing import Optional
 
 import cv2
 import supervision as sv
@@ -18,9 +19,16 @@ class Mode(Enum):
     TEAM_CLASSIFICATION = 'TEAM_CLASSIFICATION'
     RADAR = 'RADAR'
     RADAR_DASHBOARD = 'RADAR_DASHBOARD'
+    FOUL_DETECTION = 'FOUL_DETECTION'
 
 
-def main(source_video_path: str, target_video_path: str, device: str, mode: Mode) -> None:
+def main(
+    source_video_path: str,
+    target_video_path: str,
+    device: str,
+    mode: Mode,
+    foul_checkpoint_path: Optional[str] = None,
+) -> None:
     normalize_proxy_env()
 
     if mode == Mode.RADAR_DASHBOARD:
@@ -30,6 +38,7 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
             source_video_path=source_video_path,
             target_video_path=target_video_path,
             device=device,
+            foul_checkpoint_path=foul_checkpoint_path,
         )
         return
 
@@ -62,7 +71,22 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
         from app.modes.radar import run_radar
 
         frame_generator = run_radar(
-            source_video_path=source_video_path, device=device)
+            source_video_path=source_video_path,
+            device=device,
+            foul_checkpoint_path=foul_checkpoint_path,
+        )
+    elif mode == Mode.FOUL_DETECTION:
+        from app.modes.foul_detection import run_foul_detection
+
+        if foul_checkpoint_path is None:
+            from app.constants.paths import FOUL_MODEL_PATH
+            foul_checkpoint_path = FOUL_MODEL_PATH
+
+        frame_generator = run_foul_detection(
+            source_video_path=source_video_path,
+            device=device,
+            foul_checkpoint_path=foul_checkpoint_path,
+        )
     else:
         raise NotImplementedError(f"Mode {mode} is not implemented.")
 
@@ -83,10 +107,21 @@ if __name__ == '__main__':
     parser.add_argument('--target_video_path', type=str, required=True)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
+    parser.add_argument(
+        '--foul_checkpoint_path',
+        type=str,
+        default=None,
+        help=(
+            'Path to MVFoul checkpoint (.pth.tar). '
+            'Required for FOUL_DETECTION mode (falls back to assets/weights/mvfoul.pth.tar). '
+            'Optional for RADAR / RADAR_DASHBOARD — enables the foul HUD overlay when provided.'
+        ),
+    )
     args = parser.parse_args()
     main(
         source_video_path=args.source_video_path,
         target_video_path=args.target_video_path,
         device=args.device,
-        mode=args.mode
+        mode=args.mode,
+        foul_checkpoint_path=args.foul_checkpoint_path,
     )

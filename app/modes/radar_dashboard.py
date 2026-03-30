@@ -3,7 +3,7 @@ from pathlib import Path
 from queue import Empty, Queue
 import sys
 from threading import Event, Lock, Thread
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -166,12 +166,14 @@ class RadarDashboardWorker(Thread):
         target_video_path: str,
         device: str,
         event_queue: Queue,
+        foul_checkpoint_path: Optional[str] = None,
     ) -> None:
         super().__init__(daemon=True)
         self.source_video_path = source_video_path
         self.target_video_path = target_video_path
         self.device = device
         self.event_queue = event_queue
+        self.foul_checkpoint_path = foul_checkpoint_path
         self.stop_event = Event()
         self.log_lines: List[str] = []
 
@@ -193,12 +195,27 @@ class RadarDashboardWorker(Thread):
                     source_video_path=self.source_video_path,
                     device=self.device,
                     log_callback=self.append_log,
+                    foul_checkpoint_path=self.foul_checkpoint_path,
                 ):
                     if self.stop_event.is_set():
                         break
 
+                    # Apply foul HUD to the tracking panel when a prediction
+                    # is available and passes the confidence filter.
+                    tracked_frame = update.tracked_frame
+                    if update.foul_prediction is not None:
+                        from offside.foul_overlay import _hud_show_prediction, draw_foul_hud
+                        if _hud_show_prediction(
+                            update.foul_prediction,
+                            min_offence_confidence=0.48,
+                            min_action_confidence=0.45,
+                            strict_hud_filter=True,
+                        ):
+                            tracked_frame = tracked_frame.copy()
+                            draw_foul_hud(tracked_frame, update.foul_prediction)
+
                     dashboard_frame = compose_dashboard_frame(
-                        tracked_frame=update.tracked_frame,
+                        tracked_frame=tracked_frame,
                         radar_frame=update.radar_frame,
                         log_lines=self.log_lines,
                     )
@@ -208,7 +225,7 @@ class RadarDashboardWorker(Thread):
                             'frame',
                             RadarDashboardFrame(
                                 frame_index=update.frame_index,
-                                tracked_frame=update.tracked_frame,
+                                tracked_frame=tracked_frame,
                                 radar_frame=update.radar_frame,
                                 log_text='\n'.join(self.log_lines),
                             ),
@@ -270,6 +287,7 @@ if HAVE_PYSIDE6:
             target_video_path: str,
             device: str,
             frame_provider: 'RadarFrameProvider',
+            foul_checkpoint_path: Optional[str] = None,
         ) -> None:
             super().__init__()
             self.frame_provider = frame_provider
@@ -279,6 +297,7 @@ if HAVE_PYSIDE6:
                 target_video_path=target_video_path,
                 device=device,
                 event_queue=self.event_queue,
+                foul_checkpoint_path=foul_checkpoint_path,
             )
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.drain_events)
@@ -367,6 +386,7 @@ def run_radar_dashboard(
     source_video_path: str,
     target_video_path: str,
     device: str,
+    foul_checkpoint_path: Optional[str] = None,
 ) -> None:
     if not HAVE_PYSIDE6:
         raise RuntimeError(
@@ -383,6 +403,7 @@ def run_radar_dashboard(
         target_video_path=target_video_path,
         device=device,
         frame_provider=frame_provider,
+        foul_checkpoint_path=foul_checkpoint_path,
     )
 
     engine.addImageProvider('radarFrames', frame_provider)
