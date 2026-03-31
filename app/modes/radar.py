@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, List, Optional
 
+import cv2
 import numpy as np
 import supervision as sv
 from tqdm import tqdm
@@ -43,6 +44,8 @@ class RadarFrameData:
     # Optional foul prediction — populated when a MVFoul checkpoint is provided.
     # Typed as Any to avoid a hard import of fouls_far at module load time.
     foul_prediction: Optional[Any] = field(default=None)
+    # World-coordinate (x, y) location of foul on the pitch, or None when no foul.
+    foul_location: Optional[np.ndarray] = field(default=None)
 
 
 def emit_radar_log(log_callback: RadarLogCallback, message: str) -> None:
@@ -57,6 +60,54 @@ def format_radar_frame_summary(update: RadarFrameData) -> str:
         f"players={update.player_count} goalkeepers={update.goalkeeper_count} "
         f"referees={update.referee_count} radar={radar_status}"
     )
+
+
+def compute_motion_centroid(mask: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Compute the centroid (center of mass) of a binary mask in image coordinates.
+
+    Args:
+        mask: Binary or soft mask (H, W) with values in [0, 1] or [0, 255].
+
+    Returns:
+        Centroid as (x, y) float64 in image space (x=col, y=row),
+        or None if the mask is empty or invalid.
+    """
+    if mask is None:
+        return None
+    mask_f = mask.astype(np.float32)
+    if mask.ndim != 2:
+        return None
+    m = cv2.moments(mask_f)
+    if m['m00'] <= 0:
+        return None
+    cx = m['m10'] / m['m00']
+    cy = m['m01'] / m['m00']
+    return np.array([cx, cy], dtype=np.float64)
+
+
+def project_point_to_world(
+    image_point: np.ndarray,
+    homography: np.ndarray,
+) -> Optional[np.ndarray]:
+    """
+    Transform a single point from image space to world/pitch coordinates.
+
+    Args:
+        image_point: Point as (x, y) in image space (shape (2,)).
+        homography: 3x3 transformation matrix.
+
+    Returns:
+        World point as (x, y) in pitch coordinates (centimeters), or None on failure.
+    """
+    if image_point is None or homography is None:
+        return None
+    try:
+        pt = np.array([[image_point]], dtype=np.float64)
+        transformed = cv2.perspectiveTransform(pt.reshape(-1, 1, 2), homography)
+        return transformed.reshape(-1).astype(np.float64)
+    except cv2.error:
+        return None
 
 
 def render_tracked_frame(
@@ -144,6 +195,11 @@ def iter_radar_analysis(
 
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
+
+    # Circular buffer of 3 frames for motion mask computation (prev, curr, next).
+    _frame_buffer: List[Optional[np.ndarray]] = [None, None, None]
+    _buffer_head: int = 0
+
     for frame_index, frame in enumerate(frame_generator, start=1):
         result = pitch_detection_model(frame, verbose=False)[0]
         keypoints = sv.KeyPoints.from_ultralytics(result)
@@ -174,6 +230,34 @@ def iter_radar_analysis(
         if foul_detector is not None:
             foul_prediction = foul_detector.update(frame)
 
+        # Compute foul location: derive from motion mask centroid projected through homography.
+        foul_location: Optional[np.ndarray] = None
+        if foul_prediction is not None:
+            from offside.foul_overlay import _hud_show_prediction, motion_foul_region_mask
+            if _hud_show_prediction(
+                foul_prediction,
+                min_offence_confidence=0.48,
+                min_action_confidence=0.45,
+                strict_hud_filter=True,
+            ):
+                prev_idx = (_buffer_head - 1) % 3
+                next_idx = (_buffer_head + 1) % 3
+                prev_frame = _frame_buffer[prev_idx]
+                next_frame = _frame_buffer[next_idx]
+                motion_mask = motion_foul_region_mask(frame, prev_frame, next_frame)
+                if motion_mask is not None:
+                    centroid = compute_motion_centroid(motion_mask)
+                    if centroid is not None and projection.homography is not None:
+                        world_point = project_point_to_world(centroid, projection.homography)
+                        if world_point is not None:
+                            wx, wy = world_point
+                            if 0 <= wx <= CONFIG.length and 0 <= wy <= CONFIG.width:
+                                foul_location = world_point
+                                emit_radar_log(
+                                    log_callback,
+                                    f'frame={frame_index} foul_location=({wx:.0f},{wy:.0f})',
+                                )
+
         tracked_frame = render_tracked_frame(
             frame=frame,
             detections=merged_detections,
@@ -185,6 +269,7 @@ def iter_radar_analysis(
             detections=merged_detections,
             projection=projection,
             color_lookup=color_lookup,
+            foul_location=foul_location,
         )
         radar_available = projection.available
         if projection.homography_status == 'unavailable':
@@ -203,9 +288,14 @@ def iter_radar_analysis(
             radar_available=radar_available,
             homography_status=projection.homography_status,
             foul_prediction=foul_prediction,
+            foul_location=foul_location,
         )
         emit_radar_log(log_callback, format_radar_frame_summary(update))
         yield update
+
+        # Update circular frame buffer for next iteration's motion mask.
+        _frame_buffer[_buffer_head] = frame.copy()
+        _buffer_head = (_buffer_head + 1) % 3
 
 
 def run_radar(

@@ -272,6 +272,7 @@ def render_radar(
     detections: sv.Detections,
     projection: PitchProjectionResult,
     color_lookup: np.ndarray,
+    foul_location: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     radar = draw_pitch(config=CONFIG)
     radar = draw_reference_pitch_keypoints(radar, labels=CONFIG.labels)
@@ -335,6 +336,25 @@ def render_radar(
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 3],
         face_color=sv.Color.from_hex(COLORS[3]), radius=20, pitch=radar)
+
+    # Draw foul location marker on the radar.
+    if foul_location is not None:
+        foul_color = sv.Color.from_hex('#FF4500')
+        screen_x = int(foul_location[0] * PITCH_DRAW_SCALE) + PITCH_DRAW_PADDING
+        screen_y = int(foul_location[1] * PITCH_DRAW_SCALE) + PITCH_DRAW_PADDING
+        cv2.circle(radar, (screen_x, screen_y), 18, foul_color.as_bgr(), -1)
+        cv2.circle(radar, (screen_x, screen_y), 22, (30, 30, 30), 2)
+        cv2.putText(
+            radar,
+            'FOUL',
+            (screen_x - 18, screen_y - 12),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (245, 245, 245),
+            1,
+            cv2.LINE_AA,
+        )
+
     return radar
 
 

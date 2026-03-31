@@ -36,6 +36,7 @@ class RadarDashboardFrame:
     tracked_frame: np.ndarray
     radar_frame: np.ndarray
     log_text: str
+    foul_location: Optional[np.ndarray] = None
 
 
 def _decorate_panel(panel: np.ndarray, title: str) -> np.ndarray:
@@ -228,6 +229,7 @@ class RadarDashboardWorker(Thread):
                                 tracked_frame=tracked_frame,
                                 radar_frame=update.radar_frame,
                                 log_text='\n'.join(self.log_lines),
+                                foul_location=update.foul_location,
                             ),
                         )
                     )
