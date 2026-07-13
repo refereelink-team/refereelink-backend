@@ -158,6 +158,14 @@ Desktop.ini
 *.mp4
 *.pt
 
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Venv
+.venv/
+
 # Agents
 AGENTS.md
 CLAUDE.md

@@ -1,3 +1,23 @@
+"""
+LEGACY: PySide6 + QML dashboard for the soccer analysis pipeline.
+
+This module is preserved as a fallback for users who have not yet migrated
+to the new web dashboard (``web/`` + ``app/server/``). The web dashboard
+is now the recommended front-end and is the only one maintained.
+
+Use this legacy mode with::
+
+    python -m app.main --mode RADAR_DASHBOARD_LEGACY \\
+        --source_video_path path/to/video.mp4 \\
+        --target_video_path out.mp4 \\
+        --device cpu
+
+Or, to use the web dashboard::
+
+    python -m app.server.main --video_source path/to/video.mp4 --device cpu
+    # then in another terminal: cd web && npm run dev
+"""
+
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue

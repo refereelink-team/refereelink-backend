@@ -7,15 +7,14 @@ HERE = pathlib.Path(__file__).parent
 README = (HERE / "README.md").read_text(encoding="utf-8")
 
 setuptools.setup(
-    name="sports",
-    version='0.1.0',
-    python_requires=">=3.8",
-    description="",
+    name="soccer-analysis",
+    version='0.2.0',
+    python_requires=">=3.10",
+    description="Soccer real-time analysis and assisted officiating system",
     long_description=README,
     long_description_content_type="text/markdown",
-    url="https://github.com/roboflow/sports",
-    author="Piotr Skalski",
-    author_email="piotr.skalski92@gmail.com",
+    url="https://github.com/caysonyin/SC",
+    author="SC Team",
     license='MIT',
     packages=setuptools.find_packages(include=['app', 'app.*']),
     include_package_data=True,
@@ -27,14 +26,21 @@ setuptools.setup(
         "umap-learn",
         "scikit-learn",
         "tqdm",
-        "sentencepiece",
-        "protobuf",
+        "torch",
+        "ultralytics",
         "PySide6==6.10.2",
+        "fastapi",
+        "uvicorn",
+        "pydantic",
+        "psutil",
     ],
     extras_require={
         'tests': [
             'pytest',
-        ]
+            'pytest-asyncio',
+            'httpx',
+        ],
+        'web': [],
     },
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -42,12 +48,9 @@ setuptools.setup(
         'Intended Audience :: Science/Research',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3 :: Only',
-        'Topic :: Software Development',
         'Topic :: Scientific/Engineering',
         'Typing :: Typed',
-        'Operating System :: Microsoft :: Windows',
         'Operating System :: POSIX',
         'Operating System :: Unix',
-        'Operating System :: MacOS'
     ]
 )

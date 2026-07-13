@@ -9,9 +9,6 @@ from app.runtime import normalize_proxy_env
 
 
 class Mode(Enum):
-    """
-    Enum class representing different modes of operation for Soccer AI video analysis.
-    """
     PITCH_DETECTION = 'PITCH_DETECTION'
     PLAYER_DETECTION = 'PLAYER_DETECTION'
     BALL_DETECTION = 'BALL_DETECTION'
@@ -19,7 +16,9 @@ class Mode(Enum):
     TEAM_CLASSIFICATION = 'TEAM_CLASSIFICATION'
     RADAR = 'RADAR'
     RADAR_DASHBOARD = 'RADAR_DASHBOARD'
+    RADAR_DASHBOARD_LEGACY = 'RADAR_DASHBOARD_LEGACY'
     FOUL_DETECTION = 'FOUL_DETECTION'
+    SERVER = 'SERVER'
 
 
 def main(
@@ -40,6 +39,30 @@ def main(
             device=device,
             foul_checkpoint_path=foul_checkpoint_path,
         )
+        return
+
+    if mode == Mode.RADAR_DASHBOARD_LEGACY:
+        from app.modes.radar_dashboard import run_radar_dashboard
+
+        run_radar_dashboard(
+            source_video_path=source_video_path,
+            target_video_path=target_video_path,
+            device=device,
+            foul_checkpoint_path=foul_checkpoint_path,
+        )
+        return
+
+    if mode == Mode.SERVER:
+        from app.server.main import main as server_main
+        import sys
+        sys.argv = [
+            sys.argv[0],
+            '--video_source', source_video_path,
+            '--device', device,
+        ]
+        if foul_checkpoint_path:
+            sys.argv += ['--foul_checkpoint_path', foul_checkpoint_path]
+        server_main()
         return
 
     if mode == Mode.PITCH_DETECTION:

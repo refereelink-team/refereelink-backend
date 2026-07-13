@@ -60,20 +60,10 @@ class TeamClassifier:
         self.cluster_model = KMeans(n_clusters=2)
 
     def extract_features(self, crops: List[np.ndarray]) -> np.ndarray:
-        """
-        Extract features from a list of image crops using the pre-trained
-            SiglipVisionModel.
-
-        Args:
-            crops (List[np.ndarray]): List of image crops.
-
-        Returns:
-            np.ndarray: Extracted features as a numpy array.
-        """
         crops = [sv.cv2_to_pillow(crop) for crop in crops]
         batches = create_batches(crops, self.batch_size)
         data = []
-        with torch.no_grad():
+        with torch.inference_mode():
             for batch in tqdm(batches, desc='Embedding extraction'):
                 inputs = self.processor(
                     images=batch, return_tensors="pt").to(self.device)
