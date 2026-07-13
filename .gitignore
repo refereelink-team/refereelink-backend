@@ -157,6 +157,10 @@ Desktop.ini
 # Downloads
 *.mp4
 *.pt
+*.pth.tar
+*.onnx
+*.pkl
+*.pdf
 
 # Frontend
 web/node_modules/
@@ -165,6 +169,25 @@ web/.vite/
 
 # Venv
 .venv/
+
+# Python build / cache
+*.egg-info/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Local workspace scratch dirs (not part of the project)
+calibration/
+core/
+examples/
+offside/
+projection/
+tracking/
+.superpowers/
+MODULE_INTEGRATION.md
+deep-research-report.md
+field_map.png
+main.py
 
 # Agents
 AGENTS.md
