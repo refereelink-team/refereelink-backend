@@ -54,6 +54,7 @@ export type WSMessage = FrameState | MetricsSnapshot;
 export interface PipelineConfig {
   mode: string;
   video_source: string;
+  device: string;
   enable_foul_detection: boolean;
   enable_recording: boolean;
   show_keypoints: boolean;

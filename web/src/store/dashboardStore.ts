@@ -29,6 +29,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   config: {
     mode: 'realtime',
     video_source: '',
+    device: 'cpu',
     enable_foul_detection: false,
     enable_recording: false,
     show_keypoints: true,
