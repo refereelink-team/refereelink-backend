@@ -17,7 +17,7 @@ echo ""
 # 1. 检查环境
 echo "[1/6] Checking environment..."
 if [ ! -d ".venv" ]; then
-    echo -e "${RED}ERROR: .venv not found. Run 'uv venv .venv && source .venv/bin/activate && uv pip install -e .' first.${NC}"
+    echo -e "${RED}ERROR: .venv not found. Run 'uv sync --dev' first.${NC}"
     exit 1
 fi
 source .venv/bin/activate

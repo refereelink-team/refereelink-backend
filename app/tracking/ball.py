@@ -1,8 +1,26 @@
 from collections import deque
+from dataclasses import dataclass
+import time
+from typing import Optional
 
 import cv2
 import numpy as np
 import supervision as sv
+
+
+@dataclass(frozen=True)
+class BallTrackEstimate:
+    """Kinematic estimate for the current ball position.
+
+    Coordinates are image-space pixels.  Field-space projection is deliberately
+    kept outside this class because it depends on the current homography.
+    """
+
+    position: Optional[np.ndarray]
+    velocity: Optional[np.ndarray]
+    confidence: float
+    status: str
+    age_frames: int
 
 
 class BallAnnotator:
@@ -101,3 +119,101 @@ class BallTracker:
         distances = np.linalg.norm(xy - centroid, axis=1)
         index = np.argmin(distances)
         return detections[[index]]
+
+
+class KinematicBallTracker:
+    """Small constant-velocity tracker for a single football.
+
+    The detector is allowed to run at a lower frequency than the video.  When
+    a detection is missing, this tracker predicts only for a bounded number of
+    frames and then returns ``unavailable`` rather than manufacturing a stale
+    ball coordinate.
+    """
+
+    def __init__(
+        self,
+        max_prediction_frames: int = 8,
+        velocity_smoothing: float = 0.65,
+        max_dt_seconds: float = 0.25,
+    ) -> None:
+        self.max_prediction_frames = max(int(max_prediction_frames), 0)
+        self.velocity_smoothing = float(np.clip(velocity_smoothing, 0.0, 1.0))
+        self.max_dt_seconds = max(float(max_dt_seconds), 1e-3)
+        self._position: Optional[np.ndarray] = None
+        self._velocity = np.zeros(2, dtype=np.float32)
+        self._last_timestamp: Optional[float] = None
+        self._age_frames = 0
+        self._confidence = 0.0
+
+    @property
+    def age_frames(self) -> int:
+        return self._age_frames
+
+    def reset(self) -> None:
+        self._position = None
+        self._velocity = np.zeros(2, dtype=np.float32)
+        self._last_timestamp = None
+        self._age_frames = 0
+        self._confidence = 0.0
+
+    def update(
+        self,
+        position: Optional[np.ndarray],
+        confidence: float = 0.0,
+        timestamp_s: Optional[float] = None,
+    ) -> BallTrackEstimate:
+        now = float(timestamp_s) if timestamp_s is not None else time.monotonic()
+        if self._last_timestamp is None:
+            dt = 1.0 / 25.0
+        else:
+            dt = float(np.clip(now - self._last_timestamp, 1e-3, self.max_dt_seconds))
+        self._last_timestamp = now
+
+        observed = None
+        if position is not None:
+            candidate = np.asarray(position, dtype=np.float32).reshape(-1)
+            if candidate.size >= 2 and np.isfinite(candidate[:2]).all():
+                observed = candidate[:2].copy()
+
+        if observed is not None:
+            if self._position is not None:
+                measured_velocity = (observed - self._position) / dt
+                self._velocity = (
+                    (1.0 - self.velocity_smoothing) * self._velocity
+                    + self.velocity_smoothing * measured_velocity
+                )
+            else:
+                self._velocity.fill(0.0)
+            self._position = observed
+            self._age_frames = 0
+            self._confidence = float(np.clip(confidence, 0.0, 1.0))
+            return BallTrackEstimate(
+                position=self._position.copy(),
+                velocity=self._velocity.copy(),
+                confidence=self._confidence,
+                status="fresh",
+                age_frames=0,
+            )
+
+        if self._position is None or self._age_frames >= self.max_prediction_frames:
+            self._age_frames += 1
+            return BallTrackEstimate(
+                position=None,
+                velocity=None,
+                confidence=0.0,
+                status="unavailable",
+                age_frames=self._age_frames,
+            )
+
+        self._position = self._position + self._velocity * dt
+        self._age_frames += 1
+        confidence = self._confidence * max(
+            0.0, 1.0 - self._age_frames / max(self.max_prediction_frames, 1)
+        )
+        return BallTrackEstimate(
+            position=self._position.copy(),
+            velocity=self._velocity.copy(),
+            confidence=float(confidence),
+            status="predicted",
+            age_frames=self._age_frames,
+        )

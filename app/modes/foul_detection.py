@@ -7,12 +7,14 @@ fouls_far HUD on frames where a foul prediction passes the built-in
 confidence filter.
 """
 
-from typing import Iterator
+from typing import Iterator, Optional
 
 import numpy as np
 import supervision as sv
 
+from app.constants.paths import CAMERA_CALIBRATION_PATH
 from app.foul_detection.detector import FoulDetector
+from app.geometry.camera import build_undistorter
 
 # FoulDetector.__init__ has already injected the repo root onto sys.path,
 # so the following imports from offside resolve without installing fouls_far.
@@ -25,6 +27,9 @@ def run_foul_detection(
     foul_checkpoint_path: str,
     window_size: int = 24,
     stride: int = 8,
+    camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    enable_undistortion: bool = True,
+    calibration_alpha: float = 0.0,
 ) -> Iterator[np.ndarray]:
     """
     Yield BGR frames annotated with a foul HUD overlay.
@@ -50,11 +55,17 @@ def run_foul_detection(
         window_size=window_size,
         stride=stride,
     )
+    undistorter = build_undistorter(
+        calibration_path=camera_calibration_path,
+        enabled=enable_undistortion,
+        alpha=calibration_alpha,
+    )
 
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     for frame in frame_generator:
-        prediction = detector.update(frame)
-        annotated = frame.copy()
+        undistorted_frame = undistorter.apply(frame)
+        prediction = detector.update(undistorted_frame)
+        annotated = undistorted_frame.copy()
         if prediction is not None and _hud_show_prediction(
             prediction,
             min_offence_confidence=0.48,

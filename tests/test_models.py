@@ -120,8 +120,32 @@ def test_pipeline_command_serialization():
 
 def test_homography_status_values():
     assert HomographyStatus.FRESH.value == "fresh"
+    assert HomographyStatus.REUSED.value == "reused"
     assert HomographyStatus.STALE.value == "stale"
     assert HomographyStatus.UNAVAILABLE.value == "unavailable"
+
+
+def test_official_person_model_uses_unknown_role_and_neutral_team():
+    player = PlayerState(
+        track_id=7,
+        role=PlayerRole.UNKNOWN,
+        team_id=-1,
+        confidence=0.8,
+    )
+
+    assert player.model_dump() == {
+        "track_id": 7,
+        "role": "unknown",
+        "team_id": -1,
+        "field_x": None,
+        "field_y": None,
+        "confidence": 0.8,
+        "role_confidence": 0.0,
+        "team_confidence": 0.0,
+        "semantic_status": "unknown",
+        "velocity_x": None,
+        "velocity_y": None,
+    }
 
 
 def test_player_state_with_null_field_coordinates():

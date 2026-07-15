@@ -1,0 +1,13 @@
+{
+  "frames": 300,
+  "resolution": [
+    1280,
+    720
+  ],
+  "quality": 75,
+  "elapsed_sec": 0.3322,
+  "encode_fps": 903.19,
+  "frames_encoded": 300,
+  "average_encode_latency_ms": 1.105,
+  "latest_jpeg_bytes": 15027
+}

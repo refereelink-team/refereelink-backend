@@ -145,6 +145,37 @@ class PitchProjectionEngine:
             reprojection_error=reprojection_error,
         )
 
+    def reuse(self, frame: np.ndarray) -> PitchProjectionResult:
+        """Reuse the last valid homography for a scheduled-skip frame.
+
+        Unlike :meth:`update`, this method intentionally does not attempt to
+        extract or fit keypoints.  The reuse budget is still measured in
+        frames, so a fixed camera cannot silently keep an old calibration
+        forever.
+        """
+        if (
+            self.prev_valid_homography is None
+            or self.stale_frames >= self.max_stale_frames
+        ):
+            self.prev_valid_homography = None
+            self.stale_frames = 0
+            return PitchProjectionResult(
+                tracking_observations=[],
+                projected_keypoints=[],
+                homography=None,
+                homography_status='unavailable',
+                reprojection_error=None,
+            )
+
+        self.stale_frames += 1
+        return PitchProjectionResult(
+            tracking_observations=[],
+            projected_keypoints=[],
+            homography=self.prev_valid_homography,
+            homography_status='reused',
+            reprojection_error=None,
+        )
+
     def _extract_model_observations(
         self,
         frame: np.ndarray,

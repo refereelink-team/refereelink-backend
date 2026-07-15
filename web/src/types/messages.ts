@@ -1,5 +1,6 @@
-export type HomographyStatus = 'fresh' | 'stale' | 'unavailable';
-export type PlayerRole = 'player' | 'goalkeeper' | 'referee';
+export type HomographyStatus = 'fresh' | 'reused' | 'stale' | 'unavailable';
+export type BallStatus = 'fresh' | 'predicted' | 'stale' | 'unavailable';
+export type PlayerRole = 'player' | 'goalkeeper' | 'referee' | 'unknown';
 export type SourceStatus = 'connected' | 'disconnected' | 'reconnecting' | 'error';
 
 export interface PlayerState {
@@ -9,6 +10,23 @@ export interface PlayerState {
   field_x: number | null;
   field_y: number | null;
   confidence: number;
+  role_confidence: number;
+  team_confidence: number;
+  semantic_status: string;
+  velocity_x: number | null;
+  velocity_y: number | null;
+}
+
+export interface BallState {
+  status: BallStatus;
+  image_x: number | null;
+  image_y: number | null;
+  field_x: number | null;
+  field_y: number | null;
+  velocity_x: number | null;
+  velocity_y: number | null;
+  confidence: number;
+  age_frames: number;
 }
 
 export interface GameEvent {
@@ -22,6 +40,8 @@ export interface GameEvent {
   field_y: number | null;
   reviewed: boolean;
   foul_details?: Record<string, string | number>;
+  involved_track_ids: number[];
+  evidence: Record<string, unknown>;
 }
 
 export interface FrameState {
@@ -32,6 +52,8 @@ export interface FrameState {
   processing_fps: number;
   homography_status: HomographyStatus;
   players: PlayerState[];
+  ball: BallState | null;
+  possession_track_id: number | null;
   events: GameEvent[];
 }
 
@@ -47,6 +69,20 @@ export interface MetricsSnapshot {
   source_status: SourceStatus;
   memory_mb: number;
   gpu_memory_mb: number | null;
+  player_inference_latency_ms: number;
+  pitch_inference_latency_ms: number;
+  pitch_detection_count: number;
+  homography_reuse_ratio: number;
+  homography_available_ratio: number;
+  track_id_interruptions: number;
+  semantic_inference_count: number;
+  semantic_label_switches: number;
+  ball_detection_count: number;
+  ball_predicted_frames: number;
+  ball_available_ratio: number;
+  jpeg_frames_encoded: number;
+  jpeg_encode_latency_ms: number;
+  foul_inference_count: number;
 }
 
 export type WSMessage = FrameState | MetricsSnapshot;
@@ -55,11 +91,28 @@ export interface PipelineConfig {
   mode: string;
   video_source: string;
   device: string;
+  inference_backend: 'auto' | 'pytorch' | 'onnx' | 'tensorrt' | string;
   enable_foul_detection: boolean;
   enable_recording: boolean;
   show_keypoints: boolean;
   show_tracking_boxes: boolean;
   show_2d_projection: boolean;
+  foul_confidence_threshold: number;
+  player_model_path: string;
+  pitch_model_path: string;
+  role_model_path: string;
+  team_classifier_path: string | null;
+  ball_model_path: string;
+  enable_ball: boolean;
+  role_detection_interval: number;
+  team_classification_interval: number;
+  ball_detection_interval: number;
+  ball_max_prediction_frames: number;
+  camera_calibration_path: string;
+  enable_undistortion: boolean;
+  calibration_alpha: number;
+  pitch_detection_interval: number;
+  imgsz: number;
 }
 
 export interface PitchData {
