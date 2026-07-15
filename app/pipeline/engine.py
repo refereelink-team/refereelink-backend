@@ -21,10 +21,8 @@ from app.config.pitch import SoccerPitchConfiguration
 from app.geometry.pitch_projection import PitchProjectionEngine
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
 from app.pipeline.source import VideoSource
-from app.runtime import get_crops, resolve_goalkeepers_team_id
 from app.state.models import (
     FrameState,
-    GameEvent,
     HomographyStatus,
     MetricsSnapshot,
     PlayerRole,
@@ -61,16 +59,11 @@ class InferencePipeline:
         store: StateStore,
         device: str = "cpu",
         mode: PipelineMode = PipelineMode.REALTIME,
-        enable_foul_detection: bool = False,
-        foul_checkpoint_path: Optional[str] = None,
-        classifier_path: Optional[str] = None,
     ) -> None:
         self._source = source
         self._store = store
         self._device = device
         self._mode = mode
-        self._enable_foul = enable_foul_detection
-        self._foul_checkpoint_path = foul_checkpoint_path
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -92,14 +85,8 @@ class InferencePipeline:
         self._player_model = None
         self._pitch_model = None
         self._projection_engine: Optional[PitchProjectionEngine] = None
-        self._team_classifier = OnlineTeamClassifier(
-            device=device, classifier_path=classifier_path
-        )
+        self._team_classifier = OnlineTeamClassifier(device=device)
         self._tracker = sv.ByteTrack(minimum_consecutive_frames=3)
-        self._foul_detector: Any = None
-
-        self._frame_buffer: list[Optional[np.ndarray]] = [None, None, None]
-        self._buffer_head = 0
 
     def start(self) -> None:
         if self._running:
@@ -129,18 +116,6 @@ class InferencePipeline:
         self._projection_engine = PitchProjectionEngine(
             config=CONFIG, fps=max(self._source.fps, 1.0)
         )
-
-        if self._enable_foul and self._foul_checkpoint_path is not None:
-            try:
-                from app.foul_detection.detector import FoulDetector
-                self._foul_detector = FoulDetector(
-                    checkpoint_path=self._foul_checkpoint_path,
-                    device=self._device,
-                )
-                logger.info("Foul detector loaded")
-            except Exception as exc:
-                logger.warning("Foul detector not available: %s", exc)
-                self._enable_foul = False
 
     def _run_loop(self) -> None:
         self._metrics_start = time.monotonic()
@@ -182,8 +157,6 @@ class InferencePipeline:
     def _process_frame(
         self, frame: np.ndarray, capture_timestamp_ms: float
     ) -> Optional[FrameState]:
-        self._store._latest_raw_frame = frame  # type: ignore[attr-defined]
-
         with torch.inference_mode():
             pitch_result = self._pitch_model(frame, verbose=False)[0]
             keypoints = sv.KeyPoints.from_ultralytics(pitch_result)
@@ -192,84 +165,74 @@ class InferencePipeline:
             detections = sv.Detections.from_ultralytics(player_result)
             detections = self._tracker.update_with_detections(detections)
 
-        players = detections[detections.class_id == PLAYER_CLASS_ID]
-        player_crops = get_crops(frame, players)
-        players_team_id = self._team_classifier.collect_and_predict(frame, player_crops)
-
-        goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
-        goalkeepers_team_id = resolve_goalkeepers_team_id(
-            players, players_team_id, goalkeepers
-        )
-        goalkeepers_crops = get_crops(frame, goalkeepers)
-        _ = self._team_classifier.collect_and_predict(frame, goalkeepers_crops)  # warmup
-
-        referees = detections[detections.class_id == REFEREE_CLASS_ID]
-
         projection = self._projection_engine.update(frame=frame, keypoints=keypoints)  # type: ignore[arg-type]
 
         player_states: list[PlayerState] = []
-        if projection.homography is not None:
-            all_detections = sv.Detections.merge([players, goalkeepers, referees])
-            xy = all_detections.get_anchors_coordinates(
+        if projection.homography is not None and len(detections) > 0:
+            xy = detections.get_anchors_coordinates(
                 anchor=sv.Position.BOTTOM_CENTER
             ).astype(np.float32)
             transformed = cv2.perspectiveTransform(
                 xy.reshape(-1, 1, 2), projection.homography
-            ).reshape(-1, 2)
-
-            all_team_ids = (
-                players_team_id.tolist()
-                + goalkeepers_team_id.tolist()
-                + [REFEREE_CLASS_ID] * len(referees)
             )
-
-            for idx, det in enumerate(all_detections):
-                tracker_id = det[4] if len(det) >= 5 else idx
-                player_states.append(PlayerState(
-                    track_id=int(tracker_id),
-                    role=_map_role(int(det[3])),
-                    team_id=int(all_team_ids[idx]) if idx < len(all_team_ids) else 2,
-                    field_x=float(transformed[idx][0]),
-                    field_y=float(transformed[idx][1]),
-                    confidence=float(detection_confidence(det)) if hasattr(det, '__getitem__') else 0.0,
-                ))
+            if transformed is not None:
+                transformed = transformed.reshape(-1, 2)
+                for idx in range(len(detections)):
+                    tracker_id = int(detections.tracker_id[idx]) if detections.tracker_id is not None else idx
+                    player_states.append(PlayerState(
+                        track_id=int(tracker_id),
+                        role=_map_role(int(detections.class_id[idx])) if detections.class_id is not None else PlayerRole.PLAYER,
+                        team_id=0,
+                        field_x=float(transformed[idx][0]),
+                        field_y=float(transformed[idx][1]),
+                        confidence=float(detections.confidence[idx]) if detections.confidence is not None else 0.0,
+                    ))
+            else:
+                # perspectiveTransform failed — fall back to no projection
+                for idx in range(len(detections)):
+                    tracker_id = int(detections.tracker_id[idx]) if detections.tracker_id is not None else idx
+                    player_states.append(PlayerState(
+                        track_id=int(tracker_id),
+                        role=_map_role(int(detections.class_id[idx])) if detections.class_id is not None else PlayerRole.PLAYER,
+                        team_id=0,
+                        confidence=float(detections.confidence[idx]) if detections.confidence is not None else 0.0,
+                    ))
         else:
-            for det in players:
-                tracker_id = det[4] if len(det) >= 5 else 0
+            for idx in range(len(detections)):
+                tracker_id = int(detections.tracker_id[idx]) if detections.tracker_id is not None else idx
                 player_states.append(PlayerState(
                     track_id=int(tracker_id),
-                    role=_map_role(PLAYER_CLASS_ID),
-                    team_id=-1,
-                    confidence=float(detection_confidence(det)) if hasattr(det, '__getitem__') else 0.0,
+                    role=_map_role(int(detections.class_id[idx])) if detections.class_id is not None else PlayerRole.PLAYER,
+                    team_id=0,
+                    confidence=float(detections.confidence[idx]) if detections.confidence is not None else 0.0,
                 ))
 
-        events: list[GameEvent] = []
-        if self._foul_detector is not None and self._enable_foul:
-            foul_prediction = self._foul_detector.update(frame)
-            if foul_prediction is not None:
-                try:
-                    from offside.foul_overlay import _hud_show_prediction
-                    if _hud_show_prediction(
-                        foul_prediction,
-                        min_offence_confidence=self._store.config.foul_confidence_threshold,
-                        min_action_confidence=0.45,
-                        strict_hud_filter=True,
-                    ):
-                        event = GameEvent(
-                            event_type="foul",
-                            confidence=float(getattr(foul_prediction, "confidence", 0.0)),
-                            severity="likely",
-                            timestamp=self._source.frame_count / max(self._source.fps, 1.0),
-                            frame_id=self._source.frame_count,
-                            foul_details={
-                                "offence": str(getattr(foul_prediction, "offence", "")),
-                                "action": str(getattr(foul_prediction, "action", "")),
-                            },
-                        )
-                        events.append(event)
-                        self._store.add_event(event)
-                except ImportError:
-                    pass
+        # Draw detection boxes and tracker IDs on the frame for the MJPEG stream.
+        annotated_frame = frame.copy()
+        n = len(detections)
+        if n > 0:
+            for i in range(n):
+                x1, y1, x2, y2 = map(int, detections.xyxy[i])
+                tracker_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else i
+                class_id = int(detections.class_id[i]) if detections.class_id is not None else 0
+
+                if class_id == PLAYER_CLASS_ID:
+                    color = (0, 255, 0)
+                elif class_id == GOALKEEPER_CLASS_ID:
+                    color = (255, 0, 0)
+                elif class_id == REFEREE_CLASS_ID:
+                    color = (0, 255, 255)
+                else:
+                    color = (255, 255, 255)
+
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                label = f"{tracker_id}"
+                cv2.putText(
+                    annotated_frame, label, (x1, max(y1 - 5, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
+                )
+
+        self._store._latest_raw_frame = annotated_frame  # type: ignore[attr-defined]
 
         elapsed = time.monotonic() - self._metrics_start
         current_fps = self._metrics_frames / max(elapsed, 0.001)
@@ -280,7 +243,7 @@ class InferencePipeline:
             processing_fps=current_fps,
             homography_status=_map_homography_status(projection.homography_status),
             players=player_states,
-            events=events,
+            events=[],
         )
 
     def _emit_metrics(self) -> None:

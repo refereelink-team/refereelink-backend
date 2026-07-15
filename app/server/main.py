@@ -74,8 +74,7 @@ def _generate_mjpeg() -> iter:
         time.sleep(1.0 / 30.0)
 
 
-def create_pipeline(video_source: str, device: str = "cpu",
-                     foul_checkpoint_path: Optional[str] = None) -> InferencePipeline:
+def create_pipeline(video_source: str, device: str = "cpu") -> InferencePipeline:
     """Factory used by both CLI startup and the REST API to build a
     pipeline bound to the shared store."""
     return InferencePipeline(
@@ -83,7 +82,6 @@ def create_pipeline(video_source: str, device: str = "cpu",
         store=_store,
         device=device,
         mode=PipelineMode.REALTIME,
-        foul_checkpoint_path=foul_checkpoint_path,
     )
 
 
@@ -159,7 +157,7 @@ async def video_stream() -> StreamingResponse:
 
 
 def main() -> None:
-    global _device, _foul_checkpoint_path
+    global _device
 
     parser = argparse.ArgumentParser(description="Soccer Analysis Server")
     parser.add_argument("--video_source", type=str, default=None,
@@ -170,17 +168,14 @@ def main() -> None:
                         help="Device for inference (cpu, cuda)")
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--foul_checkpoint_path", type=str, default=None)
     args = parser.parse_args()
 
     _device = args.device
-    _foul_checkpoint_path = args.foul_checkpoint_path
 
     if args.video_source:
         pipeline = create_pipeline(
             args.video_source,
             device=_device,
-            foul_checkpoint_path=_foul_checkpoint_path,
         )
         attach_and_start_pipeline(pipeline)
     else:
