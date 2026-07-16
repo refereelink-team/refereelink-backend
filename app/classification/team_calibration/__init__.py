@@ -6,11 +6,14 @@ been validated and loaded.
 """
 
 from app.classification.team_calibration.appearance_features import AppearanceFeatureExtractor
+from app.classification.team_calibration.bundle import CalibrationBundle
 from app.classification.team_calibration.color_features import ColorFeatureExtractor
 from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
 from app.classification.team_calibration.prototypes import build_prototypes
 from app.classification.team_calibration.quality import CropQualityAssessor, QualityAssessment
 from app.classification.team_calibration.roi import JerseyROIExtractor
+from app.classification.team_calibration.runtime import TeamAssignmentService
+from app.classification.team_calibration.session import CalibrationState, TeamCalibrationSession
 from app.classification.team_calibration.track_features import TrackFeatureBank
 from app.classification.team_calibration.types import (
     CalibrationLabel,
@@ -23,6 +26,8 @@ from app.classification.team_calibration.types import (
 
 __all__ = [
     "AppearanceFeatureExtractor",
+    "CalibrationBundle",
+    "CalibrationState",
     "CalibrationLabel",
     "ColorFeatureExtractor",
     "CropQualityAssessor",
@@ -31,6 +36,8 @@ __all__ = [
     "PlayerRole",
     "QualityAssessment",
     "SupervisedPrototypeClassifier",
+    "TeamAssignmentService",
+    "TeamCalibrationSession",
     "TeamLabel",
     "TeamPrediction",
     "TeamPrototype",

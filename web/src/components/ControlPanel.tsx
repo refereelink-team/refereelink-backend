@@ -8,6 +8,7 @@ interface Props {
 
 const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
   const pipelineRunning = useDashboardStore((s) => s.pipelineRunning);
+  const teamCalibration = useDashboardStore((s) => s.teamCalibration);
   const sourceStatus = useDashboardStore((s) => s.sourceStatus);
   const config = useDashboardStore((s) => s.config);
   const setConfig = useDashboardStore((s) => s.setConfig);
@@ -92,6 +93,7 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
   };
 
   const sourceType = videoSource.trim().startsWith('rtsp') ? 'RTSP' : 'FILE';
+  const teamReady = teamCalibration.ready || teamCalibration.state === 'running';
 
   return (
     <div className="panel control-panel">
@@ -156,10 +158,13 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
           <button
             className={`btn ${pipelineRunning ? 'btn-stop' : 'btn-start'}`}
             onClick={pipelineRunning ? stopPipeline : startPipeline}
-            disabled={busy}
+            disabled={busy || (!pipelineRunning && config.require_team_calibration && !teamReady)}
           >
-            {busy ? '...' : pipelineRunning ? 'STOP' : 'START'}
+            {busy ? '...' : pipelineRunning ? 'STOP' : teamReady ? 'START' : 'CALIBRATE FIRST'}
           </button>
+          {!teamReady && !pipelineRunning && config.require_team_calibration && (
+            <span className="control-error">TEAM_CALIBRATION_REQUIRED</span>
+          )}
           {error && <span className="control-error">{error}</span>}
         </div>
       </div>

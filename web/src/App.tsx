@@ -6,6 +6,7 @@ import StatusCards from './components/StatusCards';
 import EventAlerts from './components/EventAlerts';
 import ControlPanel from './components/ControlPanel';
 import LogPanel from './components/LogPanel';
+import TeamCalibrationPanel from './components/TeamCalibrationPanel';
 import './styles/global.css';
 
 const App: React.FC = () => {
@@ -17,6 +18,7 @@ const App: React.FC = () => {
       <Pitch2D />
       <StatusCards />
       <EventAlerts />
+      <TeamCalibrationPanel />
       <ControlPanel sendCommand={sendCommand} />
       <LogPanel />
     </>

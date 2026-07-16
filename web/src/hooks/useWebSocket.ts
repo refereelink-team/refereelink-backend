@@ -1,6 +1,11 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
-import type { WSMessage, FrameState, MetricsSnapshot } from '../types/messages';
+import type {
+  WSMessage,
+  FrameState,
+  MetricsSnapshot,
+  TeamCalibrationState,
+} from '../types/messages';
 
 const WS_URL = `ws://${window.location.hostname}:8000/ws/state`;
 const RECONNECT_DELAY = 2000;
@@ -15,6 +20,7 @@ export function useWebSocket() {
     setWsConnected,
     setSourceStatus,
     setPipelineRunning,
+    setTeamCalibration,
     addLog,
   } = useDashboardStore();
 
@@ -51,12 +57,14 @@ export function useWebSocket() {
         } else if (msg.type === 'metrics') {
           setMetrics(msg as MetricsSnapshot);
           setSourceStatus((msg as MetricsSnapshot).source_status);
+        } else if (msg.type === 'team_calibration') {
+          setTeamCalibration(msg as TeamCalibrationState);
         }
       } catch {
         // ignore malformed messages
       }
     };
-  }, [setFrameState, setMetrics, addEvent, setWsConnected, setSourceStatus, addLog]);
+  }, [setFrameState, setMetrics, addEvent, setWsConnected, setSourceStatus, setTeamCalibration, addLog]);
 
   useEffect(() => {
     connect();

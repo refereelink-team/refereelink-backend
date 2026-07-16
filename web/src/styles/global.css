@@ -76,7 +76,12 @@ body {
 }
 
 .events-panel {
-  grid-column: 2 / 4;
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.team-calibration-panel {
+  grid-column: 3;
   grid-row: 2;
 }
 
@@ -385,6 +390,90 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* Pre-match team calibration */
+.calibration-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  overflow: hidden;
+}
+
+.calibration-config,
+.calibration-summary,
+.calibration-track-meta,
+.calibration-labels {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.calibration-config .control-input {
+  min-width: 70px;
+  width: 80px;
+  flex: 1;
+  font-size: 9px;
+}
+
+.calibration-summary {
+  color: var(--text-secondary);
+  font-size: 9px;
+  justify-content: space-between;
+}
+
+.ready-text { color: var(--accent-green); }
+.warning-text { color: var(--accent-yellow); }
+
+.calibration-tracks {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.calibration-track {
+  padding: 5px;
+  margin-bottom: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+}
+
+.calibration-track-meta {
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 9px;
+  margin-bottom: 4px;
+}
+
+.calibration-track-meta strong { color: var(--text-primary); }
+.calibration-label-btn {
+  padding: 3px 5px;
+  font-size: 8px;
+}
+.calibration-label-btn.selected {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+.calibration-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--accent-red);
+  font-size: 9px;
+  overflow-y: auto;
+}
+.calibration-empty {
+  color: var(--text-secondary);
+  padding: 12px 4px;
+  text-align: center;
+}
+.status-badge.calibration-idle,
+.status-badge.calibration-validating { background: #252d3a; color: var(--text-secondary); }
+.status-badge.calibration-calibrating { background: #332a0a; color: var(--accent-yellow); }
+.status-badge.calibration-ready { background: #0a331a; color: var(--accent-green); }
+.status-badge.calibration-running { background: #0a2833; color: var(--accent); }
+.status-badge.calibration-recalibration_required { background: #331a1a; color: var(--accent-red); }
 
 /* Video overlay */
 .video-overlay {
