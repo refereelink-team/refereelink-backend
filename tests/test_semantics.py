@@ -8,6 +8,7 @@ import pytest
 
 from app.classification.online import OnlineTeamClassifier
 from app.classification.team import UNKNOWN_TEAM_ID, TeamClassifier
+from app.classification.team_calibration.types import TeamLabel
 from app.vision.semantics import (
     UNKNOWN_ROLE,
     SemanticObservation,
@@ -193,3 +194,33 @@ def test_track_semantic_manager_exposes_stable_frame_level_contract_without_mode
         assert result.team_confidence == 0.0
         assert result.status == "unknown"
         assert result.as_dict()["status"] == "unknown"
+
+
+def test_track_semantic_manager_preserves_one_bbox_row_per_track() -> None:
+    class RecordingTeamClassifier:
+        def __init__(self) -> None:
+            self.crops: list[np.ndarray] = []
+
+        def predict_tracks(self, crops, **_kwargs):
+            self.crops = list(crops)
+            return [
+                SimpleNamespace(
+                    team=TeamLabel.UNKNOWN,
+                    confidence=0.0,
+                    rejection_reason="test",
+                )
+                for _ in crops
+            ]
+
+    classifier = RecordingTeamClassifier()
+    manager = TrackSemanticManager(team_classifier=classifier)
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    detections = SimpleNamespace(
+        tracker_id=np.asarray([7, 11]),
+        xyxy=np.asarray([[10, 10, 30, 70], [50, 10, 80, 70]], dtype=np.float32),
+        confidence=np.asarray([0.9, 0.9], dtype=np.float32),
+    )
+
+    manager.update(frame, detections, frame_index=42)
+
+    assert [crop.shape for crop in classifier.crops] == [(60, 20, 3), (60, 30, 3)]

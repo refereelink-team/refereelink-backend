@@ -506,7 +506,7 @@ def _detection_items(detections: Any) -> list[tuple[int, Any]]:
     if tracker_ids is not None:
         ids = _as_sequence(tracker_ids, len(tracker_ids))
         boxes = getattr(detections, "xyxy", None)
-        boxes_sequence = _as_sequence(boxes, len(ids)) if boxes is not None else [None] * len(ids)
+        boxes_sequence = _box_sequence(boxes, len(ids)) if boxes is not None else [None] * len(ids)
         items = []
         for track_id, box in zip(ids, boxes_sequence):
             normalized_id = _try_track_id(track_id)
@@ -626,6 +626,20 @@ def _as_sequence(values: Any, size: int) -> list[Any]:
     if len(sequence) < size:
         sequence.extend([None] * (size - len(sequence)))
     return sequence[:size]
+
+
+def _box_sequence(values: Any, size: int) -> list[Any]:
+    """Preserve one ``xyxy`` row per tracker ID.
+
+    ``supervision.Detections.xyxy`` is a two-dimensional ``(N, 4)`` array.
+    Flattening it turns each box into a scalar and makes downstream crops
+    empty, silently forcing all semantic predictions to UNKNOWN.
+    """
+
+    array = np.asarray(values)
+    if array.ndim >= 2:
+        return [row for row in array[:size]]
+    return _as_sequence(values, size)
 
 
 def _normalized_confidences(values: Any, size: int) -> list[float]:
