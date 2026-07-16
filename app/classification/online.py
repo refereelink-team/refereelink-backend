@@ -1,111 +1,121 @@
+"""Online warmup wrapper for the lightweight team classifier."""
+
 from __future__ import annotations
 
 import logging
-import pickle
-import threading
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
-import torch
 
 from app.classification.team import TeamClassifier
-from app.constants.classes import PLAYER_CLASS_ID
 
 logger = logging.getLogger(__name__)
 
-WARMUP_FRAMES = 120
-WARMUP_STRIDE = 15
-
 
 class OnlineTeamClassifier:
+    """Collect crops during warmup, then classify each crop independently.
+
+    The wrapper has no model-runtime dependency.  ``warmup_frames=0`` keeps
+    the historical always-ready behaviour but intentionally returns UNKNOWN
+    until a classifier is fitted or loaded.  For online unsupervised fitting,
+    set a positive warmup frame count and provide crops from both teams.
+    """
+
     def __init__(
         self,
         device: str = "cpu",
-        warmup_frames: int = WARMUP_FRAMES,
-        warmup_stride: int = WARMUP_STRIDE,
+        warmup_frames: int = 0,
+        warmup_stride: int = 1,
         classifier_path: Optional[str] = None,
+        *,
+        classifier: Optional[TeamClassifier] = None,
+        min_warmup_crops: int = 2,
     ) -> None:
+        if warmup_frames < 0:
+            raise ValueError("warmup_frames must be non-negative")
+        if warmup_stride < 1:
+            raise ValueError("warmup_stride must be at least 1")
+        if min_warmup_crops < 2:
+            raise ValueError("min_warmup_crops must be at least 2")
         self._device = device
-        self._warmup_frames = warmup_frames
-        self._warmup_stride = warmup_stride
-        self._classifier = TeamClassifier(device=device)
-        self._crops: list[np.ndarray] = []
-        self._fitted = False
-        self._fitting = False
+        self._classifier = classifier or TeamClassifier(device=device)
+        self._warmup_frames = int(warmup_frames)
+        self._warmup_stride = int(warmup_stride)
+        self._min_warmup_crops = int(min_warmup_crops)
         self._frame_count = 0
-        self._lock = threading.Lock()
-
-        if classifier_path is not None and Path(classifier_path).exists():
+        self._warmup_crops: list[np.ndarray] = []
+        self._fitted = self._classifier.fitted
+        if classifier_path:
             self._load_classifier(classifier_path)
+
+    @property
+    def classifier(self) -> TeamClassifier:
+        return self._classifier
+
+    @property
+    def ready(self) -> bool:
+        """Whether the wrapper can serve predictions without blocking."""
+
+        return True
+
+    @property
+    def fitted(self) -> bool:
+        return self._fitted and self._classifier.fitted
+
+    @property
+    def warmup_progress(self) -> float:
+        if self._warmup_frames == 0:
+            return 1.0 if self.fitted else 0.0
+        return float(np.clip(self._frame_count / self._warmup_frames, 0.0, 1.0))
 
     def collect_and_predict(
         self,
         frame: np.ndarray,
-        player_crops: list[np.ndarray],
+        player_crops: Sequence[np.ndarray],
     ) -> np.ndarray:
-        with self._lock:
-            self._frame_count += 1
+        """Collect a stride-selected frame and return team IDs for crops."""
 
-            if not self._fitted and not self._fitting:
-                if (
-                    self._frame_count % self._warmup_stride == 0
-                    and self._frame_count <= self._warmup_frames
-                ):
-                    for crop in player_crops:
-                        if crop.size > 0:
-                            self._crops.append(crop.copy())
+        del frame  # Kept in the API for callers that already pass the frame.
+        self._frame_count += 1
+        if (
+            not self.fitted
+            and self._warmup_frames > 0
+            and self._frame_count % self._warmup_stride == 0
+        ):
+            self._warmup_crops.extend(np.asarray(crop) for crop in player_crops)
+            if self._frame_count >= self._warmup_frames and len(self._warmup_crops) >= self._min_warmup_crops:
+                self.fit(self._warmup_crops)
+                self._warmup_crops.clear()
+        return self._classifier.predict(player_crops)
 
-                if self._frame_count >= self._warmup_frames:
-                    self._start_fit()
+    def predict_with_confidence(
+        self,
+        player_crops: Sequence[np.ndarray],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        return self._classifier.predict_with_confidence(player_crops)
 
-            if not self._fitted:
-                return np.full(len(player_crops), -1, dtype=np.int64)
-
-            return self._classifier.predict(player_crops)
-
-    def _start_fit(self) -> None:
-        if len(self._crops) < 10:
-            logger.warning("Not enough crops for team classifier (%d collected)", len(self._crops))
-            self._fitted = True
-            return
-        self._fitting = True
-        logger.info("Starting async team classifier fit with %d crops", len(self._crops))
-        thread = threading.Thread(target=self._run_fit, daemon=True)
-        thread.start()
-
-    def _run_fit(self) -> None:
-        try:
-            self._classifier.fit(list(self._crops))
-            with self._lock:
-                self._fitted = True
-                self._fitting = False
-            self._crops.clear()
-            logger.info("Team classifier fit complete")
-        except Exception as exc:
-            logger.error("Team classifier fit failed: %s", exc)
-            with self._lock:
-                self._fitted = True
-                self._fitting = False
-
-    @property
-    def ready(self) -> bool:
-        with self._lock:
-            return self._fitted
+    def fit(
+        self,
+        player_crops: Sequence[np.ndarray],
+        labels: Optional[Sequence[int]] = None,
+    ) -> "OnlineTeamClassifier":
+        self._classifier.fit(player_crops, labels=labels)
+        self._fitted = self._classifier.fitted
+        return self
 
     def save(self, path: str) -> None:
-        state = {
-            "reducer": self._classifier.reducer,
-            "cluster_model": self._classifier.cluster_model,
-        }
-        with open(path, "wb") as f:
-            pickle.dump(state, f)
-        logger.info("Team classifier state saved to %s", path)
+        self._classifier.save(path)
+        logger.info("Saved lightweight team classifier to %s", path)
 
     def _load_classifier(self, path: str) -> None:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        self._classifier.reducer = state["reducer"]
-        self._classifier.cluster_model = state["cluster_model"]
-        self._fitted = True
-        logger.info("Team classifier state loaded from %s", path)
+        candidate = Path(path)
+        if not candidate.exists():
+            logger.warning("Team classifier file not found: %s; using UNKNOWN fallback", path)
+            return
+        try:
+            self._classifier.load(candidate)
+        except (OSError, ValueError, KeyError) as exc:
+            logger.warning("Could not load team classifier %s: %s", path, exc)
+            return
+        self._fitted = self._classifier.fitted

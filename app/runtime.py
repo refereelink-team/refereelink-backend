@@ -282,10 +282,10 @@ def render_radar(
             radar,
             observations=projection.projected_keypoints,
         )
-    elif projection.homography_status == 'stale':
+    elif projection.homography_status in {'reused', 'stale'}:
         cv2.putText(
             radar,
-            'STALE HOMOGRAPHY',
+            'REUSED HOMOGRAPHY' if projection.homography_status == 'reused' else 'STALE HOMOGRAPHY',
             (40, 80),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.9,
@@ -336,6 +336,9 @@ def render_radar(
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 3],
         face_color=sv.Color.from_hex(COLORS[3]), radius=20, pitch=radar)
+    radar = draw_points_on_pitch(
+        config=CONFIG, xy=transformed_xy[color_lookup == 4],
+        face_color=sv.Color.from_hex(COLORS[4]), radius=20, pitch=radar)
 
     # Draw foul location marker on the radar.
     if foul_location is not None:

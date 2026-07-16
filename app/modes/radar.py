@@ -4,27 +4,21 @@ from typing import Any, Callable, Iterator, List, Optional
 import cv2
 import numpy as np
 import supervision as sv
-from tqdm import tqdm
-from ultralytics import YOLO
 
-from app.classification.team import TeamClassifier
-from app.constants.classes import (
-    GOALKEEPER_CLASS_ID,
-    PLAYER_CLASS_ID,
-    REFEREE_CLASS_ID,
-    STRIDE,
+from app.constants.paths import (
+    CAMERA_CALIBRATION_PATH,
+    PITCH_DETECTION_MODEL_PATH,
+    PLAYER_DETECTION_MODEL_PATH,
 )
-from app.constants.paths import PITCH_DETECTION_MODEL_PATH, PLAYER_DETECTION_MODEL_PATH
-from app.geometry.pitch_projection import PitchProjectionEngine, PitchProjectionResult
+from app.geometry.pitch_projection import PitchProjectionResult
 from app.runtime import (
     CONFIG,
     ELLIPSE_ANNOTATOR,
     ELLIPSE_LABEL_ANNOTATOR,
     annotate_pitch_observations,
-    get_crops,
     render_radar,
-    resolve_goalkeepers_team_id,
 )
+from app.vision.core import VisionCore
 
 
 RadarLogCallback = Optional[Callable[[str], None]]
@@ -116,7 +110,11 @@ def render_tracked_frame(
     color_lookup: np.ndarray,
     projection: PitchProjectionResult,
 ) -> np.ndarray:
-    labels = [str(tracker_id) for tracker_id in detections.tracker_id]
+    labels = (
+        [str(tracker_id) for tracker_id in detections.tracker_id]
+        if detections.tracker_id is not None
+        else []
+    )
 
     tracked_frame = frame.copy()
     tracked_frame = ELLIPSE_ANNOTATOR.annotate(
@@ -157,13 +155,29 @@ def iter_radar_analysis(
     device: str,
     log_callback: RadarLogCallback = None,
     foul_checkpoint_path: Optional[str] = None,
+    player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
+    pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
+    camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    enable_undistortion: bool = True,
+    calibration_alpha: float = 0.0,
+    pitch_detection_interval: int = 5,
+    imgsz: int = 640,
 ) -> Iterator[RadarFrameData]:
     video_info = sv.VideoInfo.from_video_path(source_video_path)
-    projection_engine = PitchProjectionEngine(config=CONFIG, fps=video_info.fps)
-    emit_radar_log(log_callback, 'loading player detection model')
-    player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
-    emit_radar_log(log_callback, 'loading pitch detection model')
-    pitch_detection_model = YOLO(PITCH_DETECTION_MODEL_PATH).to(device=device)
+    emit_radar_log(log_callback, 'loading shared vision core')
+    vision_core = VisionCore(
+        device=device,
+        fps=video_info.fps,
+        player_model_path=player_model_path,
+        pitch_model_path=pitch_model_path,
+        camera_calibration_path=camera_calibration_path,
+        enable_undistortion=enable_undistortion,
+        calibration_alpha=calibration_alpha,
+        pitch_detection_interval=pitch_detection_interval,
+        imgsz=imgsz,
+    )
+    vision_core.load_models()
+    emit_radar_log(log_callback, 'shared vision core ready')
 
     foul_detector = None
     if foul_checkpoint_path is not None:
@@ -172,63 +186,24 @@ def iter_radar_analysis(
         foul_detector = FoulDetector(checkpoint_path=foul_checkpoint_path, device=device)
         emit_radar_log(log_callback, 'foul detection model ready')
 
-    emit_radar_log(log_callback, 'collecting player crops for team classifier')
-    frame_generator = sv.get_video_frames_generator(
-        source_path=source_video_path, stride=STRIDE
-    )
-    crops = []
-    sampled_frames = 0
-    for frame in tqdm(frame_generator, desc='collecting crops'):
-        sampled_frames += 1
-        result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
-        crops += get_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
-    emit_radar_log(
-        log_callback,
-        f'collected {len(crops)} player crops from {sampled_frames} sampled frames',
-    )
-
-    emit_radar_log(log_callback, 'fitting team classifier')
-    team_classifier = TeamClassifier(device=device)
-    team_classifier.fit(crops)
-    emit_radar_log(log_callback, 'team classifier ready')
-
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
-    tracker = sv.ByteTrack(minimum_consecutive_frames=3)
 
     # Circular buffer of 3 frames for motion mask computation (prev, curr, next).
     _frame_buffer: List[Optional[np.ndarray]] = [None, None, None]
     _buffer_head: int = 0
 
     for frame_index, frame in enumerate(frame_generator, start=1):
-        result = pitch_detection_model(frame, verbose=False)[0]
-        keypoints = sv.KeyPoints.from_ultralytics(result)
-        result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
-        detections = tracker.update_with_detections(detections)
-
-        players = detections[detections.class_id == PLAYER_CLASS_ID]
-        crops = get_crops(frame, players)
-        players_team_id = team_classifier.predict(crops)
-
-        goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
-        goalkeepers_team_id = resolve_goalkeepers_team_id(
-            players, players_team_id, goalkeepers
-        )
-
-        referees = detections[detections.class_id == REFEREE_CLASS_ID]
-
-        merged_detections = sv.Detections.merge([players, goalkeepers, referees])
-        color_lookup = np.array(
-            players_team_id.tolist()
-            + goalkeepers_team_id.tolist()
-            + [REFEREE_CLASS_ID] * len(referees)
-        )
-        projection = projection_engine.update(frame=frame, keypoints=keypoints)
+        vision_frame = vision_core.process(frame, frame_index)
+        detections = vision_frame.tracked_detections
+        projection = vision_frame.projection
+        color_lookup = vision_frame.color_lookup
+        players = detections
+        goalkeepers = detections[:0]
+        referees = detections[:0]
 
         foul_prediction = None
         if foul_detector is not None:
-            foul_prediction = foul_detector.update(frame)
+            foul_prediction = foul_detector.update(vision_frame.undistorted_frame)
 
         # Compute foul location: derive from motion mask centroid projected through homography.
         foul_location: Optional[np.ndarray] = None
@@ -244,7 +219,9 @@ def iter_radar_analysis(
                 next_idx = (_buffer_head + 1) % 3
                 prev_frame = _frame_buffer[prev_idx]
                 next_frame = _frame_buffer[next_idx]
-                motion_mask = motion_foul_region_mask(frame, prev_frame, next_frame)
+                motion_mask = motion_foul_region_mask(
+                    vision_frame.undistorted_frame, prev_frame, next_frame
+                )
                 if motion_mask is not None:
                     centroid = compute_motion_centroid(motion_mask)
                     if centroid is not None and projection.homography is not None:
@@ -259,14 +236,14 @@ def iter_radar_analysis(
                                 )
 
         tracked_frame = render_tracked_frame(
-            frame=frame,
-            detections=merged_detections,
+            frame=vision_frame.undistorted_frame,
+            detections=detections,
             color_lookup=color_lookup,
             projection=projection,
         )
 
         radar_frame = render_radar(
-            detections=merged_detections,
+            detections=detections,
             projection=projection,
             color_lookup=color_lookup,
             foul_location=foul_location,
@@ -276,12 +253,14 @@ def iter_radar_analysis(
             emit_radar_log(log_callback, f'frame={frame_index} radar projection unavailable')
         elif projection.homography_status == 'stale':
             emit_radar_log(log_callback, f'frame={frame_index} reusing stale homography')
+        elif projection.homography_status == 'reused':
+            emit_radar_log(log_callback, f'frame={frame_index} reusing homography')
 
         update = RadarFrameData(
             frame_index=frame_index,
             tracked_frame=tracked_frame,
             radar_frame=radar_frame,
-            detections_total=len(merged_detections),
+            detections_total=len(detections),
             player_count=len(players),
             goalkeeper_count=len(goalkeepers),
             referee_count=len(referees),
@@ -294,7 +273,7 @@ def iter_radar_analysis(
         yield update
 
         # Update circular frame buffer for next iteration's motion mask.
-        _frame_buffer[_buffer_head] = frame.copy()
+        _frame_buffer[_buffer_head] = vision_frame.undistorted_frame.copy()
         _buffer_head = (_buffer_head + 1) % 3
 
 
@@ -302,11 +281,25 @@ def run_radar(
     source_video_path: str,
     device: str,
     foul_checkpoint_path: Optional[str] = None,
+    player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
+    pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
+    camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    enable_undistortion: bool = True,
+    calibration_alpha: float = 0.0,
+    pitch_detection_interval: int = 5,
+    imgsz: int = 640,
 ) -> Iterator[np.ndarray]:
     for update in iter_radar_analysis(
         source_video_path=source_video_path,
         device=device,
         foul_checkpoint_path=foul_checkpoint_path,
+        player_model_path=player_model_path,
+        pitch_model_path=pitch_model_path,
+        camera_calibration_path=camera_calibration_path,
+        enable_undistortion=enable_undistortion,
+        calibration_alpha=calibration_alpha,
+        pitch_detection_interval=pitch_detection_interval,
+        imgsz=imgsz,
     ):
         combined = overlay_radar_on_frame(
             tracked_frame=update.tracked_frame,

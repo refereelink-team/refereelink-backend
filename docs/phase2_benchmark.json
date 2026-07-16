@@ -1,0 +1,12 @@
+{
+  "frames": 300,
+  "elapsed_ms": 4.947,
+  "component_fps": 60644.35,
+  "ball_detection_interval": 2,
+  "ball_detection_count": 151,
+  "ball_predicted_frames": 149,
+  "ball_available_ratio": 1.0,
+  "semantic_interval": 5,
+  "semantic_inference_count": 61,
+  "semantic_label_switches": 0
+}

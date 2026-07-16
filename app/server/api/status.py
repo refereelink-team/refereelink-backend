@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from app.state.models import PipelineConfig
 from app.state.store import StateStore
 
 router = APIRouter()
@@ -20,10 +19,14 @@ async def get_status(request: Request) -> dict:
         "source_status": store.source_status.value,
         "metrics": store.metrics.model_dump(),
         "team_classifier_ready": getattr(
-            getattr(request.app.state, "pipeline", None),
-            "_team_classifier",
-            None,
-        ) is not None,
+            getattr(
+                getattr(getattr(request.app.state, "pipeline", None), "_semantic_manager", None),
+                "team_classifier",
+                None,
+            ),
+            "fitted",
+            False,
+        ),
     }
 
 

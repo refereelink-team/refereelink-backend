@@ -29,6 +29,11 @@ import cv2
 import numpy as np
 import supervision as sv
 
+from app.constants.paths import (
+    CAMERA_CALIBRATION_PATH,
+    PITCH_DETECTION_MODEL_PATH,
+    PLAYER_DETECTION_MODEL_PATH,
+)
 
 QML_PATH = Path(__file__).with_name('radar_dashboard.qml')
 LOG_BUFFER_SIZE = 14
@@ -188,6 +193,13 @@ class RadarDashboardWorker(Thread):
         device: str,
         event_queue: Queue,
         foul_checkpoint_path: Optional[str] = None,
+        player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
+        pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
+        camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+        enable_undistortion: bool = True,
+        calibration_alpha: float = 0.0,
+        pitch_detection_interval: int = 5,
+        imgsz: int = 640,
     ) -> None:
         super().__init__(daemon=True)
         self.source_video_path = source_video_path
@@ -195,6 +207,13 @@ class RadarDashboardWorker(Thread):
         self.device = device
         self.event_queue = event_queue
         self.foul_checkpoint_path = foul_checkpoint_path
+        self.player_model_path = player_model_path
+        self.pitch_model_path = pitch_model_path
+        self.camera_calibration_path = camera_calibration_path
+        self.enable_undistortion = enable_undistortion
+        self.calibration_alpha = calibration_alpha
+        self.pitch_detection_interval = pitch_detection_interval
+        self.imgsz = imgsz
         self.stop_event = Event()
         self.log_lines: List[str] = []
 
@@ -217,6 +236,13 @@ class RadarDashboardWorker(Thread):
                     device=self.device,
                     log_callback=self.append_log,
                     foul_checkpoint_path=self.foul_checkpoint_path,
+                    player_model_path=self.player_model_path,
+                    pitch_model_path=self.pitch_model_path,
+                    camera_calibration_path=self.camera_calibration_path,
+                    enable_undistortion=self.enable_undistortion,
+                    calibration_alpha=self.calibration_alpha,
+                    pitch_detection_interval=self.pitch_detection_interval,
+                    imgsz=self.imgsz,
                 ):
                     if self.stop_event.is_set():
                         break
@@ -310,6 +336,13 @@ if HAVE_PYSIDE6:
             device: str,
             frame_provider: 'RadarFrameProvider',
             foul_checkpoint_path: Optional[str] = None,
+            player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
+            pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
+            camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+            enable_undistortion: bool = True,
+            calibration_alpha: float = 0.0,
+            pitch_detection_interval: int = 5,
+            imgsz: int = 640,
         ) -> None:
             super().__init__()
             self.frame_provider = frame_provider
@@ -320,6 +353,13 @@ if HAVE_PYSIDE6:
                 device=device,
                 event_queue=self.event_queue,
                 foul_checkpoint_path=foul_checkpoint_path,
+                player_model_path=player_model_path,
+                pitch_model_path=pitch_model_path,
+                camera_calibration_path=camera_calibration_path,
+                enable_undistortion=enable_undistortion,
+                calibration_alpha=calibration_alpha,
+                pitch_detection_interval=pitch_detection_interval,
+                imgsz=imgsz,
             )
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.drain_events)
@@ -409,6 +449,13 @@ def run_radar_dashboard(
     target_video_path: str,
     device: str,
     foul_checkpoint_path: Optional[str] = None,
+    player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
+    pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
+    camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    enable_undistortion: bool = True,
+    calibration_alpha: float = 0.0,
+    pitch_detection_interval: int = 5,
+    imgsz: int = 640,
 ) -> None:
     if not HAVE_PYSIDE6:
         raise RuntimeError(
@@ -426,6 +473,13 @@ def run_radar_dashboard(
         device=device,
         frame_provider=frame_provider,
         foul_checkpoint_path=foul_checkpoint_path,
+        player_model_path=player_model_path,
+        pitch_model_path=pitch_model_path,
+        camera_calibration_path=camera_calibration_path,
+        enable_undistortion=enable_undistortion,
+        calibration_alpha=calibration_alpha,
+        pitch_detection_interval=pitch_detection_interval,
+        imgsz=imgsz,
     )
 
     engine.addImageProvider('radarFrames', frame_provider)

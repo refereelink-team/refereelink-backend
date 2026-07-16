@@ -45,10 +45,12 @@ class WebSocketPublisher:
 
     async def push_loop(self, stop_event: asyncio.Event) -> None:
         last_metrics_push = 0.0
+        last_frame_id: int | None = None
         while not stop_event.is_set():
             frame_state = self._store.latest_frame_state
-            if frame_state is not None:
+            if frame_state is not None and frame_state.frame_id != last_frame_id:
                 await self.broadcast(frame_state.model_dump())
+                last_frame_id = frame_state.frame_id
 
             now = asyncio.get_event_loop().time()
             if now - last_metrics_push >= METRICS_INTERVAL_SEC:

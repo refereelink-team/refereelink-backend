@@ -99,3 +99,21 @@ def test_pitch_projection_engine_reuses_stale_homography_without_showing_missing
     assert second_projection.homography_status == 'stale'
     assert second_projection.available
     assert second_projection.tracking_observations == []
+
+
+def test_pitch_projection_engine_reuse_expires_after_half_second() -> None:
+    engine = PitchProjectionEngine(config=CONFIG, fps=25.0)
+    inlier_indices = [0, 5, 13, 16, 24, 29]
+    assignments = {
+        index: (_image_point_from_world(REFERENCES[index].world_xy), 0.95)
+        for index in inlier_indices
+    }
+    frame = _make_frame_with_points([point for point, _ in assignments.values()])
+    engine.update(frame=frame, keypoints=_make_keypoints(assignments))
+
+    reused = [engine.reuse(frame) for _ in range(engine.max_stale_frames)]
+    expired = engine.reuse(frame)
+
+    assert all(result.homography_status == "reused" for result in reused)
+    assert expired.homography_status == "unavailable"
+    assert not expired.available

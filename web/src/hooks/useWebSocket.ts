@@ -14,6 +14,7 @@ export function useWebSocket() {
     addEvent,
     setWsConnected,
     setSourceStatus,
+    setPipelineRunning,
     addLog,
   } = useDashboardStore();
 
@@ -43,6 +44,7 @@ export function useWebSocket() {
         const msg: WSMessage = JSON.parse(event.data);
         if (msg.type === 'frame_state') {
           setFrameState(msg as FrameState);
+          setPipelineRunning(true);  // receiving frames means pipeline is running
           for (const ev of (msg as FrameState).events) {
             addEvent(ev);
           }

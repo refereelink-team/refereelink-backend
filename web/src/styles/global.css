@@ -263,12 +263,89 @@ body {
 }
 
 /* Control */
-.control-buttons {
+.control-body {
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 8px 12px;
   flex: 1;
+}
+
+.control-row {
+  display: flex;
+  gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.control-label {
+  font-size: 9px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+}
+
+.control-hint {
+  font-size: 8px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.control-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 5px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+}
+
+.control-input:focus {
+  border-color: var(--accent);
+}
+
+.control-input:disabled {
+  opacity: 0.6;
+}
+
+.control-select {
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 10px;
+  outline: none;
+}
+
+.control-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.control-checkbox input {
+  cursor: pointer;
+}
+
+.control-error {
+  color: var(--accent-red);
+  font-size: 10px;
 }
 
 .btn {
@@ -285,8 +362,13 @@ body {
   transition: background 0.15s;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   background: var(--border-color);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-start {
@@ -302,6 +384,32 @@ body {
 .btn-action {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Video overlay */
+.video-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--text-primary);
+  padding: 10px 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.video-container {
+  position: relative;
+  flex: 1;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
 }
 
 /* Log */

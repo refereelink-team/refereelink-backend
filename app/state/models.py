@@ -10,6 +10,14 @@ from pydantic import BaseModel, Field
 
 class HomographyStatus(str, Enum):
     FRESH = "fresh"
+    REUSED = "reused"
+    STALE = "stale"
+    UNAVAILABLE = "unavailable"
+
+
+class BallStatus(str, Enum):
+    FRESH = "fresh"
+    PREDICTED = "predicted"
     STALE = "stale"
     UNAVAILABLE = "unavailable"
 
@@ -18,6 +26,7 @@ class PlayerRole(str, Enum):
     PLAYER = "player"
     GOALKEEPER = "goalkeeper"
     REFEREE = "referee"
+    UNKNOWN = "unknown"
 
 
 class SourceStatus(str, Enum):
@@ -34,6 +43,23 @@ class PlayerState(BaseModel):
     field_x: Optional[float] = None
     field_y: Optional[float] = None
     confidence: float
+    role_confidence: float = 0.0
+    team_confidence: float = 0.0
+    semantic_status: str = "unknown"
+    velocity_x: Optional[float] = None
+    velocity_y: Optional[float] = None
+
+
+class BallState(BaseModel):
+    status: BallStatus = BallStatus.UNAVAILABLE
+    image_x: Optional[float] = None
+    image_y: Optional[float] = None
+    field_x: Optional[float] = None
+    field_y: Optional[float] = None
+    velocity_x: Optional[float] = None
+    velocity_y: Optional[float] = None
+    confidence: float = 0.0
+    age_frames: int = 0
 
 
 class GameEvent(BaseModel):
@@ -47,6 +73,8 @@ class GameEvent(BaseModel):
     field_y: Optional[float] = None
     reviewed: bool = False
     foul_details: Optional[dict[str, Any]] = None
+    involved_track_ids: list[int] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class FrameState(BaseModel):
@@ -57,6 +85,8 @@ class FrameState(BaseModel):
     processing_fps: float = 0.0
     homography_status: HomographyStatus = HomographyStatus.UNAVAILABLE
     players: list[PlayerState] = Field(default_factory=list)
+    ball: Optional[BallState] = None
+    possession_track_id: Optional[int] = None
     events: list[GameEvent] = Field(default_factory=list)
 
 
@@ -72,6 +102,20 @@ class MetricsSnapshot(BaseModel):
     source_status: SourceStatus = SourceStatus.DISCONNECTED
     memory_mb: float = 0.0
     gpu_memory_mb: Optional[float] = None
+    player_inference_latency_ms: float = 0.0
+    pitch_inference_latency_ms: float = 0.0
+    pitch_detection_count: int = 0
+    homography_reuse_ratio: float = 0.0
+    homography_available_ratio: float = 0.0
+    track_id_interruptions: int = 0
+    semantic_inference_count: int = 0
+    semantic_label_switches: int = 0
+    ball_detection_count: int = 0
+    ball_predicted_frames: int = 0
+    ball_available_ratio: float = 0.0
+    jpeg_frames_encoded: int = 0
+    jpeg_encode_latency_ms: float = 0.0
+    foul_inference_count: int = 0
 
 
 class PipelineConfig(BaseModel):
@@ -85,6 +129,22 @@ class PipelineConfig(BaseModel):
     show_2d_projection: bool = True
     foul_confidence_threshold: float = 0.48
     device: str = "cpu"
+    inference_backend: str = "auto"
+    player_model_path: str = "assets/weights/yolo11s.pt"
+    pitch_model_path: str = "assets/weights/football-pitch-detection.pt"
+    role_model_path: str = "assets/weights/player-role-yolo11n.pt"
+    team_classifier_path: Optional[str] = None
+    ball_model_path: str = "assets/weights/football-ball-detection.pt"
+    enable_ball: bool = True
+    role_detection_interval: int = Field(3, ge=1)
+    team_classification_interval: int = Field(5, ge=1)
+    ball_detection_interval: int = Field(2, ge=1)
+    ball_max_prediction_frames: int = Field(8, ge=0)
+    camera_calibration_path: str = "assets/calibration/camera.npz"
+    enable_undistortion: bool = True
+    calibration_alpha: float = Field(0.0, ge=0.0, le=1.0)
+    pitch_detection_interval: int = Field(5, ge=1)
+    imgsz: int = Field(640, ge=32)
 
 
 class PipelineCommand(BaseModel):

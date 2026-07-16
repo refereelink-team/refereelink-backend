@@ -1,15 +1,22 @@
 import inspect
-from typing import Iterator
+from typing import Iterator, Optional
 
 import numpy as np
 import supervision as sv
 from ultralytics import YOLO
 
-from app.constants.paths import BALL_DETECTION_MODEL_PATH
+from app.constants.paths import CAMERA_CALIBRATION_PATH, BALL_DETECTION_MODEL_PATH
+from app.geometry.camera import build_undistorter
 from app.tracking.ball import BallAnnotator, BallTracker
 
 
-def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarray]:
+def run_ball_detection(
+    source_video_path: str,
+    device: str,
+    camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    enable_undistortion: bool = True,
+    calibration_alpha: float = 0.0,
+) -> Iterator[np.ndarray]:
     """
     Run ball detection on a video and yield annotated frames.
 
@@ -21,6 +28,11 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
         Iterator[np.ndarray]: Iterator over annotated frames.
     """
     ball_detection_model = YOLO(BALL_DETECTION_MODEL_PATH).to(device=device)
+    undistorter = build_undistorter(
+        calibration_path=camera_calibration_path,
+        enabled=enable_undistortion,
+        alpha=calibration_alpha,
+    )
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     ball_tracker = BallTracker(buffer_size=20)
     ball_annotator = BallAnnotator(radius=6, buffer_size=10)
@@ -42,8 +54,9 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
     slicer = sv.InferenceSlicer(**slicer_kwargs)
 
     for frame in frame_generator:
-        detections = slicer(frame).with_nms(threshold=0.1)
+        undistorted_frame = undistorter.apply(frame)
+        detections = slicer(undistorted_frame).with_nms(threshold=0.1)
         detections = ball_tracker.update(detections)
-        annotated_frame = frame.copy()
+        annotated_frame = undistorted_frame.copy()
         annotated_frame = ball_annotator.annotate(annotated_frame, detections)
         yield annotated_frame

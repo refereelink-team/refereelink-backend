@@ -16,12 +16,21 @@ from fastapi.responses import StreamingResponse
 from app.pipeline.buffer import PipelineMode
 from app.pipeline.engine import InferencePipeline
 from app.pipeline.source import create_video_source
+from app.constants.paths import (
+    BALL_DETECTION_MODEL_PATH,
+    CAMERA_CALIBRATION_PATH,
+    PITCH_DETECTION_MODEL_PATH,
+    PLAYER_DETECTION_MODEL_PATH,
+    ROLE_DETECTION_MODEL_PATH,
+    TEAM_CLASSIFIER_PATH,
+)
 from app.server.api.health import router as health_router
 from app.server.api.status import router as status_router
 from app.server.api.events import router as events_router
 from app.server.api.pipeline import router as pipeline_router
 from app.server.ws.state import router as ws_router
 from app.services.publisher import WebSocketPublisher
+from app.state.models import SourceStatus
 from app.state.store import StateStore
 
 logging.basicConfig(
@@ -33,36 +42,138 @@ logger = logging.getLogger(__name__)
 _store = StateStore()
 _publisher = WebSocketPublisher(_store)
 _pipeline: Optional[InferencePipeline] = None
+_pipeline_lock = threading.Lock()
+_device = "cpu"
+_foul_checkpoint_path: Optional[str] = None
+
+
+def _put_placeholder(text: str) -> None:
+    """Write a black placeholder frame with text into the store so the
+    MJPEG endpoint always has something to serve."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(
+        frame, text, (40, 240),
+        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180, 180, 180), 2, cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame, "Configure a video source and press START", (40, 280),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120, 120, 120), 1, cv2.LINE_AA,
+    )
+    _store.publish_raw_frame(frame)
 
 
 def _generate_mjpeg() -> iter:
-    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-    no_frame_wait = 0
-    while _store.pipeline_running or no_frame_wait < 100:
-        raw = getattr(_store, '_latest_raw_frame', None)
-        if raw is None:
-            no_frame_wait += 1
+    while True:
+        jpeg = _store.latest_jpeg_frame
+        if jpeg is None:
+            _put_placeholder("NO VIDEO SOURCE")
+            jpeg = _store.latest_jpeg_frame
+        if jpeg is None:
             time.sleep(0.05)
             continue
-        no_frame_wait = 0
-        _, jpeg = cv2.imencode(".jpg", raw, encode_params)
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n"
-            + jpeg.tobytes()
+            + jpeg
             + b"\r\n"
         )
         time.sleep(1.0 / 30.0)
 
 
+def create_pipeline(
+    video_source: str,
+    device: str = "cpu",
+    inference_backend: str = "auto",
+    enable_foul_detection: bool = False,
+    foul_checkpoint_path: Optional[str] = None,
+    foul_confidence_threshold: float = 0.48,
+    player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
+    pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
+    camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    enable_undistortion: bool = True,
+    calibration_alpha: float = 0.0,
+    pitch_detection_interval: int = 5,
+    imgsz: int = 640,
+    ball_model_path: str = BALL_DETECTION_MODEL_PATH,
+    enable_ball: bool = True,
+    ball_detection_interval: int = 2,
+    ball_max_prediction_frames: int = 8,
+    role_model_path: str = ROLE_DETECTION_MODEL_PATH,
+    team_classifier_path: Optional[str] = TEAM_CLASSIFIER_PATH,
+    role_detection_interval: int = 3,
+    team_classification_interval: int = 5,
+) -> InferencePipeline:
+    """Factory used by both CLI startup and the REST API to build a
+    pipeline bound to the shared store."""
+    return InferencePipeline(
+        source=create_video_source(video_source, store=_store),
+        store=_store,
+        device=device,
+        inference_backend=inference_backend,
+        enable_foul_detection=enable_foul_detection,
+        foul_checkpoint_path=foul_checkpoint_path,
+        foul_confidence_threshold=foul_confidence_threshold,
+        mode=PipelineMode.REALTIME,
+        player_model_path=player_model_path,
+        pitch_model_path=pitch_model_path,
+        camera_calibration_path=camera_calibration_path,
+        enable_undistortion=enable_undistortion,
+        calibration_alpha=calibration_alpha,
+        pitch_detection_interval=pitch_detection_interval,
+        imgsz=imgsz,
+        ball_model_path=ball_model_path,
+        enable_ball=enable_ball,
+        ball_detection_interval=ball_detection_interval,
+        ball_max_prediction_frames=ball_max_prediction_frames,
+        role_model_path=role_model_path,
+        team_classifier_path=team_classifier_path,
+        role_detection_interval=role_detection_interval,
+        team_classification_interval=team_classification_interval,
+    )
+
+
+def attach_and_start_pipeline(pipeline: InferencePipeline) -> None:
+    global _pipeline
+    with _pipeline_lock:
+        if _pipeline is not None:
+            try:
+                _pipeline.stop()
+            except Exception:
+                pass
+        _pipeline = pipeline
+        app.state.pipeline = _pipeline
+    _store.pipeline_running = True
+    try:
+        pipeline.start()
+    except Exception:
+        _store.pipeline_running = False
+        raise
+
+
+def stop_and_clear_pipeline() -> None:
+    global _pipeline
+    with _pipeline_lock:
+        if _pipeline is not None:
+            try:
+                _pipeline.stop()
+            except Exception:
+                pass
+            _pipeline = None
+        app.state.pipeline = None
+    _store._latest_raw_frame = None  # type: ignore[attr-defined]
+    _store._jpeg_frame.clear()
+    _store.source_status = SourceStatus.DISCONNECTED
+    _store.pipeline_running = False
+    _put_placeholder("PIPELINE STOPPED")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Server starting...")
+    _put_placeholder("SERVER READY")
     yield
     logger.info("Server shutting down...")
-    if _pipeline is not None:
-        _pipeline.stop()
-    _store.pipeline_running = False
+    stop_and_clear_pipeline()
 
 
 app = FastAPI(title="Soccer Analysis Server", lifespan=lifespan)
@@ -78,6 +189,9 @@ app.add_middleware(
 app.state.store = _store
 app.state.publisher = _publisher
 app.state.pipeline = None
+app.state.create_pipeline = create_pipeline
+app.state.attach_and_start_pipeline = attach_and_start_pipeline
+app.state.stop_and_clear_pipeline = stop_and_clear_pipeline
 
 app.include_router(health_router)
 app.include_router(status_router)
@@ -95,26 +209,75 @@ async def video_stream() -> StreamingResponse:
 
 
 def main() -> None:
+    global _device
+
     parser = argparse.ArgumentParser(description="Soccer Analysis Server")
-    parser.add_argument("--video_source", type=str, required=True,
-                        help="Video file path or RTSP URL")
+    parser.add_argument("--video_source", type=str, default=None,
+                        help="Video file path or RTSP URL. If omitted, the "
+                             "server starts idle and waits for a source "
+                             "from the web UI.")
     parser.add_argument("--device", type=str, default="cpu",
                         help="Device for inference (cpu, cuda)")
+    parser.add_argument(
+        "--inference_backend",
+        type=str,
+        choices=("auto", "pytorch", "onnx", "tensorrt"),
+        default="auto",
+    )
+    parser.add_argument("--player_model_path", type=str, default=PLAYER_DETECTION_MODEL_PATH)
+    parser.add_argument("--pitch_model_path", type=str, default=PITCH_DETECTION_MODEL_PATH)
+    parser.add_argument("--camera_calibration_path", type=str, default=CAMERA_CALIBRATION_PATH)
+    parser.add_argument("--disable_undistortion", action="store_false", dest="enable_undistortion")
+    parser.set_defaults(enable_undistortion=True)
+    parser.add_argument("--calibration_alpha", type=float, default=0.0)
+    parser.add_argument("--pitch_detection_interval", type=int, default=5)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--ball_model_path", type=str, default=BALL_DETECTION_MODEL_PATH)
+    parser.add_argument("--disable_ball", action="store_false", dest="enable_ball")
+    parser.set_defaults(enable_ball=True)
+    parser.add_argument("--ball_detection_interval", type=int, default=2)
+    parser.add_argument("--ball_max_prediction_frames", type=int, default=8)
+    parser.add_argument("--role_model_path", type=str, default=ROLE_DETECTION_MODEL_PATH)
+    parser.add_argument("--team_classifier_path", type=str, default=None)
+    parser.add_argument("--role_detection_interval", type=int, default=3)
+    parser.add_argument("--team_classification_interval", type=int, default=5)
+    parser.add_argument("--enable_foul_detection", action="store_true")
+    parser.add_argument("--foul_checkpoint_path", type=str, default=None)
+    parser.add_argument("--foul_confidence_threshold", type=float, default=0.48)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--foul_checkpoint_path", type=str, default=None)
     args = parser.parse_args()
 
-    global _pipeline
-    _pipeline = InferencePipeline(
-        source=create_video_source(args.video_source, store=_store),
-        store=_store,
-        device=args.device,
-        mode=PipelineMode.REALTIME,
-        foul_checkpoint_path=args.foul_checkpoint_path,
-    )
-    app.state.pipeline = _pipeline
-    _pipeline.start()
+    _device = args.device
+
+    if args.video_source:
+        pipeline = create_pipeline(
+            args.video_source,
+            device=_device,
+            inference_backend=args.inference_backend,
+            enable_foul_detection=args.enable_foul_detection,
+            foul_checkpoint_path=args.foul_checkpoint_path,
+            foul_confidence_threshold=args.foul_confidence_threshold,
+            player_model_path=args.player_model_path,
+            pitch_model_path=args.pitch_model_path,
+            camera_calibration_path=args.camera_calibration_path,
+            enable_undistortion=args.enable_undistortion,
+            calibration_alpha=args.calibration_alpha,
+            pitch_detection_interval=args.pitch_detection_interval,
+            imgsz=args.imgsz,
+            ball_model_path=args.ball_model_path,
+            enable_ball=args.enable_ball,
+            ball_detection_interval=args.ball_detection_interval,
+            ball_max_prediction_frames=args.ball_max_prediction_frames,
+            role_model_path=args.role_model_path,
+            team_classifier_path=args.team_classifier_path,
+            role_detection_interval=args.role_detection_interval,
+            team_classification_interval=args.team_classification_interval,
+        )
+        attach_and_start_pipeline(pipeline)
+    else:
+        logger.info("No --video_source provided; server starting idle. "
+                    "Configure a source from the web dashboard.")
 
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

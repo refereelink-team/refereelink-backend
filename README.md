@@ -1,10 +1,14 @@
 # Soccer Analysis Web Dashboard
 
 Real-time computer-vision dashboard for football (soccer) matches. The
-Python pipeline runs YOLO player/ball/pitch detection, ByteTrack tracking,
-team classification, and homography-based pitch projection, and pushes
-structured state to a React web dashboard over WebSocket. Live video is
-delivered as a low-latency MJPEG stream from a dedicated FastAPI endpoint.
+first-stage Python pipeline rectifies wide-angle frames, runs official
+YOLOv11 person detection, ByteTrack tracking, low-frequency pitch keypoint
+detection, RANSAC homography reuse, and bottom-center field projection. It
+pushes structured state to a React web dashboard over WebSocket. Live video
+is delivered as a low-latency MJPEG stream from a dedicated FastAPI endpoint.
+The phase-two entity layer adds optional trajectory-level role/team semantics,
+bounded football prediction, field-space ball coordinates, and a possession
+candidate without changing the phase-one UNKNOWN fallback.
 
 > The original PySide6/QML dashboard is preserved under `--mode
 > RADAR_DASHBOARD_LEGACY`. The web dashboard is the recommended and only
@@ -30,17 +34,14 @@ delivered as a low-latency MJPEG stream from a dedicated FastAPI endpoint.
                        ▼
 ┌──────────────────────────────────────────────────────────────┐
 │              InferencePipeline                                │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
-│  │ PitchDetect │  │ PlayerDetect  │  │ FoulDetect       │    │
-│  │ (YOLO)      │  │ (YOLO)        │  │ (MVFoul rolling) │    │
-│  └──────┬──────┘  └──────┬───────┘  └────────┬─────────┘    │
-│         ▼                ▼                    │               │
-│  ┌──────────────┐  ┌──────────────┐           │               │
-│  │ Projection   │  │ ByteTrack    │           │               │
-│  │ Engine       │  │ + OnlineTeam │           │               │
-│  │              │  │ Classifier   │           │               │
-│  └──────┬───────┘  └──────┬───────┘           │               │
-│         └────────────────┼────────────────────┘               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │ CameraUndistorter → VisionCore                         │ │
+│  │ YOLOv11 person → ByteTrack                             │ │
+│  │ pitch keypoints every N frames                         │ │
+│  │ RANSAC homography / history reuse                      │ │
+│  │ bottom-center → field coordinates                      │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│  Ball/Foul modes reuse CameraUndistorter and keep own models │
 │                          ▼                                   │
 │                   FrameState (Pydantic)                      │
 └──────────────────────┬───────────────────────────────────────┘
@@ -105,18 +106,17 @@ web/              React + TypeScript + Vite dashboard
 ├── package.json
 └── tsconfig.json
 
-tests/            62 tests (45 new + 17 existing)
+tests/            104 tests
 ```
 
 ## Install
 
 ```bash
-# 1. Create a Python virtualenv with uv
-uv venv .venv
-source .venv/bin/activate
+# 1. Create/sync the project environment from pyproject.toml and uv.lock
+uv sync --dev
 
-# 2. Install the project
-uv pip install -e ".[tests]"
+# Optional: enable the legacy PySide6/QML dashboard
+uv sync --dev --extra desktop
 
 # 3. Install JavaScript dependencies for the dashboard
 cd web && npm install && cd ..
@@ -128,10 +128,11 @@ cd web && npm install && cd ..
 # Download model weights and sample videos (optional)
 ./tools/setup_assets.sh
 
-# Start the FastAPI backend (loads YOLO + SigLIP for team classification)
+# Start the FastAPI backend (YOLOv11 person + pitch keypoint model)
 .venv/bin/python -m app.server.main \
     --video_source assets/data/smoke_test.mp4 \
-    --device cpu
+    --device cpu \
+    --inference_backend auto
 
 # In another terminal: launch the React dev server
 cd web && npm run dev
@@ -145,6 +146,10 @@ For RTSP sources:
     --video_source rtsp://192.168.1.100:554/stream \
     --device cuda
 ```
+
+`--inference_backend` accepts `auto`, `pytorch`, `onnx`, or `tensorrt`.
+The backend is inferred from `.pt`, `.onnx`, and `.engine` model suffixes when
+set to `auto`.
 
 The frontend dev server proxies `/api`, `/ws`, and `/video` to the
 backend on port 8000.
@@ -181,16 +186,16 @@ cd web && npm run build
 | `PITCH_DETECTION`         | YOLO pitch keypoint detection only |
 | `BALL_DETECTION`          | YOLO ball detection with slicer |
 | `PLAYER_TRACKING`         | YOLO + ByteTrack |
-| `TEAM_CLASSIFICATION`     | YOLO + ByteTrack + offline team clustering |
+| `TEAM_CLASSIFICATION`     | Shared YOLOv11 person + ByteTrack view; role/team remain UNKNOWN/-1 in phase 1 |
 | `FOUL_DETECTION`          | MVFoul rolling window with HUD overlay |
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
-62 tests cover Pydantic models, the bounded buffer (realtime drop
+Tests cover camera calibration, VisionCore scheduling/projection, trajectory semantics, ball prediction and pipeline entity integration, Pydantic models, the bounded buffer (realtime drop
 + offline block), the video source abstraction (factory routing,
 reconnect state), the StateStore and EventBus (thread safety,
 bounded buffers, exception isolation), the FastAPI REST endpoints,

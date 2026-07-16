@@ -11,6 +11,7 @@ from app.state.models import (
     PipelineConfig,
     SourceStatus,
 )
+from app.services.frame_encoder import LatestJpegFrame
 
 
 MAX_EVENTS = 500
@@ -28,6 +29,8 @@ class StateStore:
         self._source_status: SourceStatus = SourceStatus.DISCONNECTED
         self._pipeline_running = False
         self._log_lines: deque[str] = deque(maxlen=MAX_LOG_LINES)
+        self._latest_raw_frame = None
+        self._jpeg_frame = LatestJpegFrame()
 
     @property
     def latest_frame_state(self) -> Optional[FrameState]:
@@ -99,6 +102,24 @@ class StateStore:
         with self._lock:
             self._log_lines.append(message)
 
+    def publish_raw_frame(self, frame) -> None:
+        """Publish a raw BGR frame and encode it once for all MJPEG clients."""
+
+        self._latest_raw_frame = frame
+        self._jpeg_frame.update(frame)
+
+    @property
+    def latest_jpeg_frame(self) -> Optional[bytes]:
+        return self._jpeg_frame.latest
+
+    @property
+    def jpeg_frames_encoded(self) -> int:
+        return self._jpeg_frame.frames_encoded
+
+    @property
+    def jpeg_encode_latency_ms(self) -> float:
+        return self._jpeg_frame.average_encode_time_ms
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
@@ -113,4 +134,6 @@ class StateStore:
                 "source_status": self._source_status.value,
                 "pipeline_running": self._pipeline_running,
                 "log_lines": list(self._log_lines),
+                "jpeg_frames_encoded": self._jpeg_frame.frames_encoded,
+                "jpeg_encode_latency_ms": self._jpeg_frame.average_encode_time_ms,
             }

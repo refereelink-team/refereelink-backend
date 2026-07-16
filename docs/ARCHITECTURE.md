@@ -35,30 +35,48 @@ or maintain the system.
 |------|---------|
 | `source.py`  | `VideoSource` abstract base + `LocalFileSource` + `RTSPSource`. The RTSP source attempts a GStreamer pipeline first (`rtspsrc latency=0`), then falls back to OpenCV/FFmpeg. The constructor is non-blocking; the first `read()` triggers the actual capture. On read failure it transparently reconnects up to 10 times. |
 | `buffer.py`  | `BoundedFrameBuffer` with two modes: `REALTIME` (drop oldest, never block) and `OFFLINE` (block producer when full). `PipelineMode` is passed in by the caller. |
-| `engine.py`  | `InferencePipeline` is the only place that runs the heavy models. It owns one `PitchProjectionEngine`, one `ByteTrack` tracker, one `OnlineTeamClassifier`, and (optionally) one `FoulDetector`. The internal thread runs `with torch.inference_mode():` for every frame and emits structured state into the `StateStore`. |
+| `engine.py`  | `InferencePipeline` delegates undistortion, official YOLOv11 person detection, ByteTrack, low-frequency pitch inference, homography reuse, and bottom-center projection to `VisionCore`. The internal thread runs `with torch.inference_mode():` and emits structured state into the `StateStore`. |
 | `recorder.py`| `VideoRecorder` (kept for the offline modes; not used by the server in the default config). |
 
-### `app/classification/online.py`
+### `app/vision/core.py`
 
-Wraps `TeamClassifier` (SigLIP + UMAP + KMeans) and adds an **incremental
-warm-up** mode:
+`VisionCore.process(frame, frame_index)` is the shared interface for all
+player/pitch modes. Official YOLOv11 weights expose only COCO `person`, so
+the output uses `role=unknown` and `team_id=-1` until custom role/team models
+are introduced. `InferencePipeline` adds an optional trajectory semantic layer:
+role-aware checkpoints and the NumPy HSV/Lab team classifier can update labels
+at a lower frequency, with bounded temporal voting and UNKNOWN fallback. Pitch
+keypoints run on frame 1 and then every configured interval (default 5); skipped
+frames reuse the last homography for at most 0.5 seconds.
 
-1. The first `warmup_frames` (default 120) are sampled at `warmup_stride`
-   (default 15) to collect player crops.
-2. A background thread fits the UMAP reducer and KMeans cluster.
-3. Before the fit completes, `predict()` returns `-1` for every player.
-4. When the fit completes, predictions switch over without a restart.
-5. A pickled `(reducer, cluster_model)` pair can be saved and loaded.
+`app/vision/ball.py` keeps the ball path separate from player ByteTrack. It
+runs the ball detector at a configured interval, uses a bounded constant-
+velocity predictor between detections, projects valid estimates through the
+current homography, and exposes `fresh`, `predicted`, or `unavailable` status.
 
-This replaces the legacy two-pass scan in
-`app/modes/team_classification.py:42-46` and `app/modes/radar.py:176-188`,
-which scanned the entire video before the first inference frame.
+### `app/events/engine.py`
+
+Consumes `FrameState` entities and emits deduplicated, explainable event
+candidates for possession changes, passes, shots and offside geometry. The
+engine is stateful but lightweight; it records involved track IDs and evidence
+fields, and deliberately does not present geometric candidates as final
+referee decisions. `FoulEventAdapter` normalizes an optional MVFoul prediction
+into the same event schema.
+
+### `app/geometry/camera.py`
+
+Loads the chessboard calibration `.npz`, scales intrinsics for proportional
+resolution changes, rejects incompatible aspect ratios, and bypasses safely
+when the calibration file is not present. All downstream modes consume the
+same rectified frame.
 
 ### `app/services/publisher.py`
 
 `WebSocketPublisher` is a thin async wrapper around a set of
 `fastapi.WebSocket` clients. `push_loop` is started per connection and
-emits a `FrameState` every ~33 ms and a `MetricsSnapshot` every 1 s.
+emits each new `FrameState` at most once per connection plus a
+`MetricsSnapshot` every 1 s. JPEG encoding happens once in the state store;
+all MJPEG clients read the latest encoded bytes.
 `handle_command_text` applies `start`, `stop`, and `update_config`
 commands.
 
@@ -73,8 +91,8 @@ frame), so it does not perform any extra decoding.
 ## Real-time vs offline
 
 - **Real-time mode** is the default. The buffer drops the oldest frame
-  when full so the display never lags behind the camera. The team
-  classifier warm-up runs concurrently in a background thread.
+  when full so the display never lags behind the camera. Phase one keeps
+  role and team fields unresolved (`UNKNOWN` and `-1`).
 - **Offline mode** blocks the producer when the buffer is full. Used
   when the caller needs every frame processed in order (e.g. training
   set generation).
@@ -92,6 +110,12 @@ Every frame carries:
   interval between model forward and result) and the running
   `end_to_end_latency_ms` (capture → processed) for the metrics
   snapshot.
+
+Phase-one and phase-two metrics additionally include player/pitch/semantic/ball inference latency,
+pitch detection count, homography reuse ratio, and homography available
+ratio, track-ID interruption count, memory, and GPU memory. `tools/benchmark_phase1.py`
+evaluates YOLOv11n/s, `imgsz=640/960`, pitch intervals `1/5/10`, and an
+undistortion-off ablation.
 
 These are **software** timestamps only. For multi-camera PTP
 synchronization, see the *Future Work* section.
@@ -114,7 +138,7 @@ require any pipeline change.
 
 ## Tests
 
-62 tests:
+The current full suite contains 104 tests:
 
 - 17 pre-existing tests for pitch config, projection, ball tracking,
   radar dashboard, runtime helpers, and the view transformer.
@@ -132,11 +156,14 @@ require any pipeline change.
   update_config command).
 - 3 smoke-integration tests (synthetic video, state pipeline,
   buffer pipeline).
+- Phase-two semantic, ball-state and entity-integration tests.
+- Phase-three event candidate and foul-adapter tests.
+- Phase-four backend adapter and shared JPEG-cache tests.
 
 Run with:
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
+uv run pytest tests/ -v
 ```
 
 ## Future work
