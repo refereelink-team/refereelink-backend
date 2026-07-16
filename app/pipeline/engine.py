@@ -80,6 +80,7 @@ class InferencePipeline:
         foul_confidence_threshold: float = 0.48,
         foul_detector: Optional[object] = None,
         frame_sink: Optional[Callable[[np.ndarray, FrameState], None]] = None,
+        frame_observer: Optional[Callable[[np.ndarray, FrameState], None]] = None,
     ) -> None:
         self._source = source
         self._store = store
@@ -106,6 +107,7 @@ class InferencePipeline:
         self._foul_checkpoint_path = foul_checkpoint_path or FOUL_MODEL_PATH
         self._foul_confidence_threshold = foul_confidence_threshold
         self._frame_sink = frame_sink
+        self._frame_observer = frame_observer
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -443,6 +445,13 @@ class InferencePipeline:
             frame_state.events.append(foul_event)
         for event in frame_state.events:
             self._store.add_event(event)
+
+        frame_observer = getattr(self, "_frame_observer", None)
+        if frame_observer is not None:
+            try:
+                frame_observer(vision_frame.undistorted_frame, frame_state)
+            except Exception as exc:
+                logger.warning("Frame observer failed; continuing pipeline: %s", exc)
 
         frame_sink = getattr(self, "_frame_sink", None)
         if frame_sink is not None:

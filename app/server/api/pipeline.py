@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.state.models import SourceStatus
@@ -44,6 +45,7 @@ class PipelineStartPayload(BaseModel):
     ball_max_prediction_frames: Optional[int] = None
     role_model_path: Optional[str] = None
     team_classifier_path: Optional[str] = None
+    team_calibration_path: Optional[str] = None
     role_detection_interval: Optional[int] = None
     team_classification_interval: Optional[int] = None
 
@@ -51,6 +53,19 @@ class PipelineStartPayload(BaseModel):
 @router.post("/api/pipeline/start")
 async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dict:
     store = get_store(request)
+    calibration = store.team_calibration
+    if store.config.require_team_calibration and not calibration.can_run:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "error",
+                "code": "TEAM_CALIBRATION_REQUIRED",
+                "detail": "complete and validate pre-match team calibration before starting",
+                "calibration_state": calibration.state.value,
+            },
+        )
+    if calibration.state.value == "ready":
+        calibration.mark_running()
     create_pipeline = getattr(request.app.state, "create_pipeline", None)
     attach_and_start = getattr(request.app.state, "attach_and_start_pipeline", None)
     current = getattr(request.app.state, "pipeline", None)
@@ -72,6 +87,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.ball_max_prediction_frames,
             payload.role_model_path,
             payload.team_classifier_path,
+            payload.team_calibration_path,
             payload.role_detection_interval,
             payload.team_classification_interval,
             payload.inference_backend,
@@ -101,6 +117,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.ball_max_prediction_frames is None
         and payload.role_model_path is None
         and payload.team_classifier_path is None
+        and payload.team_calibration_path is None
         and payload.role_detection_interval is None
         and payload.team_classification_interval is None
     ):
@@ -182,6 +199,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     if payload.team_classifier_path is not None
                     else store.config.team_classifier_path
                 ),
+                team_calibration_path=(
+                    payload.team_calibration_path
+                    if payload.team_calibration_path is not None
+                    else store.config.team_calibration_path
+                ),
                 role_detection_interval=(
                     payload.role_detection_interval
                     if payload.role_detection_interval is not None
@@ -247,6 +269,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.team_classifier_path
                     if payload.team_classifier_path is not None
                     else store.config.team_classifier_path
+                ),
+                "team_calibration_path": (
+                    payload.team_calibration_path
+                    if payload.team_calibration_path is not None
+                    else store.config.team_calibration_path
                 ),
                 "role_detection_interval": (
                     payload.role_detection_interval

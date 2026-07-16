@@ -14,6 +14,7 @@ from app.classification.team_calibration.quality import CropQualityAssessor
 from app.classification.team_calibration.roi import JerseyROIExtractor
 from app.classification.team_calibration.track_features import TrackFeatureBank
 from app.classification.team_calibration.runtime import TeamAssignmentService
+from app.classification.team_calibration.session import CalibrationState, TeamCalibrationSession
 from app.classification.team_calibration.types import (
     PlayerRole,
     TeamLabel,
@@ -21,6 +22,7 @@ from app.classification.team_calibration.types import (
     ValidationReport,
 )
 from app.classification.team_calibration.validation import CalibrationValidator
+from app.state.models import FrameState, PlayerRole as StatePlayerRole, PlayerState
 
 
 def _jersey(color: tuple[int, int, int], *, height: int = 80, width: int = 48) -> np.ndarray:
@@ -210,3 +212,52 @@ def test_team_assignment_service_keeps_feature_ema_separate_from_semantic_hyster
     )
     assert result[0].team == TeamLabel.HOME
     assert service.feature_bank.tracks[9].observation_count == 1
+
+
+def test_calibration_session_collects_labels_validates_and_persists_bundle(tmp_path: Path) -> None:
+    session = TeamCalibrationSession(
+        require_appearance=False,
+        validator=CalibrationValidator(min_tracks_per_team=3, min_samples_per_track=5),
+    )
+    session.quality_assessor = CropQualityAssessor(min_blur_score=0.0)
+    session.start(match_id="match-1", camera_id="camera-1", bundle_path=str(tmp_path / "match.npz"))
+    assert session.state == CalibrationState.CALIBRATING
+    labels = {
+        1: "home_outfield",
+        2: "home_outfield",
+        3: "home_outfield",
+        4: "away_outfield",
+        5: "away_outfield",
+        6: "away_outfield",
+    }
+    for track_id, label in labels.items():
+        session.label_track(track_id, label)
+
+    positions = {
+        track_id: (10 + ((track_id - 1) % 3) * 60, 20 + ((track_id - 1) // 3) * 100)
+        for track_id in labels
+    }
+    for frame_id in range(5):
+        frame = np.zeros((220, 220, 3), dtype=np.uint8)
+        players = []
+        for track_id, label in labels.items():
+            x, y = positions[track_id]
+            color = (0, 0, 220) if label.startswith("home") else (220, 0, 0)
+            jersey = _jersey(color)
+            frame[y:y + jersey.shape[0], x:x + jersey.shape[1]] = jersey
+            players.append(
+                PlayerState(
+                    track_id=track_id,
+                    role=StatePlayerRole.OUTFIELD,
+                    team_id=-1,
+                    confidence=0.9,
+                    bbox=(float(x), float(y), float(x + jersey.shape[1]), float(y + jersey.shape[0])),
+                )
+            )
+        session.observe_frame(frame, FrameState(frame_id=frame_id, players=players))
+
+    result = session.validate()
+    assert result["state"] == "ready"
+    assert result["ready"] is True
+    assert session.bundle is not None
+    assert (tmp_path / "match.npz").exists()

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -58,9 +56,10 @@ def test_get_events(client):
 
 def test_pipeline_start_stop(client):
     r = client.post("/api/pipeline/start", json={})
-    assert r.status_code == 200
+    assert r.status_code == 409
     status = r.json().get("status")
-    assert status in ("started", "error")  # OK if no source yet
+    assert status == "error"
+    assert r.json().get("code") == "TEAM_CALIBRATION_REQUIRED"
     r = client.post("/api/pipeline/stop")
     assert r.status_code == 200
     assert r.json().get("status") == "stopped"

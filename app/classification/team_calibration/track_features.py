@@ -38,12 +38,21 @@ class TrackFeatureBank:
             self._tracks[track_id] = current
         current.team = team if team != TeamLabel.UNKNOWN else current.team
         current.role = role if role != PlayerRole.UNKNOWN else current.role
+        if quality <= 0.0 or (color_feature is None and deep_feature is None):
+            current.last_update_frame = int(frame_index)
+            return current
         current.observation_count += 1
         current.quality_sum += quality
         current.last_update_frame = int(frame_index)
         current.color_feature = self._merge(current.color_feature, color_feature, quality)
         current.deep_feature = self._merge(current.deep_feature, deep_feature, quality)
         return current
+
+    def clear_track(self, track_id: int) -> None:
+        self._tracks.pop(int(track_id), None)
+
+    def clear(self) -> None:
+        self._tracks.clear()
 
     def remove_stale(self, frame_index: int, *, max_missing_frames: int = 90) -> list[int]:
         stale = [

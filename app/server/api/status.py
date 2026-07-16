@@ -18,15 +18,8 @@ async def get_status(request: Request) -> dict:
         "pipeline_running": store.pipeline_running,
         "source_status": store.source_status.value,
         "metrics": store.metrics.model_dump(),
-        "team_classifier_ready": getattr(
-            getattr(
-                getattr(getattr(request.app.state, "pipeline", None), "_semantic_manager", None),
-                "team_classifier",
-                None,
-            ),
-            "fitted",
-            False,
-        ),
+        "team_calibration": store.team_calibration.snapshot(),
+        "team_classifier_ready": store.team_calibration.can_run,
     }
 
 

@@ -11,6 +11,7 @@ from app.state.models import (
     PipelineConfig,
     SourceStatus,
 )
+from app.classification.team_calibration.session import TeamCalibrationSession
 from app.services.frame_encoder import LatestJpegFrame
 
 
@@ -31,6 +32,7 @@ class StateStore:
         self._log_lines: deque[str] = deque(maxlen=MAX_LOG_LINES)
         self._latest_raw_frame = None
         self._jpeg_frame = LatestJpegFrame()
+        self._team_calibration = TeamCalibrationSession()
 
     @property
     def latest_frame_state(self) -> Optional[FrameState]:
@@ -120,6 +122,10 @@ class StateStore:
     def jpeg_encode_latency_ms(self) -> float:
         return self._jpeg_frame.average_encode_time_ms
 
+    @property
+    def team_calibration(self) -> TeamCalibrationSession:
+        return self._team_calibration
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
@@ -136,4 +142,5 @@ class StateStore:
                 "log_lines": list(self._log_lines),
                 "jpeg_frames_encoded": self._jpeg_frame.frames_encoded,
                 "jpeg_encode_latency_ms": self._jpeg_frame.average_encode_time_ms,
+                "team_calibration": self._team_calibration.snapshot(),
             }

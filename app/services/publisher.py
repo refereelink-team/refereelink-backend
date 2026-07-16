@@ -46,6 +46,7 @@ class WebSocketPublisher:
     async def push_loop(self, stop_event: asyncio.Event) -> None:
         last_metrics_push = 0.0
         last_frame_id: int | None = None
+        last_calibration_snapshot: dict[str, Any] | None = None
         while not stop_event.is_set():
             frame_state = self._store.latest_frame_state
             if frame_state is not None and frame_state.frame_id != last_frame_id:
@@ -56,6 +57,12 @@ class WebSocketPublisher:
             if now - last_metrics_push >= METRICS_INTERVAL_SEC:
                 metrics = self._store.metrics
                 await self.broadcast(metrics.model_dump())
+                calibration = getattr(self._store, "team_calibration", None)
+                if calibration is not None:
+                    snapshot = calibration.snapshot()
+                    if snapshot != last_calibration_snapshot:
+                        await self.broadcast(snapshot)
+                        last_calibration_snapshot = snapshot
                 last_metrics_push = now
 
             await asyncio.sleep(PUSH_INTERVAL_SEC)
@@ -65,12 +72,27 @@ class WebSocketPublisher:
             data = json.loads(raw)
             command = data.get("command", "")
             if command == "start":
+                calibration = getattr(self._store, "team_calibration", None)
+                if (
+                    self._store.config.require_team_calibration
+                    and calibration is not None
+                    and not calibration.can_run
+                ):
+                    await websocket.send_json(
+                        {
+                            "type": "ack",
+                            "command": command,
+                            "status": "error",
+                            "code": "TEAM_CALIBRATION_REQUIRED",
+                        }
+                    )
+                    return
                 self._store.pipeline_running = True
             elif command == "stop":
                 self._store.pipeline_running = False
             elif command == "update_config":
                 params = data.get("params", {})
                 self._store.update_config(params)
-            await websocket.send_json({"type": "ack", "command": command})
+            await websocket.send_json({"type": "ack", "command": command, "status": "ok"})
         except Exception:
             pass

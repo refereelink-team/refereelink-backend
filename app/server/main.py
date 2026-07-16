@@ -28,6 +28,7 @@ from app.server.api.health import router as health_router
 from app.server.api.status import router as status_router
 from app.server.api.events import router as events_router
 from app.server.api.pipeline import router as pipeline_router
+from app.server.api.team_calibration import router as team_calibration_router
 from app.server.ws.state import router as ws_router
 from app.services.publisher import WebSocketPublisher
 from app.state.models import SourceStatus
@@ -103,6 +104,7 @@ def create_pipeline(
     team_calibration_path: Optional[str] = None,
     role_detection_interval: int = 3,
     team_classification_interval: int = 5,
+    calibration_session: Optional[object] = None,
 ) -> InferencePipeline:
     """Factory used by both CLI startup and the REST API to build a
     pipeline bound to the shared store."""
@@ -131,6 +133,11 @@ def create_pipeline(
         team_calibration_path=team_calibration_path,
         role_detection_interval=role_detection_interval,
         team_classification_interval=team_classification_interval,
+        frame_observer=(
+            getattr(calibration_session, "observe_frame", None)
+            if calibration_session is not None
+            else None
+        ),
     )
 
 
@@ -199,6 +206,7 @@ app.include_router(health_router)
 app.include_router(status_router)
 app.include_router(events_router)
 app.include_router(pipeline_router)
+app.include_router(team_calibration_router)
 app.include_router(ws_router)
 
 

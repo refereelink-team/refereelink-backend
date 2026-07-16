@@ -178,6 +178,7 @@ __pycache__/
 
 # Local workspace scratch dirs (not part of the project)
 calibration/
+/assets/calibration/team/
 core/
 examples/
 offside/
