@@ -65,6 +65,124 @@ class CameraCalibration:
         )
 
 
+@dataclass(frozen=True)
+class CameraMotionEstimate:
+    """Global image motion measured since the last pitch refresh."""
+
+    shift_x_px: float
+    shift_y_px: float
+    response: float
+    threshold_px: float
+    minimum_response: float
+
+    @property
+    def magnitude_px(self) -> float:
+        return float(np.hypot(self.shift_x_px, self.shift_y_px))
+
+    @property
+    def requires_refresh(self) -> bool:
+        return (
+            self.response >= self.minimum_response
+            and self.magnitude_px >= self.threshold_px
+        )
+
+
+class CameraMotionEstimator:
+    """Detect global pan/rotation-induced image drift cheaply.
+
+    ``phaseCorrelate`` is used against the frame saved at the last successful
+    pitch refresh.  This catches cumulative horizontal camera motion during
+    low-frequency pitch inference, so a stale homography is never reused after
+    the view has moved materially.  Player motion is treated as noise through
+    the phase-correlation response threshold.
+    """
+
+    def __init__(
+        self,
+        threshold_px: float = 6.0,
+        minimum_response: float = 0.15,
+        analysis_width: int = 320,
+    ) -> None:
+        if threshold_px <= 0:
+            raise ValueError("camera motion threshold must be positive")
+        if not 0.0 <= minimum_response <= 1.0:
+            raise ValueError("camera motion minimum response must be between 0 and 1")
+        self.threshold_px = float(threshold_px)
+        self.minimum_response = float(minimum_response)
+        self.analysis_width = max(int(analysis_width), 32)
+        self._reference_gray: Optional[np.ndarray] = None
+        self._window: Optional[np.ndarray] = None
+
+    @staticmethod
+    def _gray(frame: np.ndarray, analysis_width: int) -> tuple[np.ndarray, float]:
+        if frame.ndim == 2:
+            gray = frame
+        elif frame.ndim == 3 and frame.shape[2] >= 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            raise CameraCalibrationError("Frame must be a grayscale or BGR image")
+
+        height, width = gray.shape[:2]
+        if height <= 0 or width <= 0:
+            raise CameraCalibrationError("Frame dimensions must be positive")
+        target_width = min(width, analysis_width)
+        target_height = max(1, int(round(height * target_width / width)))
+        scale = target_width / width
+        resized = cv2.resize(gray, (target_width, target_height), interpolation=cv2.INTER_AREA)
+        return cv2.GaussianBlur(resized, (3, 3), 0).astype(np.float32), scale
+
+    def _prepare(self, frame: np.ndarray) -> tuple[np.ndarray, float]:
+        gray, scale = self._gray(frame, self.analysis_width)
+        if self._reference_gray is None or self._reference_gray.shape != gray.shape:
+            self._window = cv2.createHanningWindow(
+                (gray.shape[1], gray.shape[0]), cv2.CV_32F
+            )
+        return gray, scale
+
+    def mark_reference(self, frame: np.ndarray) -> None:
+        """Save the current frame after a successful pitch refresh."""
+
+        gray, _ = self._prepare(frame)
+        self._reference_gray = gray
+
+    def reset(self) -> None:
+        self._reference_gray = None
+        self._window = None
+
+    def measure(self, frame: np.ndarray) -> Optional[CameraMotionEstimate]:
+        """Measure drift from the last pitch-refresh reference frame."""
+
+        gray, scale = self._prepare(frame)
+        if self._reference_gray is None or self._reference_gray.shape != gray.shape:
+            self._reference_gray = gray
+            return None
+
+        if self._window is None or self._window.shape != gray.shape:
+            self._window = cv2.createHanningWindow(
+                (gray.shape[1], gray.shape[0]), cv2.CV_32F
+            )
+        try:
+            shift, response = cv2.phaseCorrelate(self._reference_gray, gray, self._window)
+        except cv2.error:
+            return CameraMotionEstimate(
+                shift_x_px=0.0,
+                shift_y_px=0.0,
+                response=0.0,
+                threshold_px=self.threshold_px,
+                minimum_response=self.minimum_response,
+            )
+
+        # The reference and current frames have the same shape here.  Use the
+        # current scale to convert the low-resolution phase shift to pixels.
+        return CameraMotionEstimate(
+            shift_x_px=float(shift[0] / max(scale, 1e-6)),
+            shift_y_px=float(shift[1] / max(scale, 1e-6)),
+            response=float(response),
+            threshold_px=self.threshold_px,
+            minimum_response=self.minimum_response,
+        )
+
+
 class CameraUndistorter:
     """Rectify frames with optional calibration and resolution-aware maps.
 

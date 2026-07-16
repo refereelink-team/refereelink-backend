@@ -18,7 +18,11 @@ from app.constants.paths import (
     PITCH_DETECTION_MODEL_PATH,
     PLAYER_DETECTION_MODEL_PATH,
 )
-from app.geometry.camera import CameraUndistorter, build_undistorter
+from app.geometry.camera import (
+    CameraMotionEstimator,
+    CameraUndistorter,
+    build_undistorter,
+)
 from app.geometry.pitch_projection import PitchProjectionEngine, PitchProjectionResult
 
 
@@ -70,6 +74,8 @@ class VisionCore:
         tracker: Optional[object] = None,
         projection_engine: Optional[PitchProjectionEngine] = None,
         inference_backend: str = "auto",
+        camera_motion_threshold_px: float = 6.0,
+        camera_motion_estimator: Optional[CameraMotionEstimator] = None,
     ) -> None:
         self.device = device
         self.fps = max(float(fps), 1.0)
@@ -81,6 +87,7 @@ class VisionCore:
         self.enable_pitch = enable_pitch
         self.person_only = person_only
         self.inference_backend = inference_backend
+        self.camera_motion_refresh_count = 0
         self._player_model = player_model
         self._pitch_model = pitch_model
         self._tracker = (
@@ -108,6 +115,9 @@ class VisionCore:
             calibration_path=camera_calibration_path,
             enabled=enable_undistortion,
             alpha=calibration_alpha,
+        )
+        self._camera_motion_estimator = camera_motion_estimator or CameraMotionEstimator(
+            threshold_px=camera_motion_threshold_px
         )
 
     @property
@@ -184,6 +194,7 @@ class VisionCore:
         self,
         frame: np.ndarray,
         frame_index: int,
+        force_refresh: bool = False,
     ) -> PitchProjectionResult:
         if not self.enable_pitch:
             return PitchProjectionResult(
@@ -193,13 +204,25 @@ class VisionCore:
                 homography_status="unavailable",
                 reprojection_error=None,
             )
-        if self._should_detect_pitch(frame_index):
+        if force_refresh or self._should_detect_pitch(frame_index):
             start = time.perf_counter()
             keypoints = self._predict_pitch(frame)
             self.pitch_inference_time_ms += (time.perf_counter() - start) * 1000
             self.pitch_detection_count += 1
             self._last_pitch_detection_frame = frame_index
-            return self._projection_engine.update(frame=frame, keypoints=keypoints)
+            projection = self._projection_engine.update(frame=frame, keypoints=keypoints)
+            if force_refresh and projection.homography_status != "fresh":
+                invalidate = getattr(self._projection_engine, "invalidate", None)
+                if callable(invalidate):
+                    invalidate()
+                return PitchProjectionResult(
+                    tracking_observations=[],
+                    projected_keypoints=[],
+                    homography=None,
+                    homography_status="unavailable",
+                    reprojection_error=None,
+                )
+            return projection
         self.pitch_reuse_count += 1
         return self._projection_engine.reuse(frame=frame)
 
@@ -248,7 +271,17 @@ class VisionCore:
         if self._previous_track_ids and self._previous_track_ids.isdisjoint(current_track_ids):
             self.track_id_interruptions += 1
         self._previous_track_ids = current_track_ids
-        projection = self._projection_for_frame(undistorted_frame, frame_index)
+        motion = self._camera_motion_estimator.measure(undistorted_frame)
+        force_pitch_refresh = bool(motion is not None and motion.requires_refresh)
+        if force_pitch_refresh:
+            self.camera_motion_refresh_count += 1
+        projection = self._projection_for_frame(
+            undistorted_frame,
+            frame_index,
+            force_refresh=force_pitch_refresh,
+        )
+        if projection.homography_status == "fresh":
+            self._camera_motion_estimator.mark_reference(undistorted_frame)
         field_xy = self._field_coordinates(tracked_detections, projection)
         self.frames_processed += 1
         if projection.available:

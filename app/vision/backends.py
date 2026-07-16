@@ -186,8 +186,14 @@ class UltralyticsBackend:
         half: bool = False,
     ) -> Any:
         """Run one inference using the shared detector call signature."""
-
-        return self._model(frame, imgsz=imgsz, half=half)
+        try:
+            return self._model(frame, imgsz=imgsz, half=half, verbose=False)
+        except TypeError as exc:
+            # Keep injected lightweight/fake models compatible when they do
+            # not expose Ultralytics' optional ``verbose`` keyword.
+            if "verbose" not in str(exc):
+                raise
+            return self._model(frame, imgsz=imgsz, half=half)
 
 
 __all__ = ["BackendName", "CallableBackend", "DetectorBackend", "UltralyticsBackend"]

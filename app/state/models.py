@@ -107,6 +107,7 @@ class MetricsSnapshot(BaseModel):
     pitch_detection_count: int = 0
     homography_reuse_ratio: float = 0.0
     homography_available_ratio: float = 0.0
+    camera_motion_refresh_count: int = 0
     track_id_interruptions: int = 0
     semantic_inference_count: int = 0
     semantic_label_switches: int = 0
