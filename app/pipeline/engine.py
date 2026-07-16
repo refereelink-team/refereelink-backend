@@ -49,6 +49,63 @@ def _map_homography_status(status: str) -> HomographyStatus:
         return HomographyStatus.UNAVAILABLE
 
 
+def _draw_player_overlay(
+    frame: np.ndarray,
+    *,
+    bbox: tuple[int, int, int, int],
+    track_id: int,
+    color: tuple[int, int, int],
+) -> None:
+    """Draw a high-contrast player box and Track ID on the MJPEG frame."""
+
+    frame_height, frame_width = frame.shape[:2]
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(frame_width - 1, x1))
+    y1 = max(0, min(frame_height - 1, y1))
+    x2 = max(x1 + 1, min(frame_width - 1, x2))
+    y2 = max(y1 + 1, min(frame_height - 1, y2))
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+    label = f"ID {track_id}"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.55
+    text_thickness = 2
+    outline_thickness = 4
+    (text_width, text_height), baseline = cv2.getTextSize(
+        label,
+        font,
+        font_scale,
+        text_thickness,
+    )
+    text_x = x1 + 5
+    text_y = max(y1 - 5, text_height + baseline + 7)
+    box_top = max(0, text_y - text_height - baseline - 7)
+    box_right = min(frame_width - 1, text_x + text_width + 10)
+    box_bottom = min(frame_height - 1, text_y + 3)
+    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), (12, 18, 24), -1)
+    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), color, 1)
+    cv2.putText(
+        frame,
+        label,
+        (text_x, text_y),
+        font,
+        font_scale,
+        (0, 0, 0),
+        outline_thickness,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        label,
+        (text_x, text_y),
+        font,
+        font_scale,
+        (255, 255, 255),
+        text_thickness,
+        cv2.LINE_AA,
+    )
+
+
 class InferencePipeline:
     def __init__(
         self,
@@ -386,13 +443,15 @@ class InferencePipeline:
                 x1, y1, x2, y2 = map(int, detections.xyxy[i])
                 tracker_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else i
                 team_id = player_states[i].team_id if i < len(player_states) else -1
-                color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(team_id, (128, 128, 128))
-
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-                label = f"{tracker_id}"
-                cv2.putText(
-                    annotated_frame, label, (x1, max(y1 - 5, 15)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
+                color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(
+                    team_id,
+                    (0, 215, 255),
+                )
+                _draw_player_overlay(
+                    annotated_frame,
+                    bbox=(x1, y1, x2, y2),
+                    track_id=tracker_id,
+                    color=color,
                 )
 
         if ball_state.image_x is not None and ball_state.image_y is not None:

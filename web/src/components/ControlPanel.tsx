@@ -12,6 +12,7 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
   const sourceStatus = useDashboardStore((s) => s.sourceStatus);
   const config = useDashboardStore((s) => s.config);
   const setConfig = useDashboardStore((s) => s.setConfig);
+  const setPipelineRunning = useDashboardStore((s) => s.setPipelineRunning);
   const addLog = useDashboardStore((s) => s.addLog);
 
   const [videoSource, setVideoSource] = useState<string>('');
@@ -70,6 +71,7 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
     try {
       const resp = await fetch('/api/pipeline/stop', { method: 'POST' });
       const data = await resp.json();
+      setPipelineRunning(false);
       addLog(`[Pipeline] stopped (${data.mode || 'cleared'})`);
     } catch (e) {
       setError(String(e));
@@ -117,7 +119,11 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
             className="control-input"
             placeholder="e.g. assets/data/sample.mp4  or  rtsp://192.168.1.100/stream"
             value={videoSource}
-            onChange={(e) => setVideoSource(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setVideoSource(value);
+              setConfig({ video_source: value });
+            }}
             disabled={pipelineRunning}
           />
         </div>
@@ -127,7 +133,11 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
           <select
             className="control-select"
             value={device}
-            onChange={(e) => setDevice(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setDevice(value);
+              setConfig({ device: value });
+            }}
             disabled={pipelineRunning}
           >
             <option value="cpu">cpu</option>

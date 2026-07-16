@@ -7,7 +7,8 @@ import type {
   TeamCalibrationState,
 } from '../types/messages';
 
-const WS_URL = `ws://${window.location.hostname}:8000/ws/state`;
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_URL = `${WS_PROTOCOL}://${window.location.host}/ws/state`;
 const RECONNECT_DELAY = 2000;
 
 export function useWebSocket() {
