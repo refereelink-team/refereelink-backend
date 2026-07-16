@@ -9,6 +9,7 @@ from app.state.models import (
     PipelineConfig,
     PlayerRole,
     PlayerState,
+    TeamLabel,
     SourceStatus,
 )
 from app.state.store import StateStore
@@ -25,6 +26,7 @@ __all__ = [
     "PipelineConfig",
     "PlayerRole",
     "PlayerState",
+    "TeamLabel",
     "SourceStatus",
     "StateStore",
     "EventBus",

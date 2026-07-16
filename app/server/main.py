@@ -100,6 +100,7 @@ def create_pipeline(
     ball_max_prediction_frames: int = 8,
     role_model_path: str = ROLE_DETECTION_MODEL_PATH,
     team_classifier_path: Optional[str] = TEAM_CLASSIFIER_PATH,
+    team_calibration_path: Optional[str] = None,
     role_detection_interval: int = 3,
     team_classification_interval: int = 5,
 ) -> InferencePipeline:
@@ -127,6 +128,7 @@ def create_pipeline(
         ball_max_prediction_frames=ball_max_prediction_frames,
         role_model_path=role_model_path,
         team_classifier_path=team_classifier_path,
+        team_calibration_path=team_calibration_path,
         role_detection_interval=role_detection_interval,
         team_classification_interval=team_classification_interval,
     )

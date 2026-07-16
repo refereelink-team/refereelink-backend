@@ -13,6 +13,7 @@ from app.classification.team_calibration.prototypes import build_prototypes
 from app.classification.team_calibration.quality import CropQualityAssessor
 from app.classification.team_calibration.roi import JerseyROIExtractor
 from app.classification.team_calibration.track_features import TrackFeatureBank
+from app.classification.team_calibration.runtime import TeamAssignmentService
 from app.classification.team_calibration.types import (
     PlayerRole,
     TeamLabel,
@@ -163,3 +164,49 @@ def test_mobile_net_extractor_supports_injected_fake_model() -> None:
     assert result.shape == (2, 8)
     assert np.allclose(np.linalg.norm(result, axis=1), 1.0)
 
+
+def test_team_assignment_service_keeps_feature_ema_separate_from_semantic_hysteresis() -> None:
+    tracks = [
+        TrackFeature(
+            track_id=1,
+            team=TeamLabel.HOME,
+            role=PlayerRole.OUTFIELD,
+            color_feature=ColorFeatureExtractor().extract(_jersey((0, 0, 220))),
+            deep_feature=np.array([1.0, 0.0], dtype=np.float32),
+            observation_count=1,
+            quality_sum=1.0,
+        ),
+        TrackFeature(
+            track_id=2,
+            team=TeamLabel.AWAY,
+            role=PlayerRole.OUTFIELD,
+            color_feature=ColorFeatureExtractor().extract(_jersey((220, 0, 0))),
+            deep_feature=np.array([0.0, 1.0], dtype=np.float32),
+            observation_count=1,
+            quality_sum=1.0,
+        ),
+    ]
+    prototypes = build_prototypes(tracks, include_goalkeepers=False)
+
+    class FakeAppearance:
+        loaded = True
+
+        def extract_batch(self, crops):
+            return np.tile(np.asarray([1.0, 0.0], dtype=np.float32), (len(crops), 1))
+
+    service = TeamAssignmentService(
+        prototypes,
+        classifier=SupervisedPrototypeClassifier(prototypes, min_observations=1, max_distance=10.0),
+        appearance_extractor=FakeAppearance(),
+        quality_assessor=CropQualityAssessor(min_blur_score=0.0),
+        require_appearance=False,
+    )
+    result = service.predict_tracks(
+        [_jersey((0, 0, 220))],
+        track_ids=[9],
+        roles=[PlayerRole.OUTFIELD],
+        detection_confidences=[0.9],
+        frame_index=1,
+    )
+    assert result[0].team == TeamLabel.HOME
+    assert service.feature_bank.tracks[9].observation_count == 1

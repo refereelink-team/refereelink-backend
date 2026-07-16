@@ -99,13 +99,13 @@ def test_trajectory_manager_weighted_window_suppresses_one_frame_flip() -> None:
 
     state = manager.update(
         7,
-        role="player",
+        role="outfield",
         role_confidence=0.95,
         team_id=0,
         team_confidence=0.95,
         frame_index=1,
     )
-    assert state.role == "player"
+    assert state.role == "outfield"
     assert state.team_id == 0
     assert state.semantic_status == "stable"
 
@@ -117,14 +117,14 @@ def test_trajectory_manager_weighted_window_suppresses_one_frame_flip() -> None:
         team_confidence=0.99,
         frame_index=2,
     )
-    assert flipped.role == "player"
+    assert flipped.role == "outfield"
     assert flipped.team_id == 0
     assert manager.semantic_label_switches == 0
 
 
 def test_trajectory_manager_switches_after_sustained_challenger_evidence() -> None:
     manager = TrajectorySemanticManager(history_size=4, recency_decay=0.8, switch_margin=0.05)
-    manager.update(3, role="player", role_confidence=0.9, team_id=0, team_confidence=0.9, frame_index=1)
+    manager.update(3, role="outfield", role_confidence=0.9, team_id=0, team_confidence=0.9, frame_index=1)
 
     for frame in range(2, 6):
         state = manager.update(
@@ -144,7 +144,7 @@ def test_trajectory_manager_switches_after_sustained_challenger_evidence() -> No
 
 def test_unknown_evidence_eventually_releases_stale_labels() -> None:
     manager = TrajectorySemanticManager(history_size=3, recency_decay=0.5, stable_threshold=0.55)
-    manager.update(4, role="player", role_confidence=1.0, team_id=0, team_confidence=1.0, frame_index=1)
+    manager.update(4, role="outfield", role_confidence=1.0, team_id=0, team_confidence=1.0, frame_index=1)
 
     for frame in range(2, 5):
         state = manager.update(
@@ -165,7 +165,7 @@ def test_stale_tracks_are_removed_and_observation_wrapper_sets_frame() -> None:
     manager = TrajectorySemanticManager(max_missing_frames=2)
     state = manager.update_observation(
         9,
-        SemanticObservation(role="player", role_confidence=0.8, frame_index=10),
+        SemanticObservation(role="outfield", role_confidence=0.8, frame_index=10),
     )
 
     assert state.last_seen_frame == 10

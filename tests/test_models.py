@@ -26,8 +26,10 @@ def test_player_state_serialization():
     )
     data = p.model_dump()
     assert data["track_id"] == 7
-    assert data["role"] == "player"
+    assert data["role"] == "outfield"
     assert data["team_id"] == 0
+    assert data["team"] == "unknown"
+    assert data["team_label"] == "unknown"
     assert data["field_x"] == 31.2
     assert data["confidence"] == 0.91
     roundtrip = PlayerState.model_validate(data)
@@ -136,12 +138,16 @@ def test_official_person_model_uses_unknown_role_and_neutral_team():
     assert player.model_dump() == {
         "track_id": 7,
         "role": "unknown",
+        "team": "unknown",
+        "team_label": "unknown",
         "team_id": -1,
         "field_x": None,
         "field_y": None,
         "confidence": 0.8,
         "role_confidence": 0.0,
         "team_confidence": 0.0,
+        "team_rejection_reason": None,
+        "bbox": None,
         "semantic_status": "unknown",
         "velocity_x": None,
         "velocity_y": None,

@@ -7,7 +7,7 @@ import supervision as sv
 
 from app.geometry.pitch_projection import PitchProjectionResult
 from app.pipeline.engine import InferencePipeline
-from app.state.models import BallStatus, PlayerRole
+from app.state.models import BallStatus, PlayerRole, TeamLabel
 from app.state.store import StateStore
 from app.vision.ball import BallProcessor
 from app.vision.core import VisionFrame
@@ -39,7 +39,8 @@ class _SemanticManager:
         return {
             7: SemanticResult(
                 track_id=7,
-                role="player",
+                role="outfield",
+                team=TeamLabel.HOME,
                 team_id=0,
                 role_confidence=0.91,
                 team_confidence=0.88,
@@ -99,7 +100,9 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
 
     assert frame_state is not None
     assert frame_state.players[0].role == PlayerRole.PLAYER
+    assert frame_state.players[0].team == TeamLabel.HOME
     assert frame_state.players[0].team_id == 0
+    assert frame_state.players[0].bbox == (8.0, 8.0, 12.0, 12.0)
     assert frame_state.players[0].semantic_status == "stable"
     assert frame_state.ball is not None
     assert frame_state.ball.status == BallStatus.FRESH

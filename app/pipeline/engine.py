@@ -30,6 +30,7 @@ from app.state.models import (
     PlayerRole,
     PlayerState,
     SourceStatus,
+    TeamLabel,
 )
 from app.state.store import StateStore
 from app.vision.core import VisionCore
@@ -68,9 +69,11 @@ class InferencePipeline:
         ball_max_prediction_frames: int = 8,
         role_model_path: str = ROLE_DETECTION_MODEL_PATH,
         team_classifier_path: Optional[str] = TEAM_CLASSIFIER_PATH,
+        team_calibration_path: Optional[str] = None,
         role_detection_interval: int = 3,
         team_classification_interval: int = 5,
         semantic_manager: Optional[object] = None,
+        team_assignment_service: Optional[object] = None,
         inference_backend: str = "auto",
         enable_foul_detection: bool = False,
         foul_checkpoint_path: Optional[str] = None,
@@ -95,6 +98,7 @@ class InferencePipeline:
         self._ball_max_prediction_frames = ball_max_prediction_frames
         self._role_model_path = role_model_path
         self._team_classifier_path = team_classifier_path
+        self._team_calibration_path = team_calibration_path
         self._role_detection_interval = role_detection_interval
         self._team_classification_interval = team_classification_interval
         self._inference_backend = inference_backend
@@ -123,12 +127,15 @@ class InferencePipeline:
         self._vision_core: Optional[VisionCore] = None
         self._ball_processor: Optional[BallProcessor] = None
         self._semantic_manager = semantic_manager
+        self._team_assignment_service = team_assignment_service
         self._semantic_interval = max(
             1, min(int(role_detection_interval), int(team_classification_interval))
         )
         self._semantic_last_frame: Optional[int] = None
         self._semantic_results: dict[int, object] = {}
         self.semantic_inference_count = 0
+        self.team_inference_count = 0
+        self.team_unknown_count = 0
         self._event_engine = EventEngine()
         self._foul_detector = foul_detector
         self._foul_adapter = FoulEventAdapter(confidence_threshold=foul_confidence_threshold)
@@ -170,7 +177,10 @@ class InferencePipeline:
         )
         self._vision_core.load_models()
         if self._semantic_manager is None:
-            from app.classification.online import OnlineTeamClassifier
+            from app.classification.team_calibration.appearance_features import AppearanceFeatureExtractor
+            from app.classification.team_calibration.bundle import CalibrationBundle
+            from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
+            from app.classification.team_calibration.runtime import TeamAssignmentService
             from app.vision.role import UltralyticsRoleClassifier
             from app.vision.semantics import TrackSemanticManager
 
@@ -181,10 +191,21 @@ class InferencePipeline:
             )
             if not role_classifier.load():
                 role_classifier = None
-            team_classifier = OnlineTeamClassifier(
-                device=self._device,
-                classifier_path=self._team_classifier_path,
-            )
+            team_classifier = self._team_assignment_service
+            if team_classifier is None and self._team_calibration_path:
+                try:
+                    bundle = CalibrationBundle.load(self._team_calibration_path)
+                    team_classifier = TeamAssignmentService(
+                        prototypes=bundle.prototypes,
+                        classifier=SupervisedPrototypeClassifier(bundle.prototypes),
+                        appearance_extractor=AppearanceFeatureExtractor(
+                            device=self._device,
+                            pretrained=True,
+                        ),
+                        require_appearance=True,
+                    )
+                except (OSError, ValueError, KeyError) as exc:
+                    logger.warning("Team calibration bundle unavailable; using UNKNOWN: %s", exc)
             self._semantic_manager = TrackSemanticManager(
                 role_classifier=role_classifier,
                 team_classifier=team_classifier,
@@ -295,23 +316,38 @@ class InferencePipeline:
             has_field_xy = bool(np.isfinite(field_xy).all())
             semantic = semantic_results.get(tracker_id)
             role = PlayerRole.UNKNOWN
+            team = TeamLabel.UNKNOWN
             team_id = -1
             role_confidence = 0.0
             team_confidence = 0.0
+            team_rejection_reason = None
             semantic_status = "unknown"
             if semantic is not None:
                 try:
                     role_value = getattr(semantic, "role", "unknown")
-                    role = PlayerRole(str(getattr(role_value, "value", role_value)))
+                    normalized_role = str(getattr(role_value, "value", role_value))
+                    if normalized_role == "player":
+                        normalized_role = PlayerRole.OUTFIELD.value
+                    role = PlayerRole(normalized_role)
                 except ValueError:
                     role = PlayerRole.UNKNOWN
+                raw_team = getattr(semantic, "team", TeamLabel.UNKNOWN)
+                try:
+                    team = TeamLabel(str(getattr(raw_team, "value", raw_team)))
+                except ValueError:
+                    team = TeamLabel.UNKNOWN
                 try:
                     candidate_team = int(getattr(semantic, "team_id", -1))
                     team_id = candidate_team if candidate_team in (0, 1) else -1
                 except (TypeError, ValueError):
                     team_id = -1
+                if team == TeamLabel.UNKNOWN and team_id in (0, 1):
+                    team = TeamLabel.HOME if team_id == 0 else TeamLabel.AWAY
+                if team in {TeamLabel.HOME, TeamLabel.AWAY}:
+                    team_id = 0 if team == TeamLabel.HOME else 1
                 role_confidence = float(getattr(semantic, "role_confidence", 0.0))
                 team_confidence = float(getattr(semantic, "team_confidence", 0.0))
+                team_rejection_reason = getattr(semantic, "team_rejection_reason", None)
                 semantic_status = str(
                     getattr(semantic, "semantic_status", getattr(semantic, "status", "unknown"))
                 )
@@ -319,6 +355,8 @@ class InferencePipeline:
                 PlayerState(
                     track_id=tracker_id,
                     role=role,
+                    team=team,
+                    team_label=team,
                     team_id=team_id,
                     field_x=float(field_xy[0]) if has_field_xy else None,
                     field_y=float(field_xy[1]) if has_field_xy else None,
@@ -329,9 +367,14 @@ class InferencePipeline:
                     ),
                     role_confidence=role_confidence,
                     team_confidence=team_confidence,
+                    team_rejection_reason=team_rejection_reason,
+                    bbox=tuple(float(value) for value in detections.xyxy[idx]),
                     semantic_status=semantic_status,
                 )
             )
+            self.team_inference_count = getattr(self, "team_inference_count", 0) + 1
+            if team_id == -1:
+                self.team_unknown_count = getattr(self, "team_unknown_count", 0) + 1
 
         # Draw detection boxes and tracker IDs on the frame for the MJPEG stream.
         annotated_frame = vision_frame.undistorted_frame.copy()
@@ -626,6 +669,11 @@ class InferencePipeline:
             if self._semantic_manager is not None
             else 0
         )
+        team_switches = (
+            int(getattr(self._semantic_manager, "team_label_switches", 0))
+            if self._semantic_manager is not None
+            else 0
+        )
 
         metrics = MetricsSnapshot(
             processing_fps=round(fps, 1),
@@ -648,6 +696,12 @@ class InferencePipeline:
             track_id_interruptions=track_interruptions,
             semantic_inference_count=self.semantic_inference_count,
             semantic_label_switches=semantic_switches,
+            team_inference_count=getattr(self, "team_inference_count", 0),
+            team_unknown_rate=round(
+                getattr(self, "team_unknown_count", 0)
+                / max(getattr(self, "team_inference_count", 0), 1),
+            ),
+            team_label_switches=team_switches,
             ball_detection_count=ball_calls,
             ball_predicted_frames=ball_predicted,
             ball_available_ratio=round(ball_available / max(processed, 1), 3),
