@@ -95,6 +95,10 @@ export interface MetricsSnapshot {
 
 export type CalibrationState =
   | 'idle'
+  | 'source_preview'
+  | 'clip_selecting'
+  | 'processing'
+  | 'review'
   | 'calibrating'
   | 'validating'
   | 'ready'
@@ -108,7 +112,15 @@ export interface CalibrationTrack {
   role: PlayerRole;
   sample_count: number;
   quality_score: number;
-  last_update_frame: number;
+  last_update_frame: number | null;
+  first_timestamp_ms?: number;
+  last_timestamp_ms?: number;
+  observation_count?: number;
+  quality_observation_count?: number;
+  representative_frame_index?: number;
+  representative_timestamp_ms?: number;
+  representative_bbox?: [number, number, number, number];
+  representative_quality_score?: number;
 }
 
 export interface CalibrationValidationReport {
@@ -137,6 +149,16 @@ export interface TeamCalibrationState {
   last_frame_index: number | null;
   tracks: CalibrationTrack[];
   validation_report: CalibrationValidationReport | null;
+  source_url: string | null;
+  clip_id: string | null;
+  clip_start_ms: number | null;
+  clip_end_ms: number | null;
+  clip_duration_ms: number | null;
+  review_video_url: string | null;
+  metadata_url: string | null;
+  job_id: string | null;
+  processing_progress: number;
+  processing_error: string | null;
 }
 
 export type WSMessage = FrameState | MetricsSnapshot | TeamCalibrationState;

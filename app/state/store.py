@@ -12,6 +12,7 @@ from app.state.models import (
     SourceStatus,
 )
 from app.classification.team_calibration.session import TeamCalibrationSession
+from app.classification.team_calibration.clip import CalibrationClipService
 from app.services.frame_encoder import LatestJpegFrame
 
 
@@ -33,6 +34,7 @@ class StateStore:
         self._latest_raw_frame = None
         self._jpeg_frame = LatestJpegFrame()
         self._team_calibration = TeamCalibrationSession()
+        self._team_calibration_clip = CalibrationClipService(self._team_calibration)
 
     @property
     def latest_frame_state(self) -> Optional[FrameState]:
@@ -125,6 +127,10 @@ class StateStore:
     @property
     def team_calibration(self) -> TeamCalibrationSession:
         return self._team_calibration
+
+    @property
+    def team_calibration_clip(self) -> CalibrationClipService:
+        return self._team_calibration_clip
 
     def snapshot(self) -> dict:
         with self._lock:

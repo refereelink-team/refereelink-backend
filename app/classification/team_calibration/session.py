@@ -24,6 +24,10 @@ from app.classification.team_calibration.validation import CalibrationValidator
 
 class CalibrationState(str, Enum):
     IDLE = "idle"
+    SOURCE_PREVIEW = "source_preview"
+    CLIP_SELECTING = "clip_selecting"
+    PROCESSING = "processing"
+    REVIEW = "review"
     CALIBRATING = "calibrating"
     VALIDATING = "validating"
     READY = "ready"
@@ -68,6 +72,17 @@ class TeamCalibrationSession:
         self._bundle: Optional[CalibrationBundle] = None
         self._last_frame_index: Optional[int] = None
         self._observed_frames = 0
+        self._source_url: Optional[str] = None
+        self._clip_id: Optional[str] = None
+        self._clip_start_ms: Optional[int] = None
+        self._clip_end_ms: Optional[int] = None
+        self._clip_duration_ms: Optional[int] = None
+        self._review_video_url: Optional[str] = None
+        self._metadata_url: Optional[str] = None
+        self._job_id: Optional[str] = None
+        self._processing_progress = 0.0
+        self._processing_error: Optional[str] = None
+        self._clip_tracks: list[dict[str, Any]] = []
 
     @property
     def state(self) -> CalibrationState:
@@ -112,6 +127,108 @@ class TeamCalibrationSession:
             self._bundle = None
             self._last_frame_index = None
             self._observed_frames = 0
+            self._source_url = None
+            self._clip_id = None
+            self._clip_start_ms = None
+            self._clip_end_ms = None
+            self._clip_duration_ms = None
+            self._review_video_url = None
+            self._metadata_url = None
+            self._job_id = None
+            self._processing_progress = 0.0
+            self._processing_error = None
+            self._clip_tracks = []
+            return self.snapshot()
+
+    def begin_source_preview(
+        self,
+        *,
+        match_id: str,
+        camera_id: str,
+        source_url: str,
+        bundle_path: Optional[str] = None,
+        device: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Start a clip-based session without starting the live pipeline."""
+
+        self.start(
+            match_id=match_id,
+            camera_id=camera_id,
+            bundle_path=bundle_path,
+            device=device,
+        )
+        with self._lock:
+            self._source_url = source_url
+            self._state = CalibrationState.SOURCE_PREVIEW
+            return self.snapshot()
+
+    def begin_clip_selecting(self, start_ms: int) -> dict[str, Any]:
+        with self._lock:
+            if self._state not in {CalibrationState.SOURCE_PREVIEW, CalibrationState.CLIP_SELECTING}:
+                raise RuntimeError("source preview is required before selecting a clip")
+            self._clip_start_ms = int(start_ms)
+            self._clip_end_ms = None
+            self._clip_duration_ms = None
+            self._state = CalibrationState.CLIP_SELECTING
+            return self.snapshot()
+
+    def begin_processing(
+        self,
+        *,
+        clip_id: str,
+        job_id: str,
+        start_ms: int,
+        end_ms: int,
+        duration_ms: int,
+        review_video_url: str,
+        metadata_url: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if self._state != CalibrationState.CLIP_SELECTING:
+                raise RuntimeError("clip start time has not been selected")
+            self._clip_id = str(clip_id)
+            self._job_id = str(job_id)
+            self._clip_start_ms = int(start_ms)
+            self._clip_end_ms = int(end_ms)
+            self._clip_duration_ms = int(duration_ms)
+            self._review_video_url = review_video_url
+            self._metadata_url = metadata_url
+            self._processing_progress = 0.0
+            self._processing_error = None
+            self._clip_tracks = []
+            self._observed_frames = 0
+            self._last_frame_index = None
+            self._state = CalibrationState.PROCESSING
+            return self.snapshot()
+
+    def update_processing(self, *, progress: float, observed_frames: Optional[int] = None) -> dict[str, Any]:
+        with self._lock:
+            self._processing_progress = float(np.clip(progress, 0.0, 1.0))
+            if observed_frames is not None:
+                self._observed_frames = int(observed_frames)
+            return self.snapshot()
+
+    def complete_processing(
+        self,
+        *,
+        tracks: list[dict[str, Any]],
+        observed_frames: int,
+        last_frame_index: Optional[int],
+    ) -> dict[str, Any]:
+        with self._lock:
+            if self._state != CalibrationState.PROCESSING:
+                raise RuntimeError("calibration clip is not processing")
+            self._clip_tracks = list(tracks)
+            self._observed_frames = int(observed_frames)
+            self._last_frame_index = last_frame_index
+            self._processing_progress = 1.0
+            self._state = CalibrationState.REVIEW
+            return self.snapshot()
+
+    def fail_processing(self, error: str) -> dict[str, Any]:
+        with self._lock:
+            self._processing_error = str(error)
+            self._state = CalibrationState.CLIP_SELECTING
             return self.snapshot()
 
     def reset(self) -> dict[str, Any]:
@@ -126,12 +243,30 @@ class TeamCalibrationSession:
             self._bundle = None
             self._last_frame_index = None
             self._observed_frames = 0
+            self._source_url = None
+            self._clip_id = None
+            self._clip_start_ms = None
+            self._clip_end_ms = None
+            self._clip_duration_ms = None
+            self._review_video_url = None
+            self._metadata_url = None
+            self._job_id = None
+            self._processing_progress = 0.0
+            self._processing_error = None
+            self._clip_tracks = []
             return self.snapshot()
 
-    def label_track(self, track_id: int, label: CalibrationLabel | str) -> dict[str, Any]:
+    def label_track(
+        self,
+        track_id: int,
+        label: CalibrationLabel | str,
+        *,
+        samples: Optional[list[tuple[np.ndarray, float, int]]] = None,
+    ) -> dict[str, Any]:
         with self._lock:
             if self._state not in {
                 CalibrationState.CALIBRATING,
+                CalibrationState.REVIEW,
                 CalibrationState.RECALIBRATION_REQUIRED,
             }:
                 raise RuntimeError("calibration session is not accepting labels")
@@ -145,7 +280,44 @@ class TeamCalibrationSession:
                 # A changed semantic label must not retain features sampled
                 # under the previous role/team assignment.
                 self._feature_bank.clear_track(track_id)
+                if samples:
+                    self._add_samples_locked(track_id, value, samples)
             return self.snapshot()
+
+    def _add_samples_locked(
+        self,
+        track_id: int,
+        label: CalibrationLabel,
+        samples: list[tuple[np.ndarray, float, int]],
+    ) -> None:
+        limited = samples[: self.max_samples_per_track]
+        if self.require_appearance and self.appearance_extractor is None:
+            self.appearance_extractor = AppearanceFeatureExtractor(
+                device=self.device,
+                pretrained=True,
+            )
+        crops: list[np.ndarray] = []
+        prepared: list[tuple[float, int, np.ndarray]] = []
+        for roi, _quality_hint, frame_index in limited:
+            quality = self.quality_assessor.assess(roi, detection_confidence=1.0)
+            if not quality.accepted:
+                continue
+            crops.append(roi)
+            prepared.append((quality.score, int(frame_index), roi))
+        deep_features: list[Optional[np.ndarray]] = [None] * len(prepared)
+        if prepared and self.appearance_extractor is not None:
+            values = self.appearance_extractor.extract_batch(crops)
+            deep_features = [values[index] for index in range(len(prepared))]
+        for index, (quality_score, frame_index, roi) in enumerate(prepared):
+            self._feature_bank.update(
+                track_id,
+                team=label.team,
+                role=label.role,
+                color_feature=self.color_extractor.extract(roi),
+                deep_feature=deep_features[index],
+                quality=quality_score,
+                frame_index=frame_index,
+            )
 
     def observe_frame(self, frame: np.ndarray, frame_state: Any) -> None:
         """Collect labelled, high-quality samples from one processed frame."""
@@ -153,6 +325,7 @@ class TeamCalibrationSession:
         with self._lock:
             if self._state not in {
                 CalibrationState.CALIBRATING,
+                CalibrationState.REVIEW,
                 CalibrationState.RECALIBRATION_REQUIRED,
             }:
                 return
@@ -206,6 +379,7 @@ class TeamCalibrationSession:
         with self._lock:
             if self._state not in {
                 CalibrationState.CALIBRATING,
+                CalibrationState.REVIEW,
                 CalibrationState.RECALIBRATION_REQUIRED,
             }:
                 raise RuntimeError("calibration session is not ready for validation")
@@ -225,7 +399,11 @@ class TeamCalibrationSession:
                 report = ValidationReport(**{**report.__dict__, "passed": False, "reasons": reasons})
             self._report = report
             if not report.passed:
-                self._state = CalibrationState.CALIBRATING
+                self._state = (
+                    CalibrationState.REVIEW
+                    if self._clip_id is not None
+                    else CalibrationState.CALIBRATING
+                )
                 return self.snapshot()
 
             from app.classification.team_calibration.prototypes import build_prototypes
@@ -254,11 +432,36 @@ class TeamCalibrationSession:
             self._state = CalibrationState.RECALIBRATION_REQUIRED
             return self.snapshot()
 
+    def set_clip_tracks(self, tracks: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self._clip_tracks = list(tracks)
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             report = self._report.__dict__.copy() if self._report is not None else None
             tracks = []
-            for track_id, feature in sorted(self._feature_bank.tracks.items()):
+            feature_by_id = self._feature_bank.tracks
+            for clip_track in self._clip_tracks:
+                track_id = int(clip_track["track_id"])
+                feature = feature_by_id.get(track_id)
+                label = self._labels.get(track_id)
+                tracks.append(
+                    {
+                        **clip_track,
+                        "label": label.value if label else None,
+                        "team": feature.team.value if feature else TeamLabel.UNKNOWN.value,
+                        "role": feature.role.value if feature else PlayerRole.UNKNOWN.value,
+                        "sample_count": feature.observation_count if feature else 0,
+                        "quality_score": round(
+                            feature.quality_sum / max(feature.observation_count, 1), 4
+                        ) if feature else 0.0,
+                        "last_update_frame": feature.last_update_frame if feature else None,
+                    }
+                )
+            clip_track_ids = {int(track["track_id"]) for track in tracks}
+            for track_id, feature in sorted(feature_by_id.items()):
+                if track_id in clip_track_ids:
+                    continue
                 label = self._labels.get(track_id)
                 tracks.append(
                     {
@@ -287,6 +490,16 @@ class TeamCalibrationSession:
                 "last_frame_index": self._last_frame_index,
                 "tracks": tracks,
                 "validation_report": report,
+                "source_url": self._source_url,
+                "clip_id": self._clip_id,
+                "clip_start_ms": self._clip_start_ms,
+                "clip_end_ms": self._clip_end_ms,
+                "clip_duration_ms": self._clip_duration_ms,
+                "review_video_url": self._review_video_url,
+                "metadata_url": self._metadata_url,
+                "job_id": self._job_id,
+                "processing_progress": self._processing_progress,
+                "processing_error": self._processing_error,
             }
 
 

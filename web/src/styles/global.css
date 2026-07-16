@@ -400,6 +400,123 @@ body {
   overflow: hidden;
 }
 
+.calibration-help,
+.calibration-time-row,
+.calibration-track-stats {
+  color: var(--text-primary);
+  font-size: 9px;
+}
+
+.calibration-source-stage,
+.calibration-review-video {
+  background: #05070a;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 4px;
+}
+
+.calibration-video {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  background: #000;
+  object-fit: contain;
+}
+
+.calibration-time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.calibration-progress {
+  padding: 8px;
+  color: var(--text-primary);
+  font-size: 10px;
+}
+
+.progress-track {
+  height: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+  background: #273142;
+  border-radius: 999px;
+}
+
+.progress-value {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.calibration-review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(250px, 1fr);
+  gap: 6px;
+  min-height: 0;
+}
+
+.review-video-stage {
+  position: relative;
+  background: #000;
+}
+
+.review-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.calibration-track-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border-color);
+  background: #0d141e;
+}
+
+.track-browser-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.track-browser-toolbar .control-input {
+  min-width: 0;
+}
+
+.track-filter {
+  flex: none;
+  color: var(--text-primary);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.stable-track-list {
+  max-height: 260px;
+  padding: 4px;
+}
+
+.calibration-track.active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.calibration-track-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
 .calibration-config,
 .calibration-summary,
 .calibration-track-meta,
@@ -469,7 +586,11 @@ body {
   text-align: center;
 }
 .status-badge.calibration-idle,
-.status-badge.calibration-validating { background: #252d3a; color: var(--text-secondary); }
+.status-badge.calibration-source_preview,
+.status-badge.calibration-clip_selecting,
+.status-badge.calibration-validating { background: #252d3a; color: var(--text-primary); }
+.status-badge.calibration-processing { background: #0a2833; color: var(--accent); }
+.status-badge.calibration-review { background: #332a0a; color: var(--accent-yellow); }
 .status-badge.calibration-calibrating { background: #332a0a; color: var(--accent-yellow); }
 .status-badge.calibration-ready { background: #0a331a; color: var(--accent-green); }
 .status-badge.calibration-running { background: #0a2833; color: var(--accent); }
