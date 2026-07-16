@@ -22,8 +22,31 @@ export function useWebSocket() {
     setSourceStatus,
     setPipelineRunning,
     setTeamCalibration,
+    setConfig,
     addLog,
   } = useDashboardStore();
+
+  const syncBackendState = useCallback(async () => {
+    try {
+      const [configResponse, statusResponse] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/status'),
+      ]);
+      if (configResponse.ok) {
+        setConfig(await configResponse.json());
+      }
+      if (statusResponse.ok) {
+        const status = await statusResponse.json();
+        setPipelineRunning(Boolean(status.pipeline_running));
+        setSourceStatus(status.source_status || 'disconnected');
+        if (status.team_calibration) {
+          setTeamCalibration(status.team_calibration as TeamCalibrationState);
+        }
+      }
+    } catch {
+      addLog('[WS] Failed to sync backend state');
+    }
+  }, [setConfig, setPipelineRunning, setSourceStatus, setTeamCalibration, addLog]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -34,6 +57,7 @@ export function useWebSocket() {
     ws.onopen = () => {
       setWsConnected(true);
       addLog(`[WS] Connected to ${WS_URL}`);
+      void syncBackendState();
     };
 
     ws.onclose = () => {
@@ -65,7 +89,17 @@ export function useWebSocket() {
         // ignore malformed messages
       }
     };
-  }, [setFrameState, setMetrics, addEvent, setWsConnected, setSourceStatus, setTeamCalibration, addLog]);
+  }, [
+    setFrameState,
+    setMetrics,
+    addEvent,
+    setWsConnected,
+    setSourceStatus,
+    setPipelineRunning,
+    setTeamCalibration,
+    addLog,
+    syncBackendState,
+  ]);
 
   useEffect(() => {
     connect();
