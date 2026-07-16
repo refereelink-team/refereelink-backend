@@ -70,6 +70,14 @@ def test_quality_assessor_rejects_blur_and_accepts_clear_crop() -> None:
     assert "blur_low" in blurred.reasons
 
 
+def test_quality_assessor_rejects_empty_crop_without_calling_opencv() -> None:
+    assessment = CropQualityAssessor().assess(np.empty((0, 0, 3), dtype=np.uint8))
+
+    assert not assessment.accepted
+    assert assessment.score == 0.0
+    assert "roi_too_small" in assessment.reasons
+
+
 def test_hsv_lab_features_are_fixed_size_and_normalized() -> None:
     extractor = ColorFeatureExtractor()
     feature = extractor.extract(_jersey((0, 0, 220)))

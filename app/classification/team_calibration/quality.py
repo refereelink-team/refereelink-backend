@@ -54,7 +54,10 @@ class CropQualityAssessor:
                 reasons.append("roi_too_small")
         if confidence < self.min_detection_confidence:
             reasons.append("detection_confidence_low")
-        if reasons and image.ndim < 3:
+        # A clipped or otherwise unavailable detection can produce a zero-area
+        # array with shape ``(0, 0, 3)``.  Treat it as a rejected observation
+        # before calling OpenCV, which does not accept empty images.
+        if image.size == 0 or image.ndim < 3 or image.shape[2] < 3:
             return QualityAssessment(False, 0.0, tuple(reasons), 0.0, 0.0, 1.0, confidence)
 
         bgr = image[..., :3].astype(np.uint8, copy=False)
@@ -113,4 +116,3 @@ class CropQualityAssessor:
             green_edge_ratio=green_edge_ratio,
             detection_confidence=confidence,
         )
-
