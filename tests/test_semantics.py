@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from app.classification.online import OnlineTeamClassifier
 from app.classification.team import UNKNOWN_TEAM_ID, TeamClassifier
@@ -61,26 +62,30 @@ def test_single_observed_team_is_not_treated_as_a_two_team_classifier() -> None:
     assert confidences.tolist() == [0.0]
 
 
-def test_unlabelled_fit_is_deterministic_and_persistable(tmp_path: Path) -> None:
+def test_labelled_fit_is_persistable_and_unlabelled_fit_is_rejected(tmp_path: Path) -> None:
     crops = [_solid_bgr((0, 0, 230)), _solid_bgr((220, 0, 0))]
-    first = TeamClassifier(confidence_threshold=0.55).fit(crops)
-    second = TeamClassifier(confidence_threshold=0.55).fit(crops[::-1])
+    with pytest.raises(ValueError, match="labels are required"):
+        TeamClassifier().fit(crops)
+    first = TeamClassifier(confidence_threshold=0.55).fit(crops, labels=[0, 1])
     model_path = tmp_path / "team-prototypes.bin"
     first.save(model_path)
     restored = TeamClassifier().load(model_path)
 
     first_ids = first.predict(crops)
-    assert first_ids.tolist() == second.predict(crops).tolist()
     assert first_ids.tolist() == restored.predict(crops).tolist()
 
 
-def test_online_classifier_warmup_uses_stride_and_then_predicts() -> None:
+def test_online_classifier_never_fits_during_runtime_warmup() -> None:
     classifier = OnlineTeamClassifier(warmup_frames=2, warmup_stride=2, min_warmup_crops=2)
     red = _solid_bgr((0, 0, 230))
     blue = _solid_bgr((220, 0, 0))
 
     assert classifier.collect_and_predict(np.empty((1, 1, 3)), [red, blue]).tolist() == [-1, -1]
-    assert classifier.collect_and_predict(np.empty((1, 1, 3)), [red, blue]).tolist() == [0, 1]
+    assert classifier.collect_and_predict(np.empty((1, 1, 3)), [red, blue]).tolist() == [-1, -1]
+    assert not classifier.fitted
+    with pytest.raises(ValueError, match="labels are required"):
+        classifier.fit([red, blue])
+    classifier.fit([red, blue], labels=[0, 1])
     assert classifier.fitted
 
 
