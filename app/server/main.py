@@ -259,6 +259,28 @@ def main() -> None:
     args = parser.parse_args()
 
     _device = args.device
+    _store.update_config({
+        "video_source": args.video_source or "",
+        "device": args.device,
+        "inference_backend": args.inference_backend,
+        "enable_foul_detection": args.enable_foul_detection,
+        "foul_confidence_threshold": args.foul_confidence_threshold,
+        "player_model_path": args.player_model_path,
+        "pitch_model_path": args.pitch_model_path,
+        "camera_calibration_path": args.camera_calibration_path,
+        "enable_undistortion": args.enable_undistortion,
+        "calibration_alpha": args.calibration_alpha,
+        "pitch_detection_interval": args.pitch_detection_interval,
+        "imgsz": args.imgsz,
+        "ball_model_path": args.ball_model_path,
+        "enable_ball": args.enable_ball,
+        "ball_detection_interval": args.ball_detection_interval,
+        "ball_max_prediction_frames": args.ball_max_prediction_frames,
+        "role_model_path": args.role_model_path,
+        "team_classifier_path": args.team_classifier_path,
+        "role_detection_interval": args.role_detection_interval,
+        "team_classification_interval": args.team_classification_interval,
+    })
 
     if args.video_source:
         pipeline = create_pipeline(
