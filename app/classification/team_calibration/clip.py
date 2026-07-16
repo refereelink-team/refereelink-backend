@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -290,8 +291,9 @@ class CalibrationClipService:
         expected_frames = max(1, end_frame - start_frame)
         source.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
+        raw_clip_path = str(Path(job.clip_path).with_name("review_raw.mp4"))
         writer = cv2.VideoWriter(
-            job.clip_path,
+            raw_clip_path,
             cv2.VideoWriter_fourcc(*"mp4v"),
             fps,
             (width, height),
@@ -390,6 +392,7 @@ class CalibrationClipService:
             source.release()
         if not frames:
             raise RuntimeError("selected clip contains no decodable frames")
+        _make_browser_compatible_video(raw_clip_path, job.clip_path)
         return {
             "schema_version": 1,
             "clip_id": job.clip_id,
@@ -432,6 +435,42 @@ def validate_clip_range(start_ms: int, end_ms: int, source_duration_ms: int) -> 
         raise ValueError("clip end time exceeds source duration")
     if end_ms - start_ms > MAX_CLIP_MS:
         raise ValueError(f"clip length cannot exceed {MAX_CLIP_MS} ms")
+
+
+def _make_browser_compatible_video(raw_path: str, output_path: str) -> None:
+    """Encode the OpenCV intermediate as browser-compatible H.264."""
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        shutil.move(raw_path, output_path)
+        return
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                raw_path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                output_path,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=120,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        logger.warning("H.264 review transcode unavailable; keeping mp4v video: %s", exc)
+        shutil.move(raw_path, output_path)
+    else:
+        Path(raw_path).unlink(missing_ok=True)
 
 
 def _process_core_frame(core: VisionCore, frame: np.ndarray, frame_index: int):
