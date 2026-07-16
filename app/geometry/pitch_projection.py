@@ -92,6 +92,12 @@ class PitchProjectionEngine:
         self.prev_valid_homography: Optional[np.ndarray] = None
         self.stale_frames = 0
 
+    def invalidate(self) -> None:
+        """Drop the previous matrix after confirmed camera motion."""
+
+        self.prev_valid_homography = None
+        self.stale_frames = 0
+
     def update(
         self,
         frame: np.ndarray,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import cv2
 import numpy as np
@@ -76,6 +76,7 @@ class InferencePipeline:
         foul_checkpoint_path: Optional[str] = None,
         foul_confidence_threshold: float = 0.48,
         foul_detector: Optional[object] = None,
+        frame_sink: Optional[Callable[[np.ndarray, FrameState], None]] = None,
     ) -> None:
         self._source = source
         self._store = store
@@ -100,6 +101,7 @@ class InferencePipeline:
         self._enable_foul_detection = enable_foul_detection
         self._foul_checkpoint_path = foul_checkpoint_path or FOUL_MODEL_PATH
         self._foul_confidence_threshold = foul_confidence_threshold
+        self._frame_sink = frame_sink
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -246,6 +248,12 @@ class InferencePipeline:
                 self._emit_metrics()
                 self._last_metrics_emit = now
 
+        # A local file can finish without an explicit stop() call.  Reflect
+        # that terminal state for API clients and make the worker lifecycle
+        # idempotent for callers waiting on the source to end.
+        self._running = False
+        self._store.pipeline_running = False
+
     def _process_frame(
         self, frame: np.ndarray, capture_timestamp_ms: float
     ) -> Optional[FrameState]:
@@ -343,18 +351,28 @@ class InferencePipeline:
                 )
 
         if ball_state.image_x is not None and ball_state.image_y is not None:
-            ball_center = (int(round(ball_state.image_x)), int(round(ball_state.image_y)))
-            ball_color = (0, 215, 255) if ball_state.status == BallStatus.FRESH else (180, 180, 180)
-            cv2.circle(annotated_frame, ball_center, 7, ball_color, 2)
-            cv2.putText(
-                annotated_frame,
-                f"ball:{ball_state.status.value}",
-                (ball_center[0] + 8, ball_center[1]),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                ball_color,
-                1,
+            image_point = np.asarray(
+                [ball_state.image_x, ball_state.image_y], dtype=np.float64
             )
+            frame_height, frame_width = annotated_frame.shape[:2]
+            if np.isfinite(image_point).all():
+                ball_center = tuple(np.rint(image_point).astype(np.int64).tolist())
+                if 0 <= ball_center[0] < frame_width and 0 <= ball_center[1] < frame_height:
+                    ball_color = (
+                        (0, 215, 255)
+                        if ball_state.status == BallStatus.FRESH
+                        else (180, 180, 180)
+                    )
+                    cv2.circle(annotated_frame, ball_center, 7, ball_color, 2)
+                    cv2.putText(
+                        annotated_frame,
+                        f"ball:{ball_state.status.value}",
+                        (ball_center[0] + 8, ball_center[1]),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        ball_color,
+                        1,
+                    )
 
         publish_frame = getattr(self._store, "publish_raw_frame", None)
         if publish_frame is not None:
@@ -382,6 +400,16 @@ class InferencePipeline:
             frame_state.events.append(foul_event)
         for event in frame_state.events:
             self._store.add_event(event)
+
+        frame_sink = getattr(self, "_frame_sink", None)
+        if frame_sink is not None:
+            try:
+                frame_sink(annotated_frame, frame_state)
+            except Exception as exc:
+                # Rendering is an optional observability feature.  A failed
+                # sink must not terminate the inference worker or the API
+                # stream.
+                logger.warning("Frame sink failed; continuing pipeline: %s", exc)
         return frame_state
 
     def _process_foul(
@@ -470,7 +498,26 @@ class InferencePipeline:
                 age_frames=estimate.age_frames,
             )
 
-        image_xy = estimate.position.astype(np.float32)
+        image_xy = np.asarray(estimate.position, dtype=np.float32).reshape(-1)
+        frame_height, frame_width = frame.shape[:2]
+        if image_xy.size < 2 or not np.isfinite(image_xy[:2]).all():
+            self._ball_processor.tracker.reset()
+            return BallState(
+                status=BallStatus.UNAVAILABLE,
+                confidence=0.0,
+                age_frames=estimate.age_frames,
+            )
+        image_xy = image_xy[:2]
+        if not (0 <= image_xy[0] < frame_width and 0 <= image_xy[1] < frame_height):
+            # A prediction that leaves the image is no longer useful for either
+            # annotation or projection.  Reset instead of carrying a runaway
+            # velocity into later frames.
+            self._ball_processor.tracker.reset()
+            return BallState(
+                status=BallStatus.UNAVAILABLE,
+                confidence=0.0,
+                age_frames=estimate.age_frames,
+            )
         field_xy: Optional[np.ndarray] = None
         if projection.homography is not None:
             try:
@@ -561,6 +608,9 @@ class InferencePipeline:
         pitch_calls = vision_core.pitch_detection_count if vision_core is not None else 0
         reused = vision_core.pitch_reuse_count if vision_core is not None else 0
         available = vision_core.homography_available_count if vision_core is not None else 0
+        camera_motion_refreshes = (
+            vision_core.camera_motion_refresh_count if vision_core is not None else 0
+        )
         player_calls = vision_core.player_inference_count if vision_core is not None else 0
         player_time = vision_core.player_inference_time_ms if vision_core is not None else 0.0
         pitch_time = vision_core.pitch_inference_time_ms if vision_core is not None else 0.0
@@ -594,6 +644,7 @@ class InferencePipeline:
             pitch_detection_count=pitch_calls,
             homography_reuse_ratio=round(reused / max(processed, 1), 3),
             homography_available_ratio=round(available / max(processed, 1), 3),
+            camera_motion_refresh_count=camera_motion_refreshes,
             track_id_interruptions=track_interruptions,
             semantic_inference_count=self.semantic_inference_count,
             semantic_label_switches=semantic_switches,
