@@ -56,9 +56,10 @@ def _draw_player_overlay(
     *,
     bbox: tuple[int, int, int, int],
     track_id: int,
+    team_label: str,
     color: tuple[int, int, int],
 ) -> None:
-    """Draw a high-contrast player box and Track ID on the MJPEG frame."""
+    """Draw a high-contrast player box, Track ID, and team on the frame."""
 
     frame_height, frame_width = frame.shape[:2]
     x1, y1, x2, y2 = bbox
@@ -68,7 +69,7 @@ def _draw_player_overlay(
     y2 = max(y1 + 1, min(frame_height - 1, y2))
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-    label = f"ID {track_id}"
+    label = f"ID {track_id} {team_label}"
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.55
     text_thickness = 2
@@ -487,6 +488,7 @@ class InferencePipeline:
                     annotated_frame,
                     bbox=(x1, y1, x2, y2),
                     track_id=tracker_id,
+                    team_label=team.value.upper(),
                     color=color,
                 )
 
