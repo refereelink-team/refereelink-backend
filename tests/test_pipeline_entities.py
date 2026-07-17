@@ -7,6 +7,7 @@ import supervision as sv
 
 from app.geometry.pitch_projection import PitchProjectionResult
 from app.pipeline.engine import InferencePipeline
+from app.pipeline.recorder import VideoRecorder
 from app.state.models import BallStatus, PlayerRole, TeamLabel
 from app.state.store import StateStore
 from app.vision.ball import BallProcessor
@@ -49,7 +50,7 @@ class _SemanticManager:
         }
 
 
-def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
+def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) -> None:
     detections = sv.Detections(
         xyxy=np.array([[8, 8, 12, 12]], dtype=np.float32),
         confidence=np.array([0.9], dtype=np.float32),
@@ -93,6 +94,8 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
     pipeline._previous_ball_timestamp_s = None
     pipeline._metrics_start = time.monotonic()
     pipeline._metrics_frames = 0
+    pipeline._recorder = VideoRecorder(str(tmp_path / "annotated.mp4"), pipeline._store, fps=10.0)
+    pipeline._recorder.start()
 
     pipeline._vision_core.process = lambda frame, frame_index: vision_frame
 
@@ -108,3 +111,6 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
     assert frame_state.ball.status == BallStatus.FRESH
     assert frame_state.ball.field_x == 10.0
     assert frame_state.possession_track_id == 7
+    pipeline._recorder.stop()
+    assert pipeline._recorder.frames_written == 1
+    assert (tmp_path / "annotated.mp4").is_file()

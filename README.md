@@ -134,6 +134,13 @@ cd web && npm install && cd ..
     --device cpu \
     --inference_backend auto
 
+# Optional: save the annotated pipeline output for debugging
+.venv/bin/python -m app.server.main \
+    --video_source assets/data/smoke_test.mp4 \
+    --device cpu \
+    --enable_recording \
+    --target_video_path debug/recordings/smoke_test.mp4
+
 # In another terminal: launch the React dev server
 cd web && npm run dev
 # Open http://localhost:5173
@@ -172,6 +179,7 @@ cd web && npm run build
 | GET    | `/api/events`           | Recent events (`?limit=50&offset=0`) |
 | POST   | `/api/pipeline/start`   | Start inference |
 | POST   | `/api/pipeline/stop`    | Stop inference |
+| GET    | `/api/pipeline/recording` | Download/seek the optional annotated debug video |
 | GET    | `/video/stream`         | MJPEG live video |
 | WS     | `/ws/state`             | Structured state push + commands |
 

@@ -104,6 +104,8 @@ def create_pipeline(
     team_calibration_path: Optional[str] = None,
     role_detection_interval: int = 3,
     team_classification_interval: int = 5,
+    enable_recording: bool = False,
+    target_video_path: Optional[str] = None,
     calibration_session: Optional[object] = None,
 ) -> InferencePipeline:
     """Factory used by both CLI startup and the REST API to build a
@@ -133,6 +135,8 @@ def create_pipeline(
         team_calibration_path=team_calibration_path,
         role_detection_interval=role_detection_interval,
         team_classification_interval=team_classification_interval,
+        enable_recording=enable_recording,
+        target_video_path=target_video_path,
         frame_observer=(
             getattr(calibration_session, "observe_frame", None)
             if calibration_session is not None
@@ -251,6 +255,8 @@ def main() -> None:
     parser.add_argument("--team_classifier_path", type=str, default=None)
     parser.add_argument("--role_detection_interval", type=int, default=3)
     parser.add_argument("--team_classification_interval", type=int, default=5)
+    parser.add_argument("--enable_recording", action="store_true")
+    parser.add_argument("--target_video_path", type=str, default="")
     parser.add_argument("--enable_foul_detection", action="store_true")
     parser.add_argument("--foul_checkpoint_path", type=str, default=None)
     parser.add_argument("--foul_confidence_threshold", type=float, default=0.48)
@@ -280,6 +286,8 @@ def main() -> None:
         "team_classifier_path": args.team_classifier_path,
         "role_detection_interval": args.role_detection_interval,
         "team_classification_interval": args.team_classification_interval,
+        "enable_recording": args.enable_recording,
+        "target_video_path": args.target_video_path,
     })
 
     if args.video_source:
@@ -305,6 +313,8 @@ def main() -> None:
             team_classifier_path=args.team_classifier_path,
             role_detection_interval=args.role_detection_interval,
             team_classification_interval=args.team_classification_interval,
+            enable_recording=args.enable_recording,
+            target_video_path=args.target_video_path or None,
         )
         attach_and_start_pipeline(pipeline)
     else:

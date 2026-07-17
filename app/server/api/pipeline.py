@@ -4,7 +4,9 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pathlib import Path
+import re
 from pydantic import BaseModel
 
 from app.state.models import SourceStatus
@@ -48,6 +50,8 @@ class PipelineStartPayload(BaseModel):
     team_calibration_path: Optional[str] = None
     role_detection_interval: Optional[int] = None
     team_classification_interval: Optional[int] = None
+    enable_recording: Optional[bool] = None
+    target_video_path: Optional[str] = None
 
 
 @router.post("/api/pipeline/start")
@@ -90,6 +94,8 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.team_calibration_path,
             payload.role_detection_interval,
             payload.team_classification_interval,
+            payload.enable_recording,
+            payload.target_video_path,
             payload.inference_backend,
             payload.enable_foul_detection,
             payload.foul_checkpoint_path,
@@ -120,6 +126,8 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.team_calibration_path is None
         and payload.role_detection_interval is None
         and payload.team_classification_interval is None
+        and payload.enable_recording is None
+        and payload.target_video_path is None
     ):
         # Resume existing pipeline.
         store.pipeline_running = True
@@ -127,7 +135,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             current.start()
         except Exception:
             pass
-        return {"status": "started", "mode": "resume"}
+        return {
+            "status": "started",
+            "mode": "resume",
+            "recording": current.recording_status,
+        }
 
     requested_source = payload.video_source or store.config.video_source
     if requested_source and (
@@ -214,6 +226,16 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     if payload.team_classification_interval is not None
                     else store.config.team_classification_interval
                 ),
+                enable_recording=(
+                    payload.enable_recording
+                    if payload.enable_recording is not None
+                    else store.config.enable_recording
+                ),
+                target_video_path=(
+                    payload.target_video_path
+                    if payload.target_video_path is not None
+                    else store.config.target_video_path
+                ),
             )
             attach_and_start(pipeline)
             store.update_config({
@@ -285,9 +307,24 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     if payload.team_classification_interval is not None
                     else store.config.team_classification_interval
                 ),
+                "enable_recording": (
+                    payload.enable_recording
+                    if payload.enable_recording is not None
+                    else store.config.enable_recording
+                ),
+                "target_video_path": (
+                    payload.target_video_path
+                    if payload.target_video_path is not None
+                    else store.config.target_video_path
+                ),
                 "enable_foul_detection": bool(payload.enable_foul_detection) if payload.enable_foul_detection is not None else store.config.enable_foul_detection,
             })
-            return {"status": "started", "mode": "new", "video_source": requested_source}
+            return {
+                "status": "started",
+                "mode": "new",
+                "video_source": requested_source,
+                "recording": pipeline.recording_status,
+            }
         except FileNotFoundError as exc:
             store.source_status = SourceStatus.ERROR
             return {"status": "error", "detail": f"video source not found: {exc}"}
@@ -317,3 +354,60 @@ async def pipeline_stop(request: Request) -> dict:
     store.pipeline_running = False
     store.source_status = SourceStatus.DISCONNECTED
     return {"status": "stopped"}
+
+
+@router.get("/api/pipeline/recording")
+async def pipeline_recording(request: Request):
+    pipeline = getattr(request.app.state, "pipeline", None)
+    path_value = getattr(pipeline, "recording_path", None)
+    path = Path(path_value) if path_value else None
+    if path is None or not path.is_file():
+        return JSONResponse(status_code=404, content={"detail": "recording is not available"})
+    return _video_response(path, request)
+
+
+def _video_response(path: Path, request: Request):
+    """Serve a debug recording with HTTP Range support for browser seeking."""
+
+    size = path.stat().st_size
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": "video/mp4",
+    }
+    range_header = request.headers.get("range")
+    if not range_header:
+        return FileResponse(path, media_type="video/mp4", headers=headers)
+
+    match = re.match(r"bytes=(\d*)-(\d*)", range_header)
+    if match is None:
+        return JSONResponse(status_code=416, content={"detail": "invalid range"})
+    start_text, end_text = match.groups()
+    if start_text == "" and end_text == "":
+        return JSONResponse(status_code=416, content={"detail": "invalid range"})
+    if start_text == "":
+        length = min(int(end_text), size)
+        start, end = max(size - length, 0), size - 1
+    else:
+        start = int(start_text)
+        end = min(int(end_text), size - 1) if end_text else size - 1
+    if start >= size or start > end:
+        return JSONResponse(status_code=416, content={"detail": "range not satisfiable"})
+
+    def iterator():
+        with path.open("rb") as handle:
+            handle.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = handle.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers.update(
+        {
+            "Content-Range": f"bytes {start}-{end}/{size}",
+            "Content-Length": str(end - start + 1),
+        }
+    )
+    return StreamingResponse(iterator(), status_code=206, headers=headers, media_type="video/mp4")

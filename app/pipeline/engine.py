@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import cv2
@@ -20,6 +21,7 @@ from app.constants.paths import (
 )
 from app.events.engine import EventEngine, FoulEventAdapter
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
+from app.pipeline.recorder import VideoRecorder
 from app.pipeline.source import VideoSource
 from app.state.models import (
     BallState,
@@ -136,6 +138,8 @@ class InferencePipeline:
         foul_checkpoint_path: Optional[str] = None,
         foul_confidence_threshold: float = 0.48,
         foul_detector: Optional[object] = None,
+        enable_recording: bool = False,
+        target_video_path: Optional[str] = None,
         frame_sink: Optional[Callable[[np.ndarray, FrameState], None]] = None,
         frame_observer: Optional[Callable[[np.ndarray, FrameState], None]] = None,
     ) -> None:
@@ -163,6 +167,10 @@ class InferencePipeline:
         self._enable_foul_detection = enable_foul_detection
         self._foul_checkpoint_path = foul_checkpoint_path or FOUL_MODEL_PATH
         self._foul_confidence_threshold = foul_confidence_threshold
+        self._recorder: Optional[VideoRecorder] = None
+        if enable_recording:
+            recording_path = target_video_path or self._default_recording_path()
+            self._recorder = VideoRecorder(recording_path, store, fps=source.fps)
         self._frame_sink = frame_sink
         self._frame_observer = frame_observer
         self._running = False
@@ -206,6 +214,8 @@ class InferencePipeline:
         if self._running:
             return
         self._load_models()
+        if self._recorder is not None:
+            self._recorder.start()
         self._running = True
         self._store.pipeline_running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="pipeline")
@@ -218,7 +228,30 @@ class InferencePipeline:
         self._buffer.close()
         if self._source.is_opened():
             self._source.release()
+        recorder = getattr(self, "_recorder", None)
+        if recorder is not None:
+            recorder.stop()
         logger.info("InferencePipeline stopped")
+
+    @staticmethod
+    def _default_recording_path() -> str:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        return str(Path("debug") / "recordings" / f"analysis_{timestamp}.mp4")
+
+    @property
+    def recording_path(self) -> Optional[str]:
+        recorder = getattr(self, "_recorder", None)
+        return recorder.target_path if recorder is not None else None
+
+    @property
+    def recording_status(self) -> dict[str, object]:
+        recorder = getattr(self, "_recorder", None)
+        return {
+            "enabled": recorder is not None,
+            "active": recorder.active if recorder is not None else False,
+            "path": self.recording_path,
+            "frames_written": recorder.frames_written if recorder is not None else 0,
+        }
 
     def _load_models(self) -> None:
         logger.info("Loading shared vision core")
@@ -296,43 +329,46 @@ class InferencePipeline:
         self._metrics_last = self._metrics_start
         self._last_metrics_emit = self._metrics_start
 
-        while self._running:
-            capture_ts = self._source.capture_timestamp_ms()
-            ret, frame = self._source.read()
+        try:
+            while self._running:
+                capture_ts = self._source.capture_timestamp_ms()
+                ret, frame = self._source.read()
 
-            if not ret or frame is None:
-                if not self._source.is_opened():
-                    logger.info("Video source ended")
-                    self._store.source_status = SourceStatus.DISCONNECTED
-                    break
-                time.sleep(0.01)
-                continue
+                if not ret or frame is None:
+                    if not self._source.is_opened():
+                        logger.info("Video source ended")
+                        self._store.source_status = SourceStatus.DISCONNECTED
+                        break
+                    time.sleep(0.01)
+                    continue
 
-            inference_start = time.monotonic()
-            frame_state = self._process_frame(frame, capture_ts)
-            inference_end = time.monotonic()
+                inference_start = time.monotonic()
+                frame_state = self._process_frame(frame, capture_ts)
+                inference_end = time.monotonic()
 
-            if frame_state is not None:
-                inference_latency = (inference_end - inference_start) * 1000
-                frame_state.processed_timestamp_ms = time.time() * 1000
-                end_to_end = frame_state.processed_timestamp_ms - capture_ts
+                if frame_state is not None:
+                    inference_latency = (inference_end - inference_start) * 1000
+                    frame_state.processed_timestamp_ms = time.time() * 1000
+                    end_to_end = frame_state.processed_timestamp_ms - capture_ts
 
-                self._metrics_frames += 1
-                self._latency_acc_ms += inference_latency
-                self._end_to_end_acc_ms += end_to_end
+                    self._metrics_frames += 1
+                    self._latency_acc_ms += inference_latency
+                    self._end_to_end_acc_ms += end_to_end
 
-                self._store.latest_frame_state = frame_state
+                    self._store.latest_frame_state = frame_state
 
-            now = time.monotonic()
-            if now - self._last_metrics_emit >= METRICS_INTERVAL_SEC:
-                self._emit_metrics()
-                self._last_metrics_emit = now
-
-        # A local file can finish without an explicit stop() call.  Reflect
-        # that terminal state for API clients and make the worker lifecycle
-        # idempotent for callers waiting on the source to end.
-        self._running = False
-        self._store.pipeline_running = False
+                now = time.monotonic()
+                if now - self._last_metrics_emit >= METRICS_INTERVAL_SEC:
+                    self._emit_metrics()
+                    self._last_metrics_emit = now
+        finally:
+            # A local file can finish without an explicit stop() call.  Reflect
+            # that terminal state and always finalize the optional debug video.
+            self._running = False
+            self._store.pipeline_running = False
+            recorder = getattr(self, "_recorder", None)
+            if recorder is not None:
+                recorder.stop()
 
     def _process_frame(
         self, frame: np.ndarray, capture_timestamp_ms: float
@@ -483,6 +519,10 @@ class InferencePipeline:
             publish_frame(annotated_frame)
         else:
             self._store._latest_raw_frame = annotated_frame  # type: ignore[attr-defined]
+
+        recorder = getattr(self, "_recorder", None)
+        if recorder is not None:
+            recorder.write(annotated_frame)
 
         elapsed = time.monotonic() - self._metrics_start
         current_fps = self._metrics_frames / max(elapsed, 0.001)
