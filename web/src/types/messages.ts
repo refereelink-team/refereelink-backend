@@ -135,6 +135,7 @@ export interface CalibrationValidationReport {
   inter_class_separation: number;
   leave_one_track_out_accuracy: number | null;
   goalkeeper_mapping_ready: boolean;
+  referee_mapping_ready: boolean;
 }
 
 export interface TeamCalibrationState {
@@ -145,6 +146,7 @@ export interface TeamCalibrationState {
   bundle_path: string | null;
   ready: boolean;
   goalkeeper_mapping_ready: boolean;
+  referee_mapping_ready: boolean;
   observed_frames: number;
   last_frame_index: number | null;
   tracks: CalibrationTrack[];
@@ -184,6 +186,10 @@ export interface PipelineConfig {
   enable_ball: boolean;
   role_detection_interval: number;
   team_classification_interval: number;
+  track_activation_threshold: number;
+  track_lost_buffer: number;
+  track_matching_threshold: number;
+  track_minimum_consecutive_frames: number;
   ball_detection_interval: number;
   ball_max_prediction_frames: number;
   camera_calibration_path: string;

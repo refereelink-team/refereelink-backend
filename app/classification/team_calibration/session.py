@@ -486,6 +486,9 @@ class TeamCalibrationSession:
                 "goalkeeper_mapping_ready": bool(
                     self._report.goalkeeper_mapping_ready if self._report else False
                 ),
+                "referee_mapping_ready": bool(
+                    self._report.referee_mapping_ready if self._report else False
+                ),
                 "observed_frames": self._observed_frames,
                 "last_frame_index": self._last_frame_index,
                 "tracks": tracks,

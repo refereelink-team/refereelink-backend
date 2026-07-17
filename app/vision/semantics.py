@@ -399,7 +399,14 @@ class TrackSemanticManager:
             results[track_id] = SemanticResult(
                 track_id=track_id,
                 role=role,
-                team=team_labels[index] if team_available else UNKNOWN_TEAM,
+                # Expose the trajectory-resolved label.  Returning the raw
+                # current-frame label here bypasses the hysteresis in
+                # TrajectorySemanticManager and causes visible team flicker.
+                team=(
+                    TeamLabel.NONE.value
+                    if role == "referee"
+                    else team_label_from_id(team_id) if team_available else UNKNOWN_TEAM
+                ),
                 team_id=team_id,
                 role_confidence=role_confidence,
                 team_confidence=team_confidence,

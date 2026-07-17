@@ -26,6 +26,13 @@ def build_prototypes(
 
     groups: dict[tuple[TeamLabel, PlayerRole], list[TrackFeature]] = defaultdict(list)
     for track in tracks:
+        # Referees are deliberately stored under TeamLabel.NONE.  They must
+        # survive calibration persistence even though they never receive a
+        # HOME/AWAY assignment.
+        if track.role == PlayerRole.REFEREE:
+            if track.team == TeamLabel.NONE:
+                groups[(TeamLabel.NONE, PlayerRole.REFEREE)].append(track)
+            continue
         if track.team not in {TeamLabel.HOME, TeamLabel.AWAY}:
             continue
         if track.role == PlayerRole.GOALKEEPER and not include_goalkeepers:
@@ -102,4 +109,3 @@ def _distance(first: Optional[np.ndarray], second: Optional[np.ndarray]) -> floa
     if first is None or second is None:
         return 0.0
     return float(np.linalg.norm(first - second))
-

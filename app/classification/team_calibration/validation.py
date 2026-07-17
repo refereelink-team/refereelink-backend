@@ -28,9 +28,17 @@ class CalibrationValidator:
         self.min_leave_one_out_accuracy = float(min_leave_one_out_accuracy)
 
     def validate(self, tracks: Iterable[TrackFeature]) -> ValidationReport:
-        items = [track for track in tracks if track.team in {TeamLabel.HOME, TeamLabel.AWAY}]
+        all_tracks = list(tracks)
+        items = [track for track in all_tracks if track.team in {TeamLabel.HOME, TeamLabel.AWAY}]
         home = [track for track in items if track.team == TeamLabel.HOME and track.role == PlayerRole.OUTFIELD]
         away = [track for track in items if track.team == TeamLabel.AWAY and track.role == PlayerRole.OUTFIELD]
+        goalkeepers = [
+            track for track in items if track.role == PlayerRole.GOALKEEPER
+        ]
+        referees = [
+            track for track in all_tracks
+            if track.team == TeamLabel.NONE and track.role == PlayerRole.REFEREE
+        ]
         reasons: list[str] = []
         if len(home) < self.min_tracks_per_team:
             reasons.append("home_outfield_tracks_insufficient")
@@ -56,9 +64,13 @@ class CalibrationValidator:
             loo_accuracy is None or loo_accuracy < self.min_leave_one_out_accuracy
         ):
             reasons.append("leave_one_track_out_failed")
+        prototypes = build_prototypes(all_tracks)
         goalkeeper_ready = all(
-            (team, PlayerRole.GOALKEEPER) in build_prototypes(items)
+            (team, PlayerRole.GOALKEEPER) in prototypes
             for team in (TeamLabel.HOME, TeamLabel.AWAY)
+        )
+        referee_ready = bool(referees) and all(
+            track.observation_count >= self.min_samples_per_track for track in referees
         )
         return ValidationReport(
             passed=not reasons,
@@ -72,6 +84,10 @@ class CalibrationValidator:
             inter_class_separation=separation,
             leave_one_track_out_accuracy=loo_accuracy,
             goalkeeper_mapping_ready=goalkeeper_ready,
+            referee_mapping_ready=referee_ready,
+            goalkeeper_track_count=len(goalkeepers),
+            referee_track_count=len(referees),
+            referee_sample_count=sum(track.observation_count for track in referees),
         )
 
     def _leave_one_out(self, tracks: list[TrackFeature]) -> float | None:
@@ -105,4 +121,3 @@ def _feature_distance(first: np.ndarray | None, second: np.ndarray | None) -> fl
     if first is None or second is None:
         return 0.0
     return float(np.linalg.norm(first - second))
-

@@ -104,6 +104,10 @@ def create_pipeline(
     team_calibration_path: Optional[str] = None,
     role_detection_interval: int = 3,
     team_classification_interval: int = 5,
+    track_activation_threshold: float = 0.25,
+    track_lost_buffer: int = 45,
+    track_matching_threshold: float = 0.8,
+    track_minimum_consecutive_frames: int = 2,
     enable_recording: bool = False,
     target_video_path: Optional[str] = None,
     calibration_session: Optional[object] = None,
@@ -135,6 +139,10 @@ def create_pipeline(
         team_calibration_path=team_calibration_path,
         role_detection_interval=role_detection_interval,
         team_classification_interval=team_classification_interval,
+        track_activation_threshold=track_activation_threshold,
+        track_lost_buffer=track_lost_buffer,
+        track_matching_threshold=track_matching_threshold,
+        track_minimum_consecutive_frames=track_minimum_consecutive_frames,
         enable_recording=enable_recording,
         target_video_path=target_video_path,
         frame_observer=(
@@ -256,6 +264,10 @@ def main() -> None:
     parser.add_argument("--team_calibration_path", type=str, default=None)
     parser.add_argument("--role_detection_interval", type=int, default=3)
     parser.add_argument("--team_classification_interval", type=int, default=5)
+    parser.add_argument("--track_activation_threshold", type=float, default=0.25)
+    parser.add_argument("--track_lost_buffer", type=int, default=45)
+    parser.add_argument("--track_matching_threshold", type=float, default=0.8)
+    parser.add_argument("--track_minimum_consecutive_frames", type=int, default=2)
     parser.add_argument("--enable_recording", action="store_true")
     parser.add_argument("--target_video_path", type=str, default="")
     parser.add_argument("--enable_foul_detection", action="store_true")
@@ -288,6 +300,10 @@ def main() -> None:
         "team_calibration_path": args.team_calibration_path,
         "role_detection_interval": args.role_detection_interval,
         "team_classification_interval": args.team_classification_interval,
+        "track_activation_threshold": args.track_activation_threshold,
+        "track_lost_buffer": args.track_lost_buffer,
+        "track_matching_threshold": args.track_matching_threshold,
+        "track_minimum_consecutive_frames": args.track_minimum_consecutive_frames,
         "enable_recording": args.enable_recording,
         "target_video_path": args.target_video_path,
     })
@@ -316,6 +332,10 @@ def main() -> None:
             team_calibration_path=args.team_calibration_path,
             role_detection_interval=args.role_detection_interval,
             team_classification_interval=args.team_classification_interval,
+            track_activation_threshold=args.track_activation_threshold,
+            track_lost_buffer=args.track_lost_buffer,
+            track_matching_threshold=args.track_matching_threshold,
+            track_minimum_consecutive_frames=args.track_minimum_consecutive_frames,
             enable_recording=args.enable_recording,
             target_video_path=args.target_video_path or None,
         )

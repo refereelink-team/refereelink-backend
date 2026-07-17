@@ -153,6 +153,10 @@ class PipelineConfig(BaseModel):
     enable_ball: bool = True
     role_detection_interval: int = Field(3, ge=1)
     team_classification_interval: int = Field(5, ge=1)
+    track_activation_threshold: float = Field(0.25, ge=0.0, le=1.0)
+    track_lost_buffer: int = Field(45, ge=1)
+    track_matching_threshold: float = Field(0.8, ge=0.0, le=1.0)
+    track_minimum_consecutive_frames: int = Field(2, ge=1)
     ball_detection_interval: int = Field(2, ge=1)
     ball_max_prediction_frames: int = Field(8, ge=0)
     camera_calibration_path: str = "assets/calibration/camera.npz"

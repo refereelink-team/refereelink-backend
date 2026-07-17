@@ -76,6 +76,10 @@ class VisionCore:
         inference_backend: str = "auto",
         camera_motion_threshold_px: float = 6.0,
         camera_motion_estimator: Optional[CameraMotionEstimator] = None,
+        track_activation_threshold: float = 0.25,
+        track_lost_buffer: int = 45,
+        track_matching_threshold: float = 0.8,
+        track_minimum_consecutive_frames: int = 2,
     ) -> None:
         self.device = device
         self.fps = max(float(fps), 1.0)
@@ -93,7 +97,13 @@ class VisionCore:
         self._tracker = (
             tracker
             if tracker is not None
-            else sv.ByteTrack(minimum_consecutive_frames=3)
+            else sv.ByteTrack(
+                track_activation_threshold=float(track_activation_threshold),
+                lost_track_buffer=max(int(track_lost_buffer), 1),
+                minimum_matching_threshold=float(track_matching_threshold),
+                frame_rate=self.fps,
+                minimum_consecutive_frames=max(int(track_minimum_consecutive_frames), 1),
+            )
         )
         self._projection_engine = (
             projection_engine

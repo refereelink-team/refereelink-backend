@@ -303,6 +303,12 @@ const TeamCalibrationPanel: React.FC = () => {
           <span>HOME {validation?.home_track_count ?? 0} tracks</span>
           <span>AWAY {validation?.away_track_count ?? 0} tracks</span>
           <span>{calibration.observed_frames} frames</span>
+          <span className={calibration.goalkeeper_mapping_ready ? 'ready-text' : 'warning-text'}>
+            GK {calibration.goalkeeper_mapping_ready ? 'READY' : 'MISSING'}
+          </span>
+          <span className={calibration.referee_mapping_ready ? 'ready-text' : 'warning-text'}>
+            REF {calibration.referee_mapping_ready ? 'READY' : 'MISSING'}
+          </span>
           <span className={calibration.ready ? 'ready-text' : 'warning-text'}>{calibration.ready ? 'TEAM READY' : 'NOT READY'}</span>
         </div>
 

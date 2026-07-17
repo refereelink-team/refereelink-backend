@@ -37,6 +37,7 @@ from app.state.models import (
 from app.state.store import StateStore
 from app.vision.core import VisionCore
 from app.vision.ball import BallProcessor
+from app.vision.display import TrackDisplaySmoother
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ def _draw_player_overlay(
     bbox: tuple[int, int, int, int],
     track_id: int,
     team_label: str,
+    role_label: str = "UNKNOWN",
     color: tuple[int, int, int],
 ) -> None:
     """Draw a high-contrast player box, Track ID, and team on the frame."""
@@ -69,7 +71,7 @@ def _draw_player_overlay(
     y2 = max(y1 + 1, min(frame_height - 1, y2))
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-    label = f"ID {track_id} {team_label}"
+    label = f"ID {track_id} {team_label} {role_label}"
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.55
     text_thickness = 2
@@ -132,6 +134,10 @@ class InferencePipeline:
         team_calibration_path: Optional[str] = None,
         role_detection_interval: int = 3,
         team_classification_interval: int = 5,
+        track_activation_threshold: float = 0.25,
+        track_lost_buffer: int = 45,
+        track_matching_threshold: float = 0.8,
+        track_minimum_consecutive_frames: int = 2,
         semantic_manager: Optional[object] = None,
         team_assignment_service: Optional[object] = None,
         inference_backend: str = "auto",
@@ -164,6 +170,10 @@ class InferencePipeline:
         self._team_calibration_path = team_calibration_path
         self._role_detection_interval = role_detection_interval
         self._team_classification_interval = team_classification_interval
+        self._track_activation_threshold = float(track_activation_threshold)
+        self._track_lost_buffer = max(int(track_lost_buffer), 1)
+        self._track_matching_threshold = float(track_matching_threshold)
+        self._track_minimum_consecutive_frames = max(int(track_minimum_consecutive_frames), 1)
         self._inference_backend = inference_backend
         self._enable_foul_detection = enable_foul_detection
         self._foul_checkpoint_path = foul_checkpoint_path or FOUL_MODEL_PATH
@@ -201,6 +211,10 @@ class InferencePipeline:
         )
         self._semantic_last_frame: Optional[int] = None
         self._semantic_results: dict[int, object] = {}
+        self._display_smoother = TrackDisplaySmoother(
+            ema_alpha=0.65,
+            max_missing_frames=4,
+        )
         self.semantic_inference_count = 0
         self.team_inference_count = 0
         self.team_unknown_count = 0
@@ -266,6 +280,10 @@ class InferencePipeline:
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,
             imgsz=self._imgsz,
+            track_activation_threshold=self._track_activation_threshold,
+            track_lost_buffer=self._track_lost_buffer,
+            track_matching_threshold=self._track_matching_threshold,
+            track_minimum_consecutive_frames=self._track_minimum_consecutive_frames,
             inference_backend=self._inference_backend,
         )
         self._vision_core.load_models()
@@ -273,32 +291,53 @@ class InferencePipeline:
             from app.classification.team_calibration.appearance_features import AppearanceFeatureExtractor
             from app.classification.team_calibration.bundle import CalibrationBundle
             from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
+            from app.classification.team_calibration.role_predictor import CalibratedRoleClassifier
             from app.classification.team_calibration.runtime import TeamAssignmentService
             from app.vision.role import UltralyticsRoleClassifier
             from app.vision.semantics import TrackSemanticManager
 
-            role_classifier = UltralyticsRoleClassifier(
+            bundle = None
+            appearance_extractor = None
+            if self._team_calibration_path:
+                try:
+                    bundle = CalibrationBundle.load(self._team_calibration_path)
+                except (OSError, ValueError, KeyError) as exc:
+                    logger.warning("Team calibration bundle unavailable; using UNKNOWN: %s", exc)
+
+            if bundle is not None:
+                appearance_extractor = AppearanceFeatureExtractor(
+                    device=self._device,
+                    pretrained=True,
+                )
+
+            external_role_classifier = UltralyticsRoleClassifier(
                 model_path=self._role_model_path,
                 device=self._device,
                 imgsz=self._imgsz,
             )
-            if not role_classifier.load():
-                role_classifier = None
+            if not external_role_classifier.load():
+                logger.warning(
+                    "Role model unavailable at %s; using supervised role prototypes when available",
+                    self._role_model_path,
+                )
+                external_role_classifier = None
+
             team_classifier = self._team_assignment_service
-            if team_classifier is None and self._team_calibration_path:
-                try:
-                    bundle = CalibrationBundle.load(self._team_calibration_path)
-                    team_classifier = TeamAssignmentService(
-                        prototypes=bundle.prototypes,
-                        classifier=SupervisedPrototypeClassifier(bundle.prototypes),
-                        appearance_extractor=AppearanceFeatureExtractor(
-                            device=self._device,
-                            pretrained=True,
-                        ),
-                        require_appearance=True,
-                    )
-                except (OSError, ValueError, KeyError) as exc:
-                    logger.warning("Team calibration bundle unavailable; using UNKNOWN: %s", exc)
+            if team_classifier is None and bundle is not None:
+                team_classifier = TeamAssignmentService(
+                    prototypes=bundle.prototypes,
+                    classifier=SupervisedPrototypeClassifier(bundle.prototypes),
+                    appearance_extractor=appearance_extractor,
+                    require_appearance=True,
+                )
+
+            role_classifier = None
+            if bundle is not None or external_role_classifier is not None:
+                role_classifier = CalibratedRoleClassifier(
+                    prototypes=bundle.prototypes if bundle is not None else None,
+                    model=external_role_classifier,
+                    appearance_extractor=appearance_extractor,
+                )
             self._semantic_manager = TrackSemanticManager(
                 role_classifier=role_classifier,
                 team_classifier=team_classifier,
@@ -472,27 +511,30 @@ class InferencePipeline:
             if team_id == -1:
                 self.team_unknown_count = getattr(self, "team_unknown_count", 0) + 1
 
-        # Draw detection boxes and tracker IDs on the frame for the MJPEG stream.
+        # Draw smoothed display boxes. Brief detector gaps are held only for
+        # visualization; stale tracks never enter FrameState or classifiers.
         annotated_frame = vision_frame.undistorted_frame.copy()
-        n = len(detections)
-        if n > 0:
-            for i in range(n):
-                x1, y1, x2, y2 = map(int, detections.xyxy[i])
-                tracker_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else i
-                team_id = player_states[i].team_id if i < len(player_states) else -1
-                color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(
-                    team_id,
-                    (0, 215, 255),
-                )
-                _draw_player_overlay(
-                    annotated_frame,
-                    bbox=(x1, y1, x2, y2),
-                    track_id=tracker_id,
-                    team_label=player_states[i].team.value.upper()
-                    if i < len(player_states)
-                    else TeamLabel.UNKNOWN.value.upper(),
-                    color=color,
-                )
+        display_smoother = getattr(self, "_display_smoother", None)
+        if display_smoother is None:
+            # Keep lightweight ``__new__``-constructed test doubles and legacy
+            # callers compatible with the new display-only state.
+            display_smoother = TrackDisplaySmoother(ema_alpha=0.65, max_missing_frames=4)
+            self._display_smoother = display_smoother
+        for display in display_smoother.update(player_states):
+            x1, y1, x2, y2 = map(int, display.bbox)
+            color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(
+                display.team_id,
+                (0, 215, 255),
+            )
+            _draw_player_overlay(
+                annotated_frame,
+                bbox=(x1, y1, x2, y2),
+                track_id=display.track_id,
+                team_label=display.team_label.upper(),
+                role_label=display.role_label.upper()
+                + (" LOST" if display.missing_frames else ""),
+                color=color,
+            )
 
         if ball_state.image_x is not None and ball_state.image_y is not None:
             image_point = np.asarray(

@@ -9,6 +9,10 @@ from app.classification.team_calibration.appearance_features import AppearanceFe
 from app.classification.team_calibration.bundle import CalibrationBundle
 from app.classification.team_calibration.color_features import ColorFeatureExtractor
 from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
+from app.classification.team_calibration.role_predictor import (
+    CalibratedRoleClassifier,
+    SupervisedRolePrototypeClassifier,
+)
 from app.classification.team_calibration.prototypes import build_prototypes
 from app.classification.team_calibration.quality import CropQualityAssessor, QualityAssessment
 from app.classification.team_calibration.roi import JerseyROIExtractor
@@ -22,6 +26,7 @@ from app.classification.team_calibration.types import (
     TeamLabel,
     TeamPrediction,
     TeamPrototype,
+    RolePrediction,
 )
 
 __all__ = [
@@ -36,11 +41,14 @@ __all__ = [
     "PlayerRole",
     "QualityAssessment",
     "SupervisedPrototypeClassifier",
+    "SupervisedRolePrototypeClassifier",
+    "CalibratedRoleClassifier",
     "TeamAssignmentService",
     "TeamCalibrationSession",
     "TeamLabel",
     "TeamPrediction",
     "TeamPrototype",
+    "RolePrediction",
     "TrackFeatureBank",
     "build_prototypes",
 ]

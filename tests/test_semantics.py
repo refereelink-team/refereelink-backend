@@ -224,3 +224,49 @@ def test_track_semantic_manager_preserves_one_bbox_row_per_track() -> None:
     manager.update(frame, detections, frame_index=42)
 
     assert [crop.shape for crop in classifier.crops] == [(60, 20, 3), (60, 30, 3)]
+
+
+def test_track_semantic_manager_returns_hysteresis_resolved_team_label() -> None:
+    class FlippingTeamClassifier:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict_tracks(self, crops, **_kwargs):
+            self.calls += 1
+            team = TeamLabel.HOME if self.calls == 1 else TeamLabel.AWAY
+            return [SimpleNamespace(team=team, confidence=0.95) for _ in crops]
+
+    manager = TrackSemanticManager(team_classifier=FlippingTeamClassifier())
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    detections = SimpleNamespace(
+        tracker_id=np.asarray([7]),
+        xyxy=np.asarray([[10, 10, 30, 70]], dtype=np.float32),
+        confidence=np.asarray([0.9], dtype=np.float32),
+    )
+
+    first = manager.update(frame, detections, frame_index=1)[7]
+    second = manager.update(frame, detections, frame_index=2)[7]
+
+    assert first.team == TeamLabel.HOME.value
+    assert first.team_id == 0
+    assert second.team == TeamLabel.HOME.value
+    assert second.team_id == 0
+
+
+def test_referee_role_never_receives_a_team_assignment() -> None:
+    class RefereeClassifier:
+        def predict_with_confidence(self, crops):
+            return np.asarray(["referee"] * len(crops), dtype=object), np.ones(len(crops))
+
+    manager = TrackSemanticManager(role_classifier=RefereeClassifier())
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    detections = SimpleNamespace(
+        tracker_id=np.asarray([7]),
+        xyxy=np.asarray([[10, 10, 30, 70]], dtype=np.float32),
+    )
+
+    result = manager.update(frame, detections, frame_index=1)[7]
+
+    assert result.role == "referee"
+    assert result.team == TeamLabel.NONE.value
+    assert result.team_id == -1

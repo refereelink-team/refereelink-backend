@@ -50,6 +50,10 @@ class PipelineStartPayload(BaseModel):
     team_calibration_path: Optional[str] = None
     role_detection_interval: Optional[int] = None
     team_classification_interval: Optional[int] = None
+    track_activation_threshold: Optional[float] = None
+    track_lost_buffer: Optional[int] = None
+    track_matching_threshold: Optional[float] = None
+    track_minimum_consecutive_frames: Optional[int] = None
     enable_recording: Optional[bool] = None
     target_video_path: Optional[str] = None
 
@@ -94,6 +98,10 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.team_calibration_path,
             payload.role_detection_interval,
             payload.team_classification_interval,
+            payload.track_activation_threshold,
+            payload.track_lost_buffer,
+            payload.track_matching_threshold,
+            payload.track_minimum_consecutive_frames,
             payload.enable_recording,
             payload.target_video_path,
             payload.inference_backend,
@@ -126,6 +134,10 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.team_calibration_path is None
         and payload.role_detection_interval is None
         and payload.team_classification_interval is None
+        and payload.track_activation_threshold is None
+        and payload.track_lost_buffer is None
+        and payload.track_matching_threshold is None
+        and payload.track_minimum_consecutive_frames is None
         and payload.enable_recording is None
         and payload.target_video_path is None
     ):
@@ -226,6 +238,26 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     if payload.team_classification_interval is not None
                     else store.config.team_classification_interval
                 ),
+                track_activation_threshold=(
+                    payload.track_activation_threshold
+                    if payload.track_activation_threshold is not None
+                    else store.config.track_activation_threshold
+                ),
+                track_lost_buffer=(
+                    payload.track_lost_buffer
+                    if payload.track_lost_buffer is not None
+                    else store.config.track_lost_buffer
+                ),
+                track_matching_threshold=(
+                    payload.track_matching_threshold
+                    if payload.track_matching_threshold is not None
+                    else store.config.track_matching_threshold
+                ),
+                track_minimum_consecutive_frames=(
+                    payload.track_minimum_consecutive_frames
+                    if payload.track_minimum_consecutive_frames is not None
+                    else store.config.track_minimum_consecutive_frames
+                ),
                 enable_recording=(
                     payload.enable_recording
                     if payload.enable_recording is not None
@@ -306,6 +338,26 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.team_classification_interval
                     if payload.team_classification_interval is not None
                     else store.config.team_classification_interval
+                ),
+                "track_activation_threshold": (
+                    payload.track_activation_threshold
+                    if payload.track_activation_threshold is not None
+                    else store.config.track_activation_threshold
+                ),
+                "track_lost_buffer": (
+                    payload.track_lost_buffer
+                    if payload.track_lost_buffer is not None
+                    else store.config.track_lost_buffer
+                ),
+                "track_matching_threshold": (
+                    payload.track_matching_threshold
+                    if payload.track_matching_threshold is not None
+                    else store.config.track_matching_threshold
+                ),
+                "track_minimum_consecutive_frames": (
+                    payload.track_minimum_consecutive_frames
+                    if payload.track_minimum_consecutive_frames is not None
+                    else store.config.track_minimum_consecutive_frames
                 ),
                 "enable_recording": (
                     payload.enable_recording

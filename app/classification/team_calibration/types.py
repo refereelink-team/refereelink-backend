@@ -103,6 +103,19 @@ class TeamPrediction:
     rejection_reason: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class RolePrediction:
+    """Track-level role prediction from a supervised or model-backed source."""
+
+    role: PlayerRole = PlayerRole.UNKNOWN
+    confidence: float = 0.0
+    margin: float = 0.0
+    best_distance: float = float("inf")
+    observation_count: int = 0
+    source: str = "supervised_role_prototype"
+    rejection_reason: Optional[str] = None
+
+
 @dataclass
 class ValidationReport:
     passed: bool
@@ -116,4 +129,7 @@ class ValidationReport:
     inter_class_separation: float = 0.0
     leave_one_track_out_accuracy: Optional[float] = None
     goalkeeper_mapping_ready: bool = False
-
+    referee_mapping_ready: bool = False
+    goalkeeper_track_count: int = 0
+    referee_track_count: int = 0
+    referee_sample_count: int = 0
