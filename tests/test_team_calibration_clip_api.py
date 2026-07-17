@@ -90,3 +90,27 @@ def test_clip_api_supports_preview_range_and_async_processing(tmp_path: Path) ->
     finally:
         store._team_calibration = previous_session
         store._team_calibration_clip = previous_service
+
+
+def test_validate_binds_ready_bundle_to_pipeline_config() -> None:
+    store = app.state.store
+    previous_session = store._team_calibration
+    previous_config = store.config
+
+    class ReadySession:
+        def validate(self):
+            return {
+                "state": "ready",
+                "bundle_path": "/tmp/test2-team-bundle.npz",
+            }
+
+    store._team_calibration = ReadySession()
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/team-calibration/validate")
+            assert response.status_code == 200
+            assert response.json()["state"] == "ready"
+            assert store.config.team_calibration_path == "/tmp/test2-team-bundle.npz"
+    finally:
+        store._team_calibration = previous_session
+        store._config = previous_config

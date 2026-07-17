@@ -212,7 +212,11 @@ async def label_team_track(
 @router.post("/api/team-calibration/validate")
 async def validate_team_calibration(request: Request) -> dict:
     try:
-        return _session(request).validate()
+        store: StateStore = request.app.state.store
+        snapshot = store.team_calibration.validate()
+        if snapshot.get("state") == "ready" and snapshot.get("bundle_path"):
+            store.update_config({"team_calibration_path": snapshot["bundle_path"]})
+        return snapshot
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (OSError, ValueError) as exc:
