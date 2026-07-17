@@ -488,7 +488,9 @@ class InferencePipeline:
                     annotated_frame,
                     bbox=(x1, y1, x2, y2),
                     track_id=tracker_id,
-                    team_label=team.value.upper(),
+                    team_label=player_states[i].team.value.upper()
+                    if i < len(player_states)
+                    else TeamLabel.UNKNOWN.value.upper(),
                     color=color,
                 )
 
