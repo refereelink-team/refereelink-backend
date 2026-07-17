@@ -253,6 +253,7 @@ def main() -> None:
     parser.add_argument("--ball_max_prediction_frames", type=int, default=8)
     parser.add_argument("--role_model_path", type=str, default=ROLE_DETECTION_MODEL_PATH)
     parser.add_argument("--team_classifier_path", type=str, default=None)
+    parser.add_argument("--team_calibration_path", type=str, default=None)
     parser.add_argument("--role_detection_interval", type=int, default=3)
     parser.add_argument("--team_classification_interval", type=int, default=5)
     parser.add_argument("--enable_recording", action="store_true")
@@ -284,6 +285,7 @@ def main() -> None:
         "ball_max_prediction_frames": args.ball_max_prediction_frames,
         "role_model_path": args.role_model_path,
         "team_classifier_path": args.team_classifier_path,
+        "team_calibration_path": args.team_calibration_path,
         "role_detection_interval": args.role_detection_interval,
         "team_classification_interval": args.team_classification_interval,
         "enable_recording": args.enable_recording,
@@ -311,6 +313,7 @@ def main() -> None:
             ball_max_prediction_frames=args.ball_max_prediction_frames,
             role_model_path=args.role_model_path,
             team_classifier_path=args.team_classifier_path,
+            team_calibration_path=args.team_calibration_path,
             role_detection_interval=args.role_detection_interval,
             team_classification_interval=args.team_classification_interval,
             enable_recording=args.enable_recording,
