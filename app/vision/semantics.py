@@ -16,13 +16,17 @@ from typing import Any, Deque, Iterable, Mapping, Optional
 
 import numpy as np
 
+from app.classification.team_calibration.types import TeamLabel
+
 
 logger = logging.getLogger(__name__)
 
 
 UNKNOWN_ROLE = "unknown"
+OUTFIELD_ROLE = "outfield"
 UNKNOWN_TEAM_ID = -1
-KNOWN_ROLES = ("player", "goalkeeper", "referee")
+UNKNOWN_TEAM = TeamLabel.UNKNOWN.value
+KNOWN_ROLES = (OUTFIELD_ROLE, "goalkeeper", "referee", "staff")
 KNOWN_TEAM_IDS = (0, 1)
 
 
@@ -32,6 +36,7 @@ class SemanticObservation:
 
     role: str = UNKNOWN_ROLE
     role_confidence: float = 0.0
+    team: str = UNKNOWN_TEAM
     team_id: int = UNKNOWN_TEAM_ID
     team_confidence: float = 0.0
     frame_index: Optional[int] = None
@@ -44,6 +49,7 @@ class TrackSemanticState:
     track_id: int
     role: str = UNKNOWN_ROLE
     role_confidence: float = 0.0
+    team: str = UNKNOWN_TEAM
     team_id: int = UNKNOWN_TEAM_ID
     team_confidence: float = 0.0
     semantic_status: str = "unknown"
@@ -61,6 +67,7 @@ class TrackSemanticState:
             "track_id": self.track_id,
             "role": self.role,
             "role_confidence": self.role_confidence,
+            "team": self.team,
             "team_id": self.team_id,
             "team_confidence": self.team_confidence,
             "semantic_status": self.semantic_status,
@@ -75,9 +82,11 @@ class SemanticResult:
 
     track_id: int
     role: str = UNKNOWN_ROLE
+    team: str = UNKNOWN_TEAM
     team_id: int = UNKNOWN_TEAM_ID
     role_confidence: float = 0.0
     team_confidence: float = 0.0
+    team_rejection_reason: Optional[str] = None
     status: str = "unknown"
 
     @property
@@ -90,9 +99,11 @@ class SemanticResult:
         return {
             "track_id": self.track_id,
             "role": self.role,
+            "team": self.team,
             "team_id": self.team_id,
             "role_confidence": self.role_confidence,
             "team_confidence": self.team_confidence,
+            "team_rejection_reason": self.team_rejection_reason,
             "status": self.status,
         }
 
@@ -132,6 +143,7 @@ class TrajectorySemanticManager:
         self.max_missing_frames = int(max_missing_frames)
         self._states: dict[int, TrackSemanticState] = {}
         self.semantic_label_switches = 0
+        self.team_label_switches = 0
 
     @property
     def states(self) -> Mapping[int, TrackSemanticState]:
@@ -146,6 +158,7 @@ class TrajectorySemanticManager:
         *,
         role: Any = None,
         role_confidence: float = 0.0,
+        team: Any = None,
         team_id: Any = None,
         team_confidence: float = 0.0,
         frame_index: Optional[int] = None,
@@ -164,6 +177,7 @@ class TrajectorySemanticManager:
         observation = SemanticObservation(
             role=normalize_role(role),
             role_confidence=_confidence(role_confidence),
+            team=normalize_team_label(team if team is not None else team_id),
             team_id=normalize_team_id(team_id),
             team_confidence=_confidence(team_confidence),
             frame_index=observation_frame,
@@ -188,12 +202,14 @@ class TrajectorySemanticManager:
             unknown=UNKNOWN_TEAM_ID,
             frame_index=frame_index,
         )
+        state.team = team_label_from_id(state.team_id)
         if previous_role != state.role and previous_role != UNKNOWN_ROLE:
             state.role_switches += 1
             self.semantic_label_switches += 1
         if previous_team != state.team_id and previous_team != UNKNOWN_TEAM_ID:
             state.team_switches += 1
             self.semantic_label_switches += 1
+            self.team_label_switches += 1
         state.last_seen_frame = frame_index if frame_index is not None else state.last_seen_frame
         state.last_update_frame = frame_index if frame_index is not None else state.last_update_frame
         state.semantic_status = _semantic_status(state.role, state.team_id)
@@ -229,6 +245,7 @@ class TrajectorySemanticManager:
                 observation = SemanticObservation(
                     role=observation.role,
                     role_confidence=observation.role_confidence,
+                    team=observation.team,
                     team_id=observation.team_id,
                     team_confidence=observation.team_confidence,
                     frame_index=frame_index,
@@ -250,6 +267,7 @@ class TrajectorySemanticManager:
     def clear(self) -> None:
         self._states.clear()
         self.semantic_label_switches = 0
+        self.team_label_switches = 0
 
     def _trim_history(self, history: Deque[SemanticObservation]) -> None:
         while len(history) > self.history_size:
@@ -332,6 +350,10 @@ class TrackSemanticManager:
     def semantic_label_switches(self) -> int:
         return self._trajectory.semantic_label_switches
 
+    @property
+    def team_label_switches(self) -> int:
+        return self._trajectory.team_label_switches
+
     def get(self, track_id: int) -> Optional[TrackSemanticState]:
         return self._trajectory.get(track_id)
 
@@ -346,7 +368,16 @@ class TrackSemanticManager:
         items = _detection_items(detections)
         crops = [_crop_from_frame(frame, item[1]) for item in items]
         roles, role_confidences, role_available = self._predict_roles(crops)
-        teams, team_confidences, team_available = self._predict_teams(frame, crops)
+        track_ids = [item[0] for item in items]
+        detection_confidences = _detection_confidences(detections, len(items))
+        teams, team_labels, team_confidences, team_reasons, team_available = self._predict_teams(
+            frame,
+            crops,
+            track_ids=track_ids,
+            roles=roles,
+            detection_confidences=detection_confidences,
+            frame_index=frame_index,
+        )
 
         results: dict[int, SemanticResult] = {}
         for index, (track_id, _box) in enumerate(items):
@@ -354,6 +385,7 @@ class TrackSemanticManager:
                 track_id,
                 role=roles[index] if role_available else None,
                 role_confidence=role_confidences[index] if role_available else 0.0,
+                team=team_labels[index] if team_available else None,
                 team_id=teams[index] if team_available else None,
                 team_confidence=team_confidences[index] if team_available else 0.0,
                 frame_index=int(frame_index),
@@ -367,9 +399,18 @@ class TrackSemanticManager:
             results[track_id] = SemanticResult(
                 track_id=track_id,
                 role=role,
+                # Expose the trajectory-resolved label.  Returning the raw
+                # current-frame label here bypasses the hysteresis in
+                # TrajectorySemanticManager and causes visible team flicker.
+                team=(
+                    TeamLabel.NONE.value
+                    if role == "referee"
+                    else team_label_from_id(team_id) if team_available else UNKNOWN_TEAM
+                ),
                 team_id=team_id,
                 role_confidence=role_confidence,
                 team_confidence=team_confidence,
+                team_rejection_reason=team_reasons[index] if team_available else None,
                 status=_semantic_status(role, team_id),
             )
 
@@ -397,10 +438,43 @@ class TrackSemanticManager:
         self,
         frame: Optional[np.ndarray],
         crops: list[np.ndarray],
-    ) -> tuple[list[int], list[float], bool]:
+        *,
+        track_ids: list[int],
+        roles: list[str],
+        detection_confidences: list[float],
+        frame_index: int,
+    ) -> tuple[list[int], list[str], list[float], list[Optional[str]], bool]:
         if self.team_classifier is None:
-            return [UNKNOWN_TEAM_ID] * len(crops), [0.0] * len(crops), False
+            return (
+                [UNKNOWN_TEAM_ID] * len(crops),
+                [UNKNOWN_TEAM] * len(crops),
+                [0.0] * len(crops),
+                [None] * len(crops),
+                False,
+            )
         try:
+            if hasattr(self.team_classifier, "predict_tracks"):
+                predictions = self.team_classifier.predict_tracks(
+                    crops,
+                    track_ids=track_ids,
+                    roles=[_role_to_calibration_role(role) for role in roles],
+                    detection_confidences=detection_confidences,
+                    frame_index=frame_index,
+                )
+                teams = [
+                    normalize_team_id(getattr(prediction, "team", TeamLabel.UNKNOWN))
+                    for prediction in predictions
+                ]
+                labels = [
+                    normalize_team_label(getattr(prediction, "team", TeamLabel.UNKNOWN))
+                    for prediction in predictions
+                ]
+                confidences = [
+                    _confidence(getattr(prediction, "confidence", 0.0))
+                    for prediction in predictions
+                ]
+                reasons = [getattr(prediction, "rejection_reason", None) for prediction in predictions]
+                return teams, labels, confidences, reasons, True
             if hasattr(self.team_classifier, "collect_and_predict"):
                 values = self.team_classifier.collect_and_predict(frame, crops)
                 # OnlineTeamClassifier exposes confidence separately; use it
@@ -413,9 +487,21 @@ class TrackSemanticManager:
                 values, confidences = _predictor_output(self.team_classifier, crops)
         except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
             _log_predictor_failure("team", exc)
-            return [UNKNOWN_TEAM_ID] * len(crops), [0.0] * len(crops), False
+            return (
+                [UNKNOWN_TEAM_ID] * len(crops),
+                [UNKNOWN_TEAM] * len(crops),
+                [0.0] * len(crops),
+                ["predictor_unavailable"] * len(crops),
+                False,
+            )
         teams = [normalize_team_id(value) for value in _as_sequence(values, len(crops))]
-        return teams, _normalized_confidences(confidences, len(crops)), True
+        return (
+            teams,
+            [team_label_from_id(team) for team in teams],
+            _normalized_confidences(confidences, len(crops)),
+            [None] * len(crops),
+            True,
+        )
 
 
 def _detection_items(detections: Any) -> list[tuple[int, Any]]:
@@ -427,7 +513,7 @@ def _detection_items(detections: Any) -> list[tuple[int, Any]]:
     if tracker_ids is not None:
         ids = _as_sequence(tracker_ids, len(tracker_ids))
         boxes = getattr(detections, "xyxy", None)
-        boxes_sequence = _as_sequence(boxes, len(ids)) if boxes is not None else [None] * len(ids)
+        boxes_sequence = _box_sequence(boxes, len(ids)) if boxes is not None else [None] * len(ids)
         items = []
         for track_id, box in zip(ids, boxes_sequence):
             normalized_id = _try_track_id(track_id)
@@ -549,13 +635,27 @@ def _as_sequence(values: Any, size: int) -> list[Any]:
     return sequence[:size]
 
 
+def _box_sequence(values: Any, size: int) -> list[Any]:
+    """Preserve one ``xyxy`` row per tracker ID.
+
+    ``supervision.Detections.xyxy`` is a two-dimensional ``(N, 4)`` array.
+    Flattening it turns each box into a scalar and makes downstream crops
+    empty, silently forcing all semantic predictions to UNKNOWN.
+    """
+
+    array = np.asarray(values)
+    if array.ndim >= 2:
+        return [row for row in array[:size]]
+    return _as_sequence(values, size)
+
+
 def _normalized_confidences(values: Any, size: int) -> list[float]:
     return [_confidence(value) for value in _as_sequence(values, size)]
 
 
 def _normalize_role_prediction(value: Any) -> str:
     if isinstance(value, (int, np.integer)):
-        return {0: "player", 1: "goalkeeper", 2: "referee"}.get(int(value), UNKNOWN_ROLE)
+        return {0: OUTFIELD_ROLE, 1: "goalkeeper", 2: "referee"}.get(int(value), UNKNOWN_ROLE)
     return normalize_role(value)
 
 
@@ -609,20 +709,86 @@ def normalize_role(role: Any) -> str:
     value = getattr(role, "value", role)
     normalized = str(value).strip().lower().replace("_", "")
     aliases = {
-        "player": "player",
+        "player": OUTFIELD_ROLE,
+        "outfield": OUTFIELD_ROLE,
         "goalkeeper": "goalkeeper",
         "keeper": "goalkeeper",
         "referee": "referee",
+        "staff": "staff",
         "unknown": UNKNOWN_ROLE,
     }
     return aliases.get(normalized, UNKNOWN_ROLE)
 
 
+def normalize_team_label(team: Any) -> str:
+    """Normalize labels and legacy integer IDs into HOME/AWAY/NONE/UNKNOWN."""
+
+    if team is None:
+        return UNKNOWN_TEAM
+    value = getattr(team, "value", team)
+    if isinstance(value, (int, np.integer)):
+        return {
+            0: TeamLabel.HOME.value,
+            1: TeamLabel.AWAY.value,
+        }.get(int(value), UNKNOWN_TEAM)
+    normalized = str(value).strip().lower().replace("_", "")
+    aliases = {
+        "home": TeamLabel.HOME.value,
+        "0": TeamLabel.HOME.value,
+        "away": TeamLabel.AWAY.value,
+        "1": TeamLabel.AWAY.value,
+        "none": TeamLabel.NONE.value,
+        "referee": TeamLabel.NONE.value,
+        "unknown": UNKNOWN_TEAM,
+        "-1": UNKNOWN_TEAM,
+    }
+    return aliases.get(normalized, UNKNOWN_TEAM)
+
+
+def team_label_from_id(team_id: Any) -> str:
+    try:
+        normalized = int(team_id)
+    except (TypeError, ValueError):
+        return UNKNOWN_TEAM
+    if normalized == 0:
+        return TeamLabel.HOME.value
+    if normalized == 1:
+        return TeamLabel.AWAY.value
+    return UNKNOWN_TEAM
+
+
+def _role_to_calibration_role(role: Any):
+    normalized = normalize_role(role)
+    from app.classification.team_calibration.types import PlayerRole
+
+    return {
+        OUTFIELD_ROLE: PlayerRole.OUTFIELD,
+        "goalkeeper": PlayerRole.GOALKEEPER,
+        "referee": PlayerRole.REFEREE,
+        "staff": PlayerRole.STAFF,
+    }.get(normalized, PlayerRole.UNKNOWN)
+
+
+def _detection_confidences(detections: Any, size: int) -> list[float]:
+    values = getattr(detections, "confidence", None)
+    if values is None:
+        return [1.0] * size
+    return [_confidence(value) for value in _as_sequence(values, size)]
+
+
 def normalize_team_id(team_id: Any) -> int:
     if team_id is None:
         return UNKNOWN_TEAM_ID
+    value = getattr(team_id, "value", team_id)
+    if isinstance(value, str):
+        label = normalize_team_label(value)
+        if label == TeamLabel.HOME.value:
+            return 0
+        if label == TeamLabel.AWAY.value:
+            return 1
+        return UNKNOWN_TEAM_ID
     try:
-        candidate = int(team_id)
+        candidate = int(value)
     except (TypeError, ValueError):
         return UNKNOWN_TEAM_ID
     return candidate if candidate in KNOWN_TEAM_IDS else UNKNOWN_TEAM_ID

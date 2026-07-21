@@ -4,9 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from app.classification.online import OnlineTeamClassifier
 from app.classification.team import UNKNOWN_TEAM_ID, TeamClassifier
+from app.classification.team_calibration.types import TeamLabel
 from app.vision.semantics import (
     UNKNOWN_ROLE,
     SemanticObservation,
@@ -61,26 +63,30 @@ def test_single_observed_team_is_not_treated_as_a_two_team_classifier() -> None:
     assert confidences.tolist() == [0.0]
 
 
-def test_unlabelled_fit_is_deterministic_and_persistable(tmp_path: Path) -> None:
+def test_labelled_fit_is_persistable_and_unlabelled_fit_is_rejected(tmp_path: Path) -> None:
     crops = [_solid_bgr((0, 0, 230)), _solid_bgr((220, 0, 0))]
-    first = TeamClassifier(confidence_threshold=0.55).fit(crops)
-    second = TeamClassifier(confidence_threshold=0.55).fit(crops[::-1])
+    with pytest.raises(ValueError, match="labels are required"):
+        TeamClassifier().fit(crops)
+    first = TeamClassifier(confidence_threshold=0.55).fit(crops, labels=[0, 1])
     model_path = tmp_path / "team-prototypes.bin"
     first.save(model_path)
     restored = TeamClassifier().load(model_path)
 
     first_ids = first.predict(crops)
-    assert first_ids.tolist() == second.predict(crops).tolist()
     assert first_ids.tolist() == restored.predict(crops).tolist()
 
 
-def test_online_classifier_warmup_uses_stride_and_then_predicts() -> None:
+def test_online_classifier_never_fits_during_runtime_warmup() -> None:
     classifier = OnlineTeamClassifier(warmup_frames=2, warmup_stride=2, min_warmup_crops=2)
     red = _solid_bgr((0, 0, 230))
     blue = _solid_bgr((220, 0, 0))
 
     assert classifier.collect_and_predict(np.empty((1, 1, 3)), [red, blue]).tolist() == [-1, -1]
-    assert classifier.collect_and_predict(np.empty((1, 1, 3)), [red, blue]).tolist() == [0, 1]
+    assert classifier.collect_and_predict(np.empty((1, 1, 3)), [red, blue]).tolist() == [-1, -1]
+    assert not classifier.fitted
+    with pytest.raises(ValueError, match="labels are required"):
+        classifier.fit([red, blue])
+    classifier.fit([red, blue], labels=[0, 1])
     assert classifier.fitted
 
 
@@ -94,13 +100,13 @@ def test_trajectory_manager_weighted_window_suppresses_one_frame_flip() -> None:
 
     state = manager.update(
         7,
-        role="player",
+        role="outfield",
         role_confidence=0.95,
         team_id=0,
         team_confidence=0.95,
         frame_index=1,
     )
-    assert state.role == "player"
+    assert state.role == "outfield"
     assert state.team_id == 0
     assert state.semantic_status == "stable"
 
@@ -112,14 +118,14 @@ def test_trajectory_manager_weighted_window_suppresses_one_frame_flip() -> None:
         team_confidence=0.99,
         frame_index=2,
     )
-    assert flipped.role == "player"
+    assert flipped.role == "outfield"
     assert flipped.team_id == 0
     assert manager.semantic_label_switches == 0
 
 
 def test_trajectory_manager_switches_after_sustained_challenger_evidence() -> None:
     manager = TrajectorySemanticManager(history_size=4, recency_decay=0.8, switch_margin=0.05)
-    manager.update(3, role="player", role_confidence=0.9, team_id=0, team_confidence=0.9, frame_index=1)
+    manager.update(3, role="outfield", role_confidence=0.9, team_id=0, team_confidence=0.9, frame_index=1)
 
     for frame in range(2, 6):
         state = manager.update(
@@ -139,7 +145,7 @@ def test_trajectory_manager_switches_after_sustained_challenger_evidence() -> No
 
 def test_unknown_evidence_eventually_releases_stale_labels() -> None:
     manager = TrajectorySemanticManager(history_size=3, recency_decay=0.5, stable_threshold=0.55)
-    manager.update(4, role="player", role_confidence=1.0, team_id=0, team_confidence=1.0, frame_index=1)
+    manager.update(4, role="outfield", role_confidence=1.0, team_id=0, team_confidence=1.0, frame_index=1)
 
     for frame in range(2, 5):
         state = manager.update(
@@ -160,7 +166,7 @@ def test_stale_tracks_are_removed_and_observation_wrapper_sets_frame() -> None:
     manager = TrajectorySemanticManager(max_missing_frames=2)
     state = manager.update_observation(
         9,
-        SemanticObservation(role="player", role_confidence=0.8, frame_index=10),
+        SemanticObservation(role="outfield", role_confidence=0.8, frame_index=10),
     )
 
     assert state.last_seen_frame == 10
@@ -188,3 +194,79 @@ def test_track_semantic_manager_exposes_stable_frame_level_contract_without_mode
         assert result.team_confidence == 0.0
         assert result.status == "unknown"
         assert result.as_dict()["status"] == "unknown"
+
+
+def test_track_semantic_manager_preserves_one_bbox_row_per_track() -> None:
+    class RecordingTeamClassifier:
+        def __init__(self) -> None:
+            self.crops: list[np.ndarray] = []
+
+        def predict_tracks(self, crops, **_kwargs):
+            self.crops = list(crops)
+            return [
+                SimpleNamespace(
+                    team=TeamLabel.UNKNOWN,
+                    confidence=0.0,
+                    rejection_reason="test",
+                )
+                for _ in crops
+            ]
+
+    classifier = RecordingTeamClassifier()
+    manager = TrackSemanticManager(team_classifier=classifier)
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    detections = SimpleNamespace(
+        tracker_id=np.asarray([7, 11]),
+        xyxy=np.asarray([[10, 10, 30, 70], [50, 10, 80, 70]], dtype=np.float32),
+        confidence=np.asarray([0.9, 0.9], dtype=np.float32),
+    )
+
+    manager.update(frame, detections, frame_index=42)
+
+    assert [crop.shape for crop in classifier.crops] == [(60, 20, 3), (60, 30, 3)]
+
+
+def test_track_semantic_manager_returns_hysteresis_resolved_team_label() -> None:
+    class FlippingTeamClassifier:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict_tracks(self, crops, **_kwargs):
+            self.calls += 1
+            team = TeamLabel.HOME if self.calls == 1 else TeamLabel.AWAY
+            return [SimpleNamespace(team=team, confidence=0.95) for _ in crops]
+
+    manager = TrackSemanticManager(team_classifier=FlippingTeamClassifier())
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    detections = SimpleNamespace(
+        tracker_id=np.asarray([7]),
+        xyxy=np.asarray([[10, 10, 30, 70]], dtype=np.float32),
+        confidence=np.asarray([0.9], dtype=np.float32),
+    )
+
+    first = manager.update(frame, detections, frame_index=1)[7]
+    second = manager.update(frame, detections, frame_index=2)[7]
+
+    assert first.team == TeamLabel.HOME.value
+    assert first.team_id == 0
+    assert second.team == TeamLabel.HOME.value
+    assert second.team_id == 0
+
+
+def test_referee_role_never_receives_a_team_assignment() -> None:
+    class RefereeClassifier:
+        def predict_with_confidence(self, crops):
+            return np.asarray(["referee"] * len(crops), dtype=object), np.ones(len(crops))
+
+    manager = TrackSemanticManager(role_classifier=RefereeClassifier())
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    detections = SimpleNamespace(
+        tracker_id=np.asarray([7]),
+        xyxy=np.asarray([[10, 10, 30, 70]], dtype=np.float32),
+    )
+
+    result = manager.update(frame, detections, frame_index=1)[7]
+
+    assert result.role == "referee"
+    assert result.team == TeamLabel.NONE.value
+    assert result.team_id == -1

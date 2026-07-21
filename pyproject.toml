@@ -20,6 +20,7 @@ dependencies = [
     "sentencepiece>=0.2",
     "supervision>=0.25",
     "torch>=2.2",
+    "torchvision>=0.17",
     "tqdm>=4.66",
     "ultralytics>=8.3",
     "uvicorn[standard]>=0.29",
@@ -47,7 +48,7 @@ dev = [
 Homepage = "https://github.com/caysonyin/SC"
 
 [tool.setuptools.packages.find]
-include = ["app", "app.*"]
+include = ["app", "app.*", "experiments", "experiments.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -28,6 +28,7 @@ from app.server.api.health import router as health_router
 from app.server.api.status import router as status_router
 from app.server.api.events import router as events_router
 from app.server.api.pipeline import router as pipeline_router
+from app.server.api.team_calibration import router as team_calibration_router
 from app.server.ws.state import router as ws_router
 from app.services.publisher import WebSocketPublisher
 from app.state.models import SourceStatus
@@ -100,8 +101,16 @@ def create_pipeline(
     ball_max_prediction_frames: int = 8,
     role_model_path: str = ROLE_DETECTION_MODEL_PATH,
     team_classifier_path: Optional[str] = TEAM_CLASSIFIER_PATH,
+    team_calibration_path: Optional[str] = None,
     role_detection_interval: int = 3,
     team_classification_interval: int = 5,
+    track_activation_threshold: float = 0.25,
+    track_lost_buffer: int = 45,
+    track_matching_threshold: float = 0.8,
+    track_minimum_consecutive_frames: int = 2,
+    enable_recording: bool = False,
+    target_video_path: Optional[str] = None,
+    calibration_session: Optional[object] = None,
 ) -> InferencePipeline:
     """Factory used by both CLI startup and the REST API to build a
     pipeline bound to the shared store."""
@@ -127,8 +136,20 @@ def create_pipeline(
         ball_max_prediction_frames=ball_max_prediction_frames,
         role_model_path=role_model_path,
         team_classifier_path=team_classifier_path,
+        team_calibration_path=team_calibration_path,
         role_detection_interval=role_detection_interval,
         team_classification_interval=team_classification_interval,
+        track_activation_threshold=track_activation_threshold,
+        track_lost_buffer=track_lost_buffer,
+        track_matching_threshold=track_matching_threshold,
+        track_minimum_consecutive_frames=track_minimum_consecutive_frames,
+        enable_recording=enable_recording,
+        target_video_path=target_video_path,
+        frame_observer=(
+            getattr(calibration_session, "observe_frame", None)
+            if calibration_session is not None
+            else None
+        ),
     )
 
 
@@ -197,6 +218,7 @@ app.include_router(health_router)
 app.include_router(status_router)
 app.include_router(events_router)
 app.include_router(pipeline_router)
+app.include_router(team_calibration_router)
 app.include_router(ws_router)
 
 
@@ -239,8 +261,15 @@ def main() -> None:
     parser.add_argument("--ball_max_prediction_frames", type=int, default=8)
     parser.add_argument("--role_model_path", type=str, default=ROLE_DETECTION_MODEL_PATH)
     parser.add_argument("--team_classifier_path", type=str, default=None)
+    parser.add_argument("--team_calibration_path", type=str, default=None)
     parser.add_argument("--role_detection_interval", type=int, default=3)
     parser.add_argument("--team_classification_interval", type=int, default=5)
+    parser.add_argument("--track_activation_threshold", type=float, default=0.25)
+    parser.add_argument("--track_lost_buffer", type=int, default=45)
+    parser.add_argument("--track_matching_threshold", type=float, default=0.8)
+    parser.add_argument("--track_minimum_consecutive_frames", type=int, default=2)
+    parser.add_argument("--enable_recording", action="store_true")
+    parser.add_argument("--target_video_path", type=str, default="")
     parser.add_argument("--enable_foul_detection", action="store_true")
     parser.add_argument("--foul_checkpoint_path", type=str, default=None)
     parser.add_argument("--foul_confidence_threshold", type=float, default=0.48)
@@ -249,6 +278,35 @@ def main() -> None:
     args = parser.parse_args()
 
     _device = args.device
+    _store.update_config({
+        "video_source": args.video_source or "",
+        "device": args.device,
+        "inference_backend": args.inference_backend,
+        "enable_foul_detection": args.enable_foul_detection,
+        "foul_confidence_threshold": args.foul_confidence_threshold,
+        "player_model_path": args.player_model_path,
+        "pitch_model_path": args.pitch_model_path,
+        "camera_calibration_path": args.camera_calibration_path,
+        "enable_undistortion": args.enable_undistortion,
+        "calibration_alpha": args.calibration_alpha,
+        "pitch_detection_interval": args.pitch_detection_interval,
+        "imgsz": args.imgsz,
+        "ball_model_path": args.ball_model_path,
+        "enable_ball": args.enable_ball,
+        "ball_detection_interval": args.ball_detection_interval,
+        "ball_max_prediction_frames": args.ball_max_prediction_frames,
+        "role_model_path": args.role_model_path,
+        "team_classifier_path": args.team_classifier_path,
+        "team_calibration_path": args.team_calibration_path,
+        "role_detection_interval": args.role_detection_interval,
+        "team_classification_interval": args.team_classification_interval,
+        "track_activation_threshold": args.track_activation_threshold,
+        "track_lost_buffer": args.track_lost_buffer,
+        "track_matching_threshold": args.track_matching_threshold,
+        "track_minimum_consecutive_frames": args.track_minimum_consecutive_frames,
+        "enable_recording": args.enable_recording,
+        "target_video_path": args.target_video_path,
+    })
 
     if args.video_source:
         pipeline = create_pipeline(
@@ -271,8 +329,15 @@ def main() -> None:
             ball_max_prediction_frames=args.ball_max_prediction_frames,
             role_model_path=args.role_model_path,
             team_classifier_path=args.team_classifier_path,
+            team_calibration_path=args.team_calibration_path,
             role_detection_interval=args.role_detection_interval,
             team_classification_interval=args.team_classification_interval,
+            track_activation_threshold=args.track_activation_threshold,
+            track_lost_buffer=args.track_lost_buffer,
+            track_matching_threshold=args.track_matching_threshold,
+            track_minimum_consecutive_frames=args.track_minimum_consecutive_frames,
+            enable_recording=args.enable_recording,
+            target_video_path=args.target_video_path or None,
         )
         attach_and_start_pipeline(pipeline)
     else:

@@ -1,17 +1,22 @@
 export type HomographyStatus = 'fresh' | 'reused' | 'stale' | 'unavailable';
 export type BallStatus = 'fresh' | 'predicted' | 'stale' | 'unavailable';
-export type PlayerRole = 'player' | 'goalkeeper' | 'referee' | 'unknown';
+export type PlayerRole = 'outfield' | 'player' | 'goalkeeper' | 'referee' | 'staff' | 'unknown';
+export type TeamLabel = 'home' | 'away' | 'none' | 'unknown';
 export type SourceStatus = 'connected' | 'disconnected' | 'reconnecting' | 'error';
 
 export interface PlayerState {
   track_id: number;
   role: PlayerRole;
+  team: TeamLabel;
+  team_label: TeamLabel;
   team_id: number;
   field_x: number | null;
   field_y: number | null;
   confidence: number;
   role_confidence: number;
   team_confidence: number;
+  team_rejection_reason: string | null;
+  bbox: [number, number, number, number] | null;
   semantic_status: string;
   velocity_x: number | null;
   velocity_y: number | null;
@@ -77,6 +82,9 @@ export interface MetricsSnapshot {
   track_id_interruptions: number;
   semantic_inference_count: number;
   semantic_label_switches: number;
+  team_inference_count: number;
+  team_unknown_rate: number;
+  team_label_switches: number;
   ball_detection_count: number;
   ball_predicted_frames: number;
   ball_available_ratio: number;
@@ -85,7 +93,77 @@ export interface MetricsSnapshot {
   foul_inference_count: number;
 }
 
-export type WSMessage = FrameState | MetricsSnapshot;
+export type CalibrationState =
+  | 'idle'
+  | 'source_preview'
+  | 'clip_selecting'
+  | 'processing'
+  | 'review'
+  | 'calibrating'
+  | 'validating'
+  | 'ready'
+  | 'running'
+  | 'recalibration_required';
+
+export interface CalibrationTrack {
+  track_id: number;
+  label: string | null;
+  team: TeamLabel;
+  role: PlayerRole;
+  sample_count: number;
+  quality_score: number;
+  last_update_frame: number | null;
+  first_timestamp_ms?: number;
+  last_timestamp_ms?: number;
+  observation_count?: number;
+  quality_observation_count?: number;
+  representative_frame_index?: number;
+  representative_timestamp_ms?: number;
+  representative_bbox?: [number, number, number, number];
+  representative_quality_score?: number;
+}
+
+export interface CalibrationValidationReport {
+  passed: boolean;
+  reasons: string[];
+  home_track_count: number;
+  away_track_count: number;
+  home_sample_count: number;
+  away_sample_count: number;
+  home_intra_class_dispersion: number;
+  away_intra_class_dispersion: number;
+  inter_class_separation: number;
+  leave_one_track_out_accuracy: number | null;
+  goalkeeper_mapping_ready: boolean;
+  referee_mapping_ready: boolean;
+}
+
+export interface TeamCalibrationState {
+  type: 'team_calibration';
+  state: CalibrationState;
+  match_id: string;
+  camera_id: string;
+  bundle_path: string | null;
+  ready: boolean;
+  goalkeeper_mapping_ready: boolean;
+  referee_mapping_ready: boolean;
+  observed_frames: number;
+  last_frame_index: number | null;
+  tracks: CalibrationTrack[];
+  validation_report: CalibrationValidationReport | null;
+  source_url: string | null;
+  clip_id: string | null;
+  clip_start_ms: number | null;
+  clip_end_ms: number | null;
+  clip_duration_ms: number | null;
+  review_video_url: string | null;
+  metadata_url: string | null;
+  job_id: string | null;
+  processing_progress: number;
+  processing_error: string | null;
+}
+
+export type WSMessage = FrameState | MetricsSnapshot | TeamCalibrationState;
 
 export interface PipelineConfig {
   mode: string;
@@ -102,10 +180,16 @@ export interface PipelineConfig {
   pitch_model_path: string;
   role_model_path: string;
   team_classifier_path: string | null;
+  team_calibration_path: string | null;
+  require_team_calibration: boolean;
   ball_model_path: string;
   enable_ball: boolean;
   role_detection_interval: number;
   team_classification_interval: number;
+  track_activation_threshold: number;
+  track_lost_buffer: number;
+  track_matching_threshold: number;
+  track_minimum_consecutive_frames: number;
   ball_detection_interval: number;
   ball_max_prediction_frames: number;
   camera_calibration_path: string;

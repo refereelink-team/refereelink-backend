@@ -36,7 +36,7 @@ or maintain the system.
 | `source.py`  | `VideoSource` abstract base + `LocalFileSource` + `RTSPSource`. The RTSP source attempts a GStreamer pipeline first (`rtspsrc latency=0`), then falls back to OpenCV/FFmpeg. The constructor is non-blocking; the first `read()` triggers the actual capture. On read failure it transparently reconnects up to 10 times. |
 | `buffer.py`  | `BoundedFrameBuffer` with two modes: `REALTIME` (drop oldest, never block) and `OFFLINE` (block producer when full). `PipelineMode` is passed in by the caller. |
 | `engine.py`  | `InferencePipeline` delegates undistortion, official YOLOv11 person detection, ByteTrack, low-frequency pitch inference, homography reuse, and bottom-center projection to `VisionCore`. The internal thread runs `with torch.inference_mode():` and emits structured state into the `StateStore`. |
-| `recorder.py`| `VideoRecorder` (kept for the offline modes; not used by the server in the default config). |
+| `recorder.py`| Optional `VideoRecorder` for writing final annotated pipeline frames to an MP4 debug artifact. |
 
 ### `app/vision/core.py`
 

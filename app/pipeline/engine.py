@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import cv2
@@ -20,6 +21,7 @@ from app.constants.paths import (
 )
 from app.events.engine import EventEngine, FoulEventAdapter
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
+from app.pipeline.recorder import VideoRecorder
 from app.pipeline.source import VideoSource
 from app.state.models import (
     BallState,
@@ -30,10 +32,12 @@ from app.state.models import (
     PlayerRole,
     PlayerState,
     SourceStatus,
+    TeamLabel,
 )
 from app.state.store import StateStore
 from app.vision.core import VisionCore
 from app.vision.ball import BallProcessor
+from app.vision.display import TrackDisplaySmoother
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,65 @@ def _map_homography_status(status: str) -> HomographyStatus:
         return HomographyStatus(status)
     except ValueError:
         return HomographyStatus.UNAVAILABLE
+
+
+def _draw_player_overlay(
+    frame: np.ndarray,
+    *,
+    bbox: tuple[int, int, int, int],
+    track_id: int,
+    team_label: str,
+    role_label: str = "UNKNOWN",
+    color: tuple[int, int, int],
+) -> None:
+    """Draw a high-contrast player box, Track ID, and team on the frame."""
+
+    frame_height, frame_width = frame.shape[:2]
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(frame_width - 1, x1))
+    y1 = max(0, min(frame_height - 1, y1))
+    x2 = max(x1 + 1, min(frame_width - 1, x2))
+    y2 = max(y1 + 1, min(frame_height - 1, y2))
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+    label = f"ID {track_id} {team_label} {role_label}"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.55
+    text_thickness = 2
+    outline_thickness = 4
+    (text_width, text_height), baseline = cv2.getTextSize(
+        label,
+        font,
+        font_scale,
+        text_thickness,
+    )
+    text_x = x1 + 5
+    text_y = max(y1 - 5, text_height + baseline + 7)
+    box_top = max(0, text_y - text_height - baseline - 7)
+    box_right = min(frame_width - 1, text_x + text_width + 10)
+    box_bottom = min(frame_height - 1, text_y + 3)
+    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), (12, 18, 24), -1)
+    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), color, 1)
+    cv2.putText(
+        frame,
+        label,
+        (text_x, text_y),
+        font,
+        font_scale,
+        (0, 0, 0),
+        outline_thickness,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        label,
+        (text_x, text_y),
+        font,
+        font_scale,
+        (255, 255, 255),
+        text_thickness,
+        cv2.LINE_AA,
+    )
 
 
 class InferencePipeline:
@@ -68,15 +131,24 @@ class InferencePipeline:
         ball_max_prediction_frames: int = 8,
         role_model_path: str = ROLE_DETECTION_MODEL_PATH,
         team_classifier_path: Optional[str] = TEAM_CLASSIFIER_PATH,
+        team_calibration_path: Optional[str] = None,
         role_detection_interval: int = 3,
         team_classification_interval: int = 5,
+        track_activation_threshold: float = 0.25,
+        track_lost_buffer: int = 45,
+        track_matching_threshold: float = 0.8,
+        track_minimum_consecutive_frames: int = 2,
         semantic_manager: Optional[object] = None,
+        team_assignment_service: Optional[object] = None,
         inference_backend: str = "auto",
         enable_foul_detection: bool = False,
         foul_checkpoint_path: Optional[str] = None,
         foul_confidence_threshold: float = 0.48,
         foul_detector: Optional[object] = None,
+        enable_recording: bool = False,
+        target_video_path: Optional[str] = None,
         frame_sink: Optional[Callable[[np.ndarray, FrameState], None]] = None,
+        frame_observer: Optional[Callable[[np.ndarray, FrameState], None]] = None,
     ) -> None:
         self._source = source
         self._store = store
@@ -95,13 +167,23 @@ class InferencePipeline:
         self._ball_max_prediction_frames = ball_max_prediction_frames
         self._role_model_path = role_model_path
         self._team_classifier_path = team_classifier_path
+        self._team_calibration_path = team_calibration_path
         self._role_detection_interval = role_detection_interval
         self._team_classification_interval = team_classification_interval
+        self._track_activation_threshold = float(track_activation_threshold)
+        self._track_lost_buffer = max(int(track_lost_buffer), 1)
+        self._track_matching_threshold = float(track_matching_threshold)
+        self._track_minimum_consecutive_frames = max(int(track_minimum_consecutive_frames), 1)
         self._inference_backend = inference_backend
         self._enable_foul_detection = enable_foul_detection
         self._foul_checkpoint_path = foul_checkpoint_path or FOUL_MODEL_PATH
         self._foul_confidence_threshold = foul_confidence_threshold
+        self._recorder: Optional[VideoRecorder] = None
+        if enable_recording:
+            recording_path = target_video_path or self._default_recording_path()
+            self._recorder = VideoRecorder(recording_path, store, fps=source.fps)
         self._frame_sink = frame_sink
+        self._frame_observer = frame_observer
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -123,12 +205,19 @@ class InferencePipeline:
         self._vision_core: Optional[VisionCore] = None
         self._ball_processor: Optional[BallProcessor] = None
         self._semantic_manager = semantic_manager
+        self._team_assignment_service = team_assignment_service
         self._semantic_interval = max(
             1, min(int(role_detection_interval), int(team_classification_interval))
         )
         self._semantic_last_frame: Optional[int] = None
         self._semantic_results: dict[int, object] = {}
+        self._display_smoother = TrackDisplaySmoother(
+            ema_alpha=0.65,
+            max_missing_frames=4,
+        )
         self.semantic_inference_count = 0
+        self.team_inference_count = 0
+        self.team_unknown_count = 0
         self._event_engine = EventEngine()
         self._foul_detector = foul_detector
         self._foul_adapter = FoulEventAdapter(confidence_threshold=foul_confidence_threshold)
@@ -140,6 +229,8 @@ class InferencePipeline:
         if self._running:
             return
         self._load_models()
+        if self._recorder is not None:
+            self._recorder.start()
         self._running = True
         self._store.pipeline_running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="pipeline")
@@ -152,7 +243,30 @@ class InferencePipeline:
         self._buffer.close()
         if self._source.is_opened():
             self._source.release()
+        recorder = getattr(self, "_recorder", None)
+        if recorder is not None:
+            recorder.stop()
         logger.info("InferencePipeline stopped")
+
+    @staticmethod
+    def _default_recording_path() -> str:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        return str(Path("debug") / "recordings" / f"analysis_{timestamp}.mp4")
+
+    @property
+    def recording_path(self) -> Optional[str]:
+        recorder = getattr(self, "_recorder", None)
+        return recorder.target_path if recorder is not None else None
+
+    @property
+    def recording_status(self) -> dict[str, object]:
+        recorder = getattr(self, "_recorder", None)
+        return {
+            "enabled": recorder is not None,
+            "active": recorder.active if recorder is not None else False,
+            "path": self.recording_path,
+            "frames_written": recorder.frames_written if recorder is not None else 0,
+        }
 
     def _load_models(self) -> None:
         logger.info("Loading shared vision core")
@@ -166,25 +280,64 @@ class InferencePipeline:
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,
             imgsz=self._imgsz,
+            track_activation_threshold=self._track_activation_threshold,
+            track_lost_buffer=self._track_lost_buffer,
+            track_matching_threshold=self._track_matching_threshold,
+            track_minimum_consecutive_frames=self._track_minimum_consecutive_frames,
             inference_backend=self._inference_backend,
         )
         self._vision_core.load_models()
         if self._semantic_manager is None:
-            from app.classification.online import OnlineTeamClassifier
+            from app.classification.team_calibration.appearance_features import AppearanceFeatureExtractor
+            from app.classification.team_calibration.bundle import CalibrationBundle
+            from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
+            from app.classification.team_calibration.role_predictor import CalibratedRoleClassifier
+            from app.classification.team_calibration.runtime import TeamAssignmentService
             from app.vision.role import UltralyticsRoleClassifier
             from app.vision.semantics import TrackSemanticManager
 
-            role_classifier = UltralyticsRoleClassifier(
+            bundle = None
+            appearance_extractor = None
+            if self._team_calibration_path:
+                try:
+                    bundle = CalibrationBundle.load(self._team_calibration_path)
+                except (OSError, ValueError, KeyError) as exc:
+                    logger.warning("Team calibration bundle unavailable; using UNKNOWN: %s", exc)
+
+            if bundle is not None:
+                appearance_extractor = AppearanceFeatureExtractor(
+                    device=self._device,
+                    pretrained=True,
+                )
+
+            external_role_classifier = UltralyticsRoleClassifier(
                 model_path=self._role_model_path,
                 device=self._device,
                 imgsz=self._imgsz,
             )
-            if not role_classifier.load():
-                role_classifier = None
-            team_classifier = OnlineTeamClassifier(
-                device=self._device,
-                classifier_path=self._team_classifier_path,
-            )
+            if not external_role_classifier.load():
+                logger.warning(
+                    "Role model unavailable at %s; using supervised role prototypes when available",
+                    self._role_model_path,
+                )
+                external_role_classifier = None
+
+            team_classifier = self._team_assignment_service
+            if team_classifier is None and bundle is not None:
+                team_classifier = TeamAssignmentService(
+                    prototypes=bundle.prototypes,
+                    classifier=SupervisedPrototypeClassifier(bundle.prototypes),
+                    appearance_extractor=appearance_extractor,
+                    require_appearance=True,
+                )
+
+            role_classifier = None
+            if bundle is not None or external_role_classifier is not None:
+                role_classifier = CalibratedRoleClassifier(
+                    prototypes=bundle.prototypes if bundle is not None else None,
+                    model=external_role_classifier,
+                    appearance_extractor=appearance_extractor,
+                )
             self._semantic_manager = TrackSemanticManager(
                 role_classifier=role_classifier,
                 team_classifier=team_classifier,
@@ -216,43 +369,46 @@ class InferencePipeline:
         self._metrics_last = self._metrics_start
         self._last_metrics_emit = self._metrics_start
 
-        while self._running:
-            capture_ts = self._source.capture_timestamp_ms()
-            ret, frame = self._source.read()
+        try:
+            while self._running:
+                capture_ts = self._source.capture_timestamp_ms()
+                ret, frame = self._source.read()
 
-            if not ret or frame is None:
-                if not self._source.is_opened():
-                    logger.info("Video source ended")
-                    self._store.source_status = SourceStatus.DISCONNECTED
-                    break
-                time.sleep(0.01)
-                continue
+                if not ret or frame is None:
+                    if not self._source.is_opened():
+                        logger.info("Video source ended")
+                        self._store.source_status = SourceStatus.DISCONNECTED
+                        break
+                    time.sleep(0.01)
+                    continue
 
-            inference_start = time.monotonic()
-            frame_state = self._process_frame(frame, capture_ts)
-            inference_end = time.monotonic()
+                inference_start = time.monotonic()
+                frame_state = self._process_frame(frame, capture_ts)
+                inference_end = time.monotonic()
 
-            if frame_state is not None:
-                inference_latency = (inference_end - inference_start) * 1000
-                frame_state.processed_timestamp_ms = time.time() * 1000
-                end_to_end = frame_state.processed_timestamp_ms - capture_ts
+                if frame_state is not None:
+                    inference_latency = (inference_end - inference_start) * 1000
+                    frame_state.processed_timestamp_ms = time.time() * 1000
+                    end_to_end = frame_state.processed_timestamp_ms - capture_ts
 
-                self._metrics_frames += 1
-                self._latency_acc_ms += inference_latency
-                self._end_to_end_acc_ms += end_to_end
+                    self._metrics_frames += 1
+                    self._latency_acc_ms += inference_latency
+                    self._end_to_end_acc_ms += end_to_end
 
-                self._store.latest_frame_state = frame_state
+                    self._store.latest_frame_state = frame_state
 
-            now = time.monotonic()
-            if now - self._last_metrics_emit >= METRICS_INTERVAL_SEC:
-                self._emit_metrics()
-                self._last_metrics_emit = now
-
-        # A local file can finish without an explicit stop() call.  Reflect
-        # that terminal state for API clients and make the worker lifecycle
-        # idempotent for callers waiting on the source to end.
-        self._running = False
-        self._store.pipeline_running = False
+                now = time.monotonic()
+                if now - self._last_metrics_emit >= METRICS_INTERVAL_SEC:
+                    self._emit_metrics()
+                    self._last_metrics_emit = now
+        finally:
+            # A local file can finish without an explicit stop() call.  Reflect
+            # that terminal state and always finalize the optional debug video.
+            self._running = False
+            self._store.pipeline_running = False
+            recorder = getattr(self, "_recorder", None)
+            if recorder is not None:
+                recorder.stop()
 
     def _process_frame(
         self, frame: np.ndarray, capture_timestamp_ms: float
@@ -295,23 +451,38 @@ class InferencePipeline:
             has_field_xy = bool(np.isfinite(field_xy).all())
             semantic = semantic_results.get(tracker_id)
             role = PlayerRole.UNKNOWN
+            team = TeamLabel.UNKNOWN
             team_id = -1
             role_confidence = 0.0
             team_confidence = 0.0
+            team_rejection_reason = None
             semantic_status = "unknown"
             if semantic is not None:
                 try:
                     role_value = getattr(semantic, "role", "unknown")
-                    role = PlayerRole(str(getattr(role_value, "value", role_value)))
+                    normalized_role = str(getattr(role_value, "value", role_value))
+                    if normalized_role == "player":
+                        normalized_role = PlayerRole.OUTFIELD.value
+                    role = PlayerRole(normalized_role)
                 except ValueError:
                     role = PlayerRole.UNKNOWN
+                raw_team = getattr(semantic, "team", TeamLabel.UNKNOWN)
+                try:
+                    team = TeamLabel(str(getattr(raw_team, "value", raw_team)))
+                except ValueError:
+                    team = TeamLabel.UNKNOWN
                 try:
                     candidate_team = int(getattr(semantic, "team_id", -1))
                     team_id = candidate_team if candidate_team in (0, 1) else -1
                 except (TypeError, ValueError):
                     team_id = -1
+                if team == TeamLabel.UNKNOWN and team_id in (0, 1):
+                    team = TeamLabel.HOME if team_id == 0 else TeamLabel.AWAY
+                if team in {TeamLabel.HOME, TeamLabel.AWAY}:
+                    team_id = 0 if team == TeamLabel.HOME else 1
                 role_confidence = float(getattr(semantic, "role_confidence", 0.0))
                 team_confidence = float(getattr(semantic, "team_confidence", 0.0))
+                team_rejection_reason = getattr(semantic, "team_rejection_reason", None)
                 semantic_status = str(
                     getattr(semantic, "semantic_status", getattr(semantic, "status", "unknown"))
                 )
@@ -319,6 +490,8 @@ class InferencePipeline:
                 PlayerState(
                     track_id=tracker_id,
                     role=role,
+                    team=team,
+                    team_label=team,
                     team_id=team_id,
                     field_x=float(field_xy[0]) if has_field_xy else None,
                     field_y=float(field_xy[1]) if has_field_xy else None,
@@ -329,26 +502,39 @@ class InferencePipeline:
                     ),
                     role_confidence=role_confidence,
                     team_confidence=team_confidence,
+                    team_rejection_reason=team_rejection_reason,
+                    bbox=tuple(float(value) for value in detections.xyxy[idx]),
                     semantic_status=semantic_status,
                 )
             )
+            self.team_inference_count = getattr(self, "team_inference_count", 0) + 1
+            if team_id == -1:
+                self.team_unknown_count = getattr(self, "team_unknown_count", 0) + 1
 
-        # Draw detection boxes and tracker IDs on the frame for the MJPEG stream.
+        # Draw smoothed display boxes. Brief detector gaps are held only for
+        # visualization; stale tracks never enter FrameState or classifiers.
         annotated_frame = vision_frame.undistorted_frame.copy()
-        n = len(detections)
-        if n > 0:
-            for i in range(n):
-                x1, y1, x2, y2 = map(int, detections.xyxy[i])
-                tracker_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else i
-                team_id = player_states[i].team_id if i < len(player_states) else -1
-                color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(team_id, (128, 128, 128))
-
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-                label = f"{tracker_id}"
-                cv2.putText(
-                    annotated_frame, label, (x1, max(y1 - 5, 15)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
-                )
+        display_smoother = getattr(self, "_display_smoother", None)
+        if display_smoother is None:
+            # Keep lightweight ``__new__``-constructed test doubles and legacy
+            # callers compatible with the new display-only state.
+            display_smoother = TrackDisplaySmoother(ema_alpha=0.65, max_missing_frames=4)
+            self._display_smoother = display_smoother
+        for display in display_smoother.update(player_states):
+            x1, y1, x2, y2 = map(int, display.bbox)
+            color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(
+                display.team_id,
+                (0, 215, 255),
+            )
+            _draw_player_overlay(
+                annotated_frame,
+                bbox=(x1, y1, x2, y2),
+                track_id=display.track_id,
+                team_label=display.team_label.upper(),
+                role_label=display.role_label.upper()
+                + (" LOST" if display.missing_frames else ""),
+                color=color,
+            )
 
         if ball_state.image_x is not None and ball_state.image_y is not None:
             image_point = np.asarray(
@@ -380,6 +566,10 @@ class InferencePipeline:
         else:
             self._store._latest_raw_frame = annotated_frame  # type: ignore[attr-defined]
 
+        recorder = getattr(self, "_recorder", None)
+        if recorder is not None:
+            recorder.write(annotated_frame)
+
         elapsed = time.monotonic() - self._metrics_start
         current_fps = self._metrics_frames / max(elapsed, 0.001)
 
@@ -400,6 +590,13 @@ class InferencePipeline:
             frame_state.events.append(foul_event)
         for event in frame_state.events:
             self._store.add_event(event)
+
+        frame_observer = getattr(self, "_frame_observer", None)
+        if frame_observer is not None:
+            try:
+                frame_observer(vision_frame.undistorted_frame, frame_state)
+            except Exception as exc:
+                logger.warning("Frame observer failed; continuing pipeline: %s", exc)
 
         frame_sink = getattr(self, "_frame_sink", None)
         if frame_sink is not None:
@@ -626,6 +823,11 @@ class InferencePipeline:
             if self._semantic_manager is not None
             else 0
         )
+        team_switches = (
+            int(getattr(self._semantic_manager, "team_label_switches", 0))
+            if self._semantic_manager is not None
+            else 0
+        )
 
         metrics = MetricsSnapshot(
             processing_fps=round(fps, 1),
@@ -648,6 +850,12 @@ class InferencePipeline:
             track_id_interruptions=track_interruptions,
             semantic_inference_count=self.semantic_inference_count,
             semantic_label_switches=semantic_switches,
+            team_inference_count=getattr(self, "team_inference_count", 0),
+            team_unknown_rate=round(
+                getattr(self, "team_unknown_count", 0)
+                / max(getattr(self, "team_inference_count", 0), 1),
+            ),
+            team_label_switches=team_switches,
             ball_detection_count=ball_calls,
             ball_predicted_frames=ball_predicted,
             ball_available_ratio=round(ball_available / max(processed, 1), 3),

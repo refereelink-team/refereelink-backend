@@ -8,9 +8,11 @@ interface Props {
 
 const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
   const pipelineRunning = useDashboardStore((s) => s.pipelineRunning);
+  const teamCalibration = useDashboardStore((s) => s.teamCalibration);
   const sourceStatus = useDashboardStore((s) => s.sourceStatus);
   const config = useDashboardStore((s) => s.config);
   const setConfig = useDashboardStore((s) => s.setConfig);
+  const setPipelineRunning = useDashboardStore((s) => s.setPipelineRunning);
   const addLog = useDashboardStore((s) => s.addLog);
 
   const [videoSource, setVideoSource] = useState<string>('');
@@ -69,6 +71,7 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
     try {
       const resp = await fetch('/api/pipeline/stop', { method: 'POST' });
       const data = await resp.json();
+      setPipelineRunning(false);
       addLog(`[Pipeline] stopped (${data.mode || 'cleared'})`);
     } catch (e) {
       setError(String(e));
@@ -92,6 +95,7 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
   };
 
   const sourceType = videoSource.trim().startsWith('rtsp') ? 'RTSP' : 'FILE';
+  const teamReady = teamCalibration.ready || teamCalibration.state === 'running';
 
   return (
     <div className="panel control-panel">
@@ -115,7 +119,11 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
             className="control-input"
             placeholder="e.g. assets/data/sample.mp4  or  rtsp://192.168.1.100/stream"
             value={videoSource}
-            onChange={(e) => setVideoSource(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setVideoSource(value);
+              setConfig({ video_source: value });
+            }}
             disabled={pipelineRunning}
           />
         </div>
@@ -125,7 +133,11 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
           <select
             className="control-select"
             value={device}
-            onChange={(e) => setDevice(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setDevice(value);
+              setConfig({ device: value });
+            }}
             disabled={pipelineRunning}
           >
             <option value="cpu">cpu</option>
@@ -156,10 +168,13 @@ const ControlPanel: React.FC<Props> = ({ sendCommand }) => {
           <button
             className={`btn ${pipelineRunning ? 'btn-stop' : 'btn-start'}`}
             onClick={pipelineRunning ? stopPipeline : startPipeline}
-            disabled={busy}
+            disabled={busy || (!pipelineRunning && config.require_team_calibration && !teamReady)}
           >
-            {busy ? '...' : pipelineRunning ? 'STOP' : 'START'}
+            {busy ? '...' : pipelineRunning ? 'STOP' : teamReady ? 'START' : 'CALIBRATE FIRST'}
           </button>
+          {!teamReady && !pipelineRunning && config.require_team_calibration && (
+            <span className="control-error">TEAM_CALIBRATION_REQUIRED</span>
+          )}
           {error && <span className="control-error">{error}</span>}
         </div>
       </div>

@@ -1,8 +1,14 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
-import type { WSMessage, FrameState, MetricsSnapshot } from '../types/messages';
+import type {
+  WSMessage,
+  FrameState,
+  MetricsSnapshot,
+  TeamCalibrationState,
+} from '../types/messages';
 
-const WS_URL = `ws://${window.location.hostname}:8000/ws/state`;
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_URL = `${WS_PROTOCOL}://${window.location.host}/ws/state`;
 const RECONNECT_DELAY = 2000;
 
 export function useWebSocket() {
@@ -15,8 +21,32 @@ export function useWebSocket() {
     setWsConnected,
     setSourceStatus,
     setPipelineRunning,
+    setTeamCalibration,
+    setConfig,
     addLog,
   } = useDashboardStore();
+
+  const syncBackendState = useCallback(async () => {
+    try {
+      const [configResponse, statusResponse] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/status'),
+      ]);
+      if (configResponse.ok) {
+        setConfig(await configResponse.json());
+      }
+      if (statusResponse.ok) {
+        const status = await statusResponse.json();
+        setPipelineRunning(Boolean(status.pipeline_running));
+        setSourceStatus(status.source_status || 'disconnected');
+        if (status.team_calibration) {
+          setTeamCalibration(status.team_calibration as TeamCalibrationState);
+        }
+      }
+    } catch {
+      addLog('[WS] Failed to sync backend state');
+    }
+  }, [setConfig, setPipelineRunning, setSourceStatus, setTeamCalibration, addLog]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -27,6 +57,7 @@ export function useWebSocket() {
     ws.onopen = () => {
       setWsConnected(true);
       addLog(`[WS] Connected to ${WS_URL}`);
+      void syncBackendState();
     };
 
     ws.onclose = () => {
@@ -51,12 +82,24 @@ export function useWebSocket() {
         } else if (msg.type === 'metrics') {
           setMetrics(msg as MetricsSnapshot);
           setSourceStatus((msg as MetricsSnapshot).source_status);
+        } else if (msg.type === 'team_calibration') {
+          setTeamCalibration(msg as TeamCalibrationState);
         }
       } catch {
         // ignore malformed messages
       }
     };
-  }, [setFrameState, setMetrics, addEvent, setWsConnected, setSourceStatus, addLog]);
+  }, [
+    setFrameState,
+    setMetrics,
+    addEvent,
+    setWsConnected,
+    setSourceStatus,
+    setPipelineRunning,
+    setTeamCalibration,
+    addLog,
+    syncBackendState,
+  ]);
 
   useEffect(() => {
     connect();

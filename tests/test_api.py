@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -26,6 +24,7 @@ def test_get_status(client):
     assert "pipeline_running" in data
     assert "source_status" in data
     assert "metrics" in data
+    assert data["recording"]["enabled"] is False
 
 
 def test_get_config(client):
@@ -58,18 +57,36 @@ def test_get_events(client):
 
 def test_pipeline_start_stop(client):
     r = client.post("/api/pipeline/start", json={})
-    assert r.status_code == 200
+    assert r.status_code == 409
     status = r.json().get("status")
-    assert status in ("started", "error")  # OK if no source yet
+    assert status == "error"
+    assert r.json().get("code") == "TEAM_CALIBRATION_REQUIRED"
     r = client.post("/api/pipeline/stop")
     assert r.status_code == 200
     assert r.json().get("status") == "stopped"
 
 
-def test_video_stream_endpoint_exists():
+def test_video_stream_endpoint_exists(client):
     # Verify the /video/stream route is registered. We don't actually
     # call it here because the MJPEG generator is an infinite loop and
     # the test client would block.
     from app.server.main import app
     paths = {r.path for r in app.routes if hasattr(r, "path")}
     assert "/video/stream" in paths
+    recording = client.get("/api/pipeline/recording")
+    assert recording.status_code == 404
+
+
+def test_recording_endpoint_supports_http_ranges(client, tmp_path):
+    target = tmp_path / "annotated.mp4"
+    target.write_bytes(b"0123456789")
+    app.state.pipeline = type("RecordingPipeline", (), {"recording_path": str(target)})()
+    try:
+        response = client.get("/api/pipeline/recording", headers={"Range": "bytes=2-5"})
+    finally:
+        app.state.pipeline = None
+
+    assert response.status_code == 206
+    assert response.content == b"2345"
+    assert response.headers["content-range"] == "bytes 2-5/10"
+    assert response.headers["accept-ranges"] == "bytes"

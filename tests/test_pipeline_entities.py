@@ -7,7 +7,8 @@ import supervision as sv
 
 from app.geometry.pitch_projection import PitchProjectionResult
 from app.pipeline.engine import InferencePipeline
-from app.state.models import BallStatus, PlayerRole
+from app.pipeline.recorder import VideoRecorder
+from app.state.models import BallStatus, PlayerRole, TeamLabel
 from app.state.store import StateStore
 from app.vision.ball import BallProcessor
 from app.vision.core import VisionFrame
@@ -39,7 +40,8 @@ class _SemanticManager:
         return {
             7: SemanticResult(
                 track_id=7,
-                role="player",
+                role="outfield",
+                team=TeamLabel.HOME,
                 team_id=0,
                 role_confidence=0.91,
                 team_confidence=0.88,
@@ -48,7 +50,7 @@ class _SemanticManager:
         }
 
 
-def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
+def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) -> None:
     detections = sv.Detections(
         xyxy=np.array([[8, 8, 12, 12]], dtype=np.float32),
         confidence=np.array([0.9], dtype=np.float32),
@@ -92,6 +94,8 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
     pipeline._previous_ball_timestamp_s = None
     pipeline._metrics_start = time.monotonic()
     pipeline._metrics_frames = 0
+    pipeline._recorder = VideoRecorder(str(tmp_path / "annotated.mp4"), pipeline._store, fps=10.0)
+    pipeline._recorder.start()
 
     pipeline._vision_core.process = lambda frame, frame_index: vision_frame
 
@@ -99,9 +103,14 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state() -> None:
 
     assert frame_state is not None
     assert frame_state.players[0].role == PlayerRole.PLAYER
+    assert frame_state.players[0].team == TeamLabel.HOME
     assert frame_state.players[0].team_id == 0
+    assert frame_state.players[0].bbox == (8.0, 8.0, 12.0, 12.0)
     assert frame_state.players[0].semantic_status == "stable"
     assert frame_state.ball is not None
     assert frame_state.ball.status == BallStatus.FRESH
     assert frame_state.ball.field_x == 10.0
     assert frame_state.possession_track_id == 7
+    pipeline._recorder.stop()
+    assert pipeline._recorder.frames_written == 1
+    assert (tmp_path / "annotated.mp4").is_file()

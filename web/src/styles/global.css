@@ -30,6 +30,12 @@ body {
 #root {
   width: 100%;
   height: 100%;
+  background: var(--bg-primary);
+}
+
+.dashboard-layout {
+  width: 100%;
+  height: 100%;
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
   grid-template-rows: 1fr auto 180px;
@@ -76,7 +82,12 @@ body {
 }
 
 .events-panel {
-  grid-column: 2 / 4;
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.team-calibration-panel {
+  grid-column: 3;
   grid-row: 2;
 }
 
@@ -91,10 +102,43 @@ body {
   display: none;
 }
 
+/* During pre-match calibration, the video and stable Track list are the
+   primary workspace. Hide the live dashboard cards so the annotation area
+   can use the full viewport instead of remaining a small lower-right card. */
+.calibration-workspace-mode {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 142px;
+}
+
+.calibration-workspace-mode .video-panel,
+.calibration-workspace-mode .pitch-panel,
+.calibration-workspace-mode .status-panel,
+.calibration-workspace-mode .events-panel,
+.calibration-workspace-mode .log-panel {
+  display: none;
+}
+
+.calibration-workspace-mode .team-calibration-panel {
+  grid-column: 1;
+  grid-row: 1;
+  min-height: 0;
+}
+
+.calibration-workspace-mode .control-panel {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+}
+
 @media (max-width: 1366px) {
-  #root {
+  .dashboard-layout {
     grid-template-columns: 2fr 1fr 1fr;
     grid-template-rows: 1fr 200px 120px;
+  }
+
+  .calibration-workspace-mode {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 154px;
   }
 }
 
@@ -385,6 +429,276 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* Pre-match team calibration */
+.calibration-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.calibration-help,
+.calibration-time-row,
+.calibration-track-stats {
+  color: var(--text-primary);
+  font-size: 9px;
+}
+
+.calibration-source-stage,
+.calibration-review-video {
+  background: #05070a;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 4px;
+}
+
+.calibration-video {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  background: #000;
+  object-fit: contain;
+}
+
+.calibration-time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.calibration-progress {
+  padding: 8px;
+  color: var(--text-primary);
+  font-size: 10px;
+}
+
+.progress-track {
+  height: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+  background: #273142;
+  border-radius: 999px;
+}
+
+.progress-value {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.calibration-review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(250px, 1fr);
+  gap: 6px;
+  min-height: 0;
+}
+
+.calibration-workspace-mode .calibration-body {
+  flex: 1;
+}
+
+.calibration-workspace-mode .calibration-source-stage,
+.calibration-workspace-mode .calibration-review-layout,
+.calibration-workspace-mode .calibration-progress {
+  flex: 1;
+  min-height: 0;
+}
+
+.calibration-workspace-mode .calibration-source-stage {
+  display: flex;
+  flex-direction: column;
+}
+
+.calibration-workspace-mode .calibration-source-stage .calibration-video {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+}
+
+.calibration-workspace-mode .calibration-review-layout {
+  grid-template-columns: minmax(0, 2.2fr) minmax(340px, 0.8fr);
+  gap: 8px;
+}
+
+.calibration-workspace-mode .calibration-review-video {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: #05070a;
+}
+
+.calibration-workspace-mode .review-video-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.calibration-workspace-mode .review-video-stage .calibration-video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.calibration-workspace-mode .calibration-track-browser {
+  min-height: 0;
+}
+
+.calibration-workspace-mode .stable-track-list {
+  flex: 1;
+  max-height: none;
+  overflow-y: auto;
+}
+
+.review-video-stage {
+  position: relative;
+  background: #000;
+}
+
+.review-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.calibration-track-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border-color);
+  background: #0d141e;
+}
+
+.track-browser-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.track-browser-toolbar .control-input {
+  min-width: 0;
+}
+
+.track-filter {
+  flex: none;
+  color: var(--text-primary);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.stable-track-list {
+  max-height: 260px;
+  padding: 4px;
+}
+
+.calibration-track.active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.calibration-track-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.calibration-config,
+.calibration-summary,
+.calibration-track-meta,
+.calibration-labels {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.calibration-config .control-input {
+  min-width: 70px;
+  width: 80px;
+  flex: 1;
+  font-size: 9px;
+}
+
+.calibration-summary {
+  color: var(--text-secondary);
+  font-size: 9px;
+  justify-content: space-between;
+}
+
+.ready-text { color: var(--accent-green); }
+.warning-text { color: var(--accent-yellow); }
+
+.calibration-tracks {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.calibration-track {
+  padding: 5px;
+  margin-bottom: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+}
+
+.calibration-track-meta {
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 9px;
+  margin-bottom: 4px;
+}
+
+.calibration-track-meta strong { color: var(--text-primary); }
+.calibration-label-btn {
+  padding: 3px 5px;
+  font-size: 8px;
+}
+.calibration-label-btn.selected {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+.calibration-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--accent-red);
+  font-size: 9px;
+  overflow-y: auto;
+}
+.calibration-empty {
+  color: var(--text-secondary);
+  padding: 12px 4px;
+  text-align: center;
+}
+.status-badge.calibration-idle,
+.status-badge.calibration-source_preview,
+.status-badge.calibration-clip_selecting,
+.status-badge.calibration-validating { background: #252d3a; color: var(--text-primary); }
+.status-badge.calibration-processing { background: #0a2833; color: var(--accent); }
+.status-badge.calibration-review { background: #332a0a; color: var(--accent-yellow); }
+.status-badge.calibration-calibrating { background: #332a0a; color: var(--accent-yellow); }
+.status-badge.calibration-ready { background: #0a331a; color: var(--accent-green); }
+.status-badge.calibration-running { background: #0a2833; color: var(--accent); }
+.status-badge.calibration-recalibration_required { background: #331a1a; color: var(--accent-red); }
 
 /* Video overlay */
 .video-overlay {

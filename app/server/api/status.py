@@ -14,18 +14,17 @@ def get_store(request: Request) -> StateStore:
 @router.get("/api/status")
 async def get_status(request: Request) -> dict:
     store = get_store(request)
+    pipeline = getattr(request.app.state, "pipeline", None)
     return {
         "pipeline_running": store.pipeline_running,
         "source_status": store.source_status.value,
         "metrics": store.metrics.model_dump(),
-        "team_classifier_ready": getattr(
-            getattr(
-                getattr(getattr(request.app.state, "pipeline", None), "_semantic_manager", None),
-                "team_classifier",
-                None,
-            ),
-            "fitted",
-            False,
+        "team_calibration": store.team_calibration.snapshot(),
+        "team_classifier_ready": store.team_calibration.can_run,
+        "recording": (
+            pipeline.recording_status
+            if pipeline is not None
+            else {"enabled": False, "active": False, "path": None, "frames_written": 0}
         ),
     }
 

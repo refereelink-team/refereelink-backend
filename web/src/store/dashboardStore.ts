@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { FrameState, MetricsSnapshot, GameEvent, PipelineConfig } from '../types/messages';
+import type {
+  FrameState,
+  MetricsSnapshot,
+  GameEvent,
+  PipelineConfig,
+  TeamCalibrationState,
+} from '../types/messages';
 
 interface DashboardState {
   frameState: FrameState | null;
@@ -10,6 +16,7 @@ interface DashboardState {
   wsConnected: boolean;
   sourceStatus: string;
   pipelineRunning: boolean;
+  teamCalibration: TeamCalibrationState;
 
   setFrameState: (fs: FrameState) => void;
   setMetrics: (m: MetricsSnapshot) => void;
@@ -19,6 +26,7 @@ interface DashboardState {
   setWsConnected: (c: boolean) => void;
   setSourceStatus: (s: string) => void;
   setPipelineRunning: (r: boolean) => void;
+  setTeamCalibration: (state: TeamCalibrationState) => void;
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
@@ -41,10 +49,16 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     pitch_model_path: 'assets/weights/football-pitch-detection.pt',
     role_model_path: 'assets/weights/player-role-yolo11n.pt',
     team_classifier_path: null,
+    team_calibration_path: null,
+    require_team_calibration: true,
     ball_model_path: 'assets/weights/football-ball-detection.pt',
     enable_ball: true,
     role_detection_interval: 3,
     team_classification_interval: 5,
+    track_activation_threshold: 0.25,
+    track_lost_buffer: 45,
+    track_matching_threshold: 0.8,
+    track_minimum_consecutive_frames: 2,
     ball_detection_interval: 2,
     ball_max_prediction_frames: 8,
     camera_calibration_path: 'assets/calibration/camera.npz',
@@ -56,6 +70,30 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   wsConnected: false,
   sourceStatus: 'disconnected',
   pipelineRunning: false,
+  teamCalibration: {
+    type: 'team_calibration',
+    state: 'idle',
+    match_id: '',
+    camera_id: 'default',
+    bundle_path: null,
+    ready: false,
+    goalkeeper_mapping_ready: false,
+    referee_mapping_ready: false,
+    observed_frames: 0,
+    last_frame_index: null,
+    tracks: [],
+    validation_report: null,
+    source_url: null,
+    clip_id: null,
+    clip_start_ms: null,
+    clip_end_ms: null,
+    clip_duration_ms: null,
+    review_video_url: null,
+    metadata_url: null,
+    job_id: null,
+    processing_progress: 0,
+    processing_error: null,
+  },
 
   setFrameState: (fs) => set({ frameState: fs }),
   setMetrics: (m) => set({ metrics: m }),
@@ -68,4 +106,5 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   setWsConnected: (c) => set({ wsConnected: c }),
   setSourceStatus: (s) => set({ sourceStatus: s }),
   setPipelineRunning: (r) => set({ pipelineRunning: r }),
+  setTeamCalibration: (teamCalibration) => set({ teamCalibration }),
 }));

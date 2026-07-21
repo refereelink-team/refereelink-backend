@@ -5,10 +5,14 @@ const PITCH_W = 12000;
 const PITCH_H = 7000;
 const PADDING = 40;
 
-const TEAM_COLORS: Record<number, string> = {
-  0: '#FF1493',
-  1: '#00BFFF',
-  2: '#FFD700',
+const TEAM_COLORS: Record<string, string> = {
+  home: '#FF1493',
+  away: '#00BFFF',
+  none: '#FFD700',
+  unknown: '#666666',
+  player: '#666666',
+  '0': '#FF1493',
+  '1': '#00BFFF',
   '-1': '#666666',
 };
 
@@ -71,7 +75,7 @@ const Pitch2D: React.FC = () => {
     for (const p of players) {
       if (p.field_x == null || p.field_y == null) continue;
       const [sx, sy] = worldToCanvas(p.field_x, p.field_y, w, h);
-      const color = TEAM_COLORS[p.team_id] ?? '#888';
+      const color = TEAM_COLORS[p.team] ?? TEAM_COLORS[String(p.team_id)] ?? '#888';
 
       ctx.beginPath();
       ctx.arc(sx, sy, 7, 0, Math.PI * 2);
