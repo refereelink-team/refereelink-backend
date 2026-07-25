@@ -1,0 +1,31 @@
+video: demo_data/offside/offside.mp4
+critical_frame: null
+critical_time_seconds: null
+critical_time_source: null
+attack_direction: null
+attacking_team: null
+passer_track_id: null
+manual_team_assignments: {}
+manual_role_confirmations:
+  attacker_track_ids: []
+  defender_track_ids: []
+  second_last_defender_track_id: null
+ball:
+  source: detector
+  manual_point: null
+review:
+  confirmed: false
+  confirmed_at: null
+  notes: ""
+decision:
+  tolerance_meters: 0.15
+models:
+  player: assets/weights/yolo11s.pt
+  ball: assets/weights/football-ball-detection.pt
+  pitch: assets/weights/football-pitch-detection.pt
+detection:
+  conf: 0.20
+  iou: 0.50
+  imgsz: 960
+notes: >
+  Semi-automatic offside review. Formal judge requires review.confirmed=true.

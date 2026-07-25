@@ -1,4 +1,4 @@
-# Copy to configs/offside_demo.yaml and set video path.
+# Ready-to-run paths for committed demo_data/ showcase media.
 video: demo_data/offside/offside.mp4
 critical_frame: null
 critical_time_seconds: null

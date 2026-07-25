@@ -1,6 +1,4 @@
-# Copy to configs/demo_dashboard.yaml and point paths at your preprocess outputs.
-# Or set DEMO_DATA_ROOT and rewrite paths accordingly.
-
+# Ready-to-run paths for committed demo_data/ showcase media.
 videos:
   main:
     camera_id: CAM01
@@ -24,7 +22,7 @@ videos:
     offset_seconds: 0.0
 
 projection:
-  calib_store: demo_outputs/dashboard/manual_homography.json
+  calib_store: demo_data/dashboard/manual_homography.json
   tracks: demo_data/dashboard/main_frames.jsonl
   label: 主机位固定标定投影
   pitch_out_w: 640

@@ -3,11 +3,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-export DEMO_DASHBOARD_DIR="${DEMO_DASHBOARD_DIR:-$ROOT/demo_outputs/dashboard}"
-export DEMO_OFFSIDE_REVIEW_DIR="${DEMO_OFFSIDE_REVIEW_DIR:-$ROOT/demo_outputs/offside/review}"
+export DEMO_DASHBOARD_DIR="${DEMO_DASHBOARD_DIR:-$ROOT/demo_data/dashboard}"
+export DEMO_OFFSIDE_REVIEW_DIR="${DEMO_OFFSIDE_REVIEW_DIR:-$ROOT/demo_data/offside/review}"
 PY="${PYTHON:-python}"
 
-mkdir -p "$DEMO_DASHBOARD_DIR" "$DEMO_OFFSIDE_REVIEW_DIR"
+mkdir -p "$DEMO_DASHBOARD_DIR" "$DEMO_OFFSIDE_REVIEW_DIR" "demo_data/offside/discovery"
 
 if [[ ! -f configs/demo_dashboard.yaml ]]; then
   cp configs/demo_dashboard.example.yaml configs/demo_dashboard.yaml
@@ -26,7 +26,7 @@ if [[ -f "${OFFSIDE_VIDEO:-demo_data/offside/offside.mp4}" ]]; then
   echo "Starting offside review on :6006 ..."
   $PY main.py demo-offside review \
     --input "${OFFSIDE_VIDEO:-demo_data/offside/offside.mp4}" \
-    --discovery-dir "${OFFSIDE_DISCOVERY:-demo_outputs/offside/discovery}" \
+    --discovery-dir "${OFFSIDE_DISCOVERY:-demo_data/offside/discovery}" \
     --config configs/offside_demo.yaml \
     --host 0.0.0.0 --port 6006 --device "${DEVICE:-cuda}" &
   OFF_PID=$!

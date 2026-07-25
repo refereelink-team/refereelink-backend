@@ -1,0 +1,42 @@
+videos:
+  main:
+    camera_id: CAM01
+    role: main
+    video: demo_data/dashboard/main_foul_tracking.mp4
+    metadata: demo_data/dashboard/main_frames.jsonl
+    offset_seconds: 0.0
+
+  side1:
+    camera_id: CAM02
+    role: secondary
+    video: demo_data/multiview/videos/side1_tracking.mp4
+    metadata: demo_data/multiview/metadata/side1_frames.jsonl
+    offset_seconds: 0.0
+
+  side2:
+    camera_id: CAM03
+    role: secondary
+    video: demo_data/multiview/videos/side2_tracking.mp4
+    metadata: demo_data/multiview/metadata/side2_frames.jsonl
+    offset_seconds: 0.0
+
+projection:
+  calib_store: demo_data/dashboard/manual_homography.json
+  tracks: demo_data/dashboard/main_frames.jsonl
+  label: 主机位固定标定投影
+  pitch_out_w: 640
+  pitch_out_h: 360
+  pitch_pad: 28
+  require_confirm: true
+
+virtual_cameras:
+  - 赛3
+  - 赛4
+  - 赛5
+  - 赛6
+  - 赛7
+  - 赛8
+
+system:
+  model_name: yolo11s.pt
+  note: Dashboard reads preprocess outputs only; no live YOLO inference.
