@@ -55,6 +55,17 @@ class TeamCalibrationSession:
         self.require_appearance = bool(require_appearance)
         self.roi_extractor = JerseyROIExtractor()
         self.quality_assessor = CropQualityAssessor()
+        # Manually labelled goalkeepers/referees are often farther away or
+        # surrounded by grass than outfield players. Keep structural checks,
+        # but avoid losing every sample before a role prototype can be built.
+        self.role_quality_assessor = CropQualityAssessor(
+            min_width=8,
+            min_height=12,
+            min_detection_confidence=0.3,
+            min_blur_score=10.0,
+            min_quality_score=0.25,
+            max_green_edge_ratio=1.0,
+        )
         self.color_extractor = ColorFeatureExtractor()
         self.appearance_extractor = appearance_extractor
         self.validator = validator or CalibrationValidator(
@@ -298,8 +309,17 @@ class TeamCalibrationSession:
             )
         crops: list[np.ndarray] = []
         prepared: list[tuple[float, int, np.ndarray]] = []
+        assessor = (
+            self.role_quality_assessor
+            if label in {
+                CalibrationLabel.HOME_GOALKEEPER,
+                CalibrationLabel.AWAY_GOALKEEPER,
+                CalibrationLabel.REFEREE,
+            }
+            else self.quality_assessor
+        )
         for roi, _quality_hint, frame_index in limited:
-            quality = self.quality_assessor.assess(roi, detection_confidence=1.0)
+            quality = assessor.assess(roi, detection_confidence=1.0)
             if not quality.accepted:
                 continue
             crops.append(roi)

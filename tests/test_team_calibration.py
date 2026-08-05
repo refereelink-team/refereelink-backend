@@ -78,6 +78,18 @@ def test_quality_assessor_rejects_empty_crop_without_calling_opencv() -> None:
     assert "roi_too_small" in assessment.reasons
 
 
+def test_quality_assessor_keeps_clear_green_jersey_as_soft_signal() -> None:
+    image = np.zeros((48, 32, 3), dtype=np.uint8)
+    image[:, :] = (0, 170, 0)
+    cv2.rectangle(image, (3, 3), (28, 44), (255, 255, 255), 2)
+
+    assessment = CropQualityAssessor().assess(image, detection_confidence=0.95)
+
+    assert assessment.accepted
+    assert assessment.green_edge_ratio > 0.45
+    assert "green_edge_ratio_high" not in assessment.reasons
+
+
 def test_hsv_lab_features_are_fixed_size_and_normalized() -> None:
     extractor = ColorFeatureExtractor()
     feature = extractor.extract(_jersey((0, 0, 220)))
