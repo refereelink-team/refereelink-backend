@@ -124,10 +124,13 @@ class MetricsSnapshot(BaseModel):
     track_occlusion_events: int = 0
     track_predicted_frames: int = 0
     track_recovered_count: int = 0
+    track_reactivated_count: int = 0
+    track_id_switches: int = 0
     track_fragmentations: int = 0
     track_max_missing_frames: int = 0
     track_entity_rebinds: int = 0
     track_entity_fragmentations: int = 0
+    track_lifecycle_counts: dict[str, int] = Field(default_factory=dict)
     semantic_inference_count: int = 0
     semantic_label_switches: int = 0
     team_inference_count: int = 0

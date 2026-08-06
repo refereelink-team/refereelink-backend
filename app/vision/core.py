@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
 
 import cv2
@@ -31,6 +32,17 @@ def _empty_detections() -> sv.Detections:
     return sv.Detections(xyxy=np.empty((0, 4), dtype=np.float32))
 
 
+class TrackLifecycleState(str, Enum):
+    """Observable lifecycle states for a raw tracker ID."""
+
+    DETECTED = "detected"
+    PREDICTED = "predicted"
+    OCCLUDED = "occluded"
+    LOST = "lost"
+    REACTIVATED = "reactivated"
+    ID_SWITCH = "id_switch"
+
+
 @dataclass
 class VisionFrame:
     undistorted_frame: np.ndarray
@@ -43,6 +55,7 @@ class VisionFrame:
     entity_ids: dict[int, int] = field(default_factory=dict)
     track_status: dict[int, str] = field(default_factory=dict)
     rebindings: dict[int, int] = field(default_factory=dict)
+    lifecycle_events: tuple[dict[str, object], ...] = ()
 
     @property
     def homography_status(self) -> str:
@@ -140,12 +153,20 @@ class VisionCore:
         self.track_occlusion_events = 0
         self.track_predicted_frames = 0
         self.track_recovered_count = 0
+        self.track_reactivated_count = 0
+        self.track_id_switches = 0
         self.track_fragmentations = 0
         self.track_max_missing_frames = 0
         self.track_entity_rebinds = 0
         self.track_entity_fragmentations = 0
         self._previous_track_ids: set[int] = set()
         self._track_missing_frames: dict[int, int] = {}
+        self._track_last_lifecycle_state: dict[int, str] = {}
+        self.track_lifecycle: dict[int, list[str]] = {}
+        self.track_lifecycle_events: list[dict[str, object]] = []
+        self.track_lifecycle_counts: dict[str, int] = {
+            state.value: 0 for state in TrackLifecycleState
+        }
         self.player_inference_time_ms = 0.0
         self.pitch_inference_time_ms = 0.0
         self._undistorter = undistorter or build_undistorter(
@@ -305,6 +326,36 @@ class VisionCore:
         field_xy[valid] = transformed[valid]
         return field_xy
 
+    def _record_lifecycle(
+        self,
+        *,
+        track_id: int,
+        state: TrackLifecycleState,
+        frame_index: int,
+        entity_id: int | None = None,
+        force: bool = False,
+    ) -> dict[str, object] | None:
+        """Record a lifecycle transition once, except explicitly forced events."""
+
+        state_value = state.value
+        previous = self._track_last_lifecycle_state.get(track_id)
+        if not force and previous == state_value:
+            return None
+        event: dict[str, object] = {
+            "frame_index": int(frame_index),
+            "track_id": int(track_id),
+            "entity_id": entity_id,
+            "state": state_value,
+            "previous_state": previous,
+        }
+        self.track_lifecycle.setdefault(track_id, []).append(state_value)
+        self.track_lifecycle_events.append(event)
+        self.track_lifecycle_counts[state_value] = (
+            self.track_lifecycle_counts.get(state_value, 0) + 1
+        )
+        self._track_last_lifecycle_state[track_id] = state_value
+        return event
+
     def process(self, frame: np.ndarray, frame_index: int) -> VisionFrame:
         undistorted_frame = self._undistorter.apply(frame)
         start = time.perf_counter()
@@ -341,16 +392,81 @@ class VisionCore:
             self.track_occlusion_events += len(newly_missing_ids)
         if recovered_ids:
             self.track_recovered_count += len(recovered_ids)
+        frame_lifecycle_events: list[dict[str, object]] = []
+        for track_id in current_track_ids:
+            entity_id = entity_update.entity_ids.get(track_id)
+            missing_before = self._track_missing_frames.get(track_id, 0)
+            if track_id in entity_update.rebindings:
+                self.track_id_switches += 1
+                switch_event = self._record_lifecycle(
+                    track_id=track_id,
+                    state=TrackLifecycleState.ID_SWITCH,
+                    frame_index=frame_index,
+                    entity_id=entity_id,
+                    force=True,
+                )
+                if switch_event is not None:
+                    frame_lifecycle_events.append(switch_event)
+                self.track_reactivated_count += 1
+                reactivated_event = self._record_lifecycle(
+                    track_id=track_id,
+                    state=TrackLifecycleState.REACTIVATED,
+                    frame_index=frame_index,
+                    entity_id=entity_id,
+                    force=True,
+                )
+                if reactivated_event is not None:
+                    frame_lifecycle_events.append(reactivated_event)
+            elif missing_before > 0:
+                self.track_reactivated_count += 1
+                reactivated_event = self._record_lifecycle(
+                    track_id=track_id,
+                    state=TrackLifecycleState.REACTIVATED,
+                    frame_index=frame_index,
+                    entity_id=entity_id,
+                )
+                if reactivated_event is not None:
+                    frame_lifecycle_events.append(reactivated_event)
+            else:
+                detected_event = self._record_lifecycle(
+                    track_id=track_id,
+                    state=TrackLifecycleState.DETECTED,
+                    frame_index=frame_index,
+                    entity_id=entity_id,
+                )
+                if detected_event is not None:
+                    frame_lifecycle_events.append(detected_event)
         for track_id in current_track_ids:
             self._track_missing_frames[track_id] = 0
         for track_id in missing_ids:
             missing = self._track_missing_frames.get(track_id, 0) + 1
             self._track_missing_frames[track_id] = missing
             self.track_max_missing_frames = max(self.track_max_missing_frames, missing)
+            if missing == 1 and self.max_prediction_gap_frames > 0:
+                occluded_event = self._record_lifecycle(
+                    track_id=track_id,
+                    state=TrackLifecycleState.OCCLUDED,
+                    frame_index=frame_index,
+                    entity_id=None,
+                )
+                if occluded_event is not None:
+                    frame_lifecycle_events.append(occluded_event)
             if missing <= self.max_prediction_gap_frames:
                 self.track_predicted_frames += 1
+                state = TrackLifecycleState.PREDICTED
             elif missing == self.max_prediction_gap_frames + 1:
                 self.track_fragmentations += 1
+                state = TrackLifecycleState.LOST
+            else:
+                state = TrackLifecycleState.LOST
+            lifecycle_event = self._record_lifecycle(
+                track_id=track_id,
+                state=state,
+                frame_index=frame_index,
+                entity_id=None,
+            )
+            if lifecycle_event is not None:
+                frame_lifecycle_events.append(lifecycle_event)
         for track_id in list(self._track_missing_frames):
             if self._track_missing_frames[track_id] > max(
                 self.track_lost_buffer,
@@ -389,4 +505,5 @@ class VisionCore:
             entity_ids=entity_update.entity_ids,
             track_status=entity_update.statuses,
             rebindings=entity_update.rebindings,
+            lifecycle_events=tuple(frame_lifecycle_events),
         )

@@ -854,6 +854,12 @@ class InferencePipeline:
         track_predicted_frames = (
             vision_core.track_predicted_frames if vision_core is not None else 0
         )
+        track_reactivated_count = (
+            vision_core.track_reactivated_count if vision_core is not None else 0
+        )
+        track_id_switches = (
+            vision_core.track_id_switches if vision_core is not None else 0
+        )
         track_recovered_count = (
             vision_core.track_recovered_count if vision_core is not None else 0
         )
@@ -868,6 +874,11 @@ class InferencePipeline:
         )
         track_entity_fragmentations = (
             vision_core.track_entity_fragmentations if vision_core is not None else 0
+        )
+        track_lifecycle_counts = (
+            dict(vision_core.track_lifecycle_counts)
+            if vision_core is not None
+            else {}
         )
         ball_processor = self._ball_processor
         ball_calls = ball_processor.detection_count if ball_processor is not None else 0
@@ -906,10 +917,13 @@ class InferencePipeline:
             track_occlusion_events=track_occlusion_events,
             track_predicted_frames=track_predicted_frames,
             track_recovered_count=track_recovered_count,
+            track_reactivated_count=track_reactivated_count,
+            track_id_switches=track_id_switches,
             track_fragmentations=track_fragmentations,
             track_max_missing_frames=track_max_missing_frames,
             track_entity_rebinds=track_entity_rebinds,
             track_entity_fragmentations=track_entity_fragmentations,
+            track_lifecycle_counts=track_lifecycle_counts,
             semantic_inference_count=self.semantic_inference_count,
             semantic_label_switches=semantic_switches,
             team_inference_count=getattr(self, "team_inference_count", 0),

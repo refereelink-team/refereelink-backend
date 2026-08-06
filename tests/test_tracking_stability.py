@@ -99,5 +99,39 @@ def test_vision_core_counts_partial_track_gaps_and_recovery():
     assert core.track_occlusion_events == 1
     assert core.track_predicted_frames == 2
     assert core.track_recovered_count == 1
+    assert core.track_reactivated_count == 1
+    assert core.track_id_switches == 0
     assert core.track_max_missing_frames == 2
     assert frames[-1].track_status[7] == "reactivated"
+    assert core.track_lifecycle[7] == [
+        "detected",
+        "occluded",
+        "predicted",
+        "reactivated",
+    ]
+    assert core.track_lifecycle_counts["occluded"] == 1
+    assert core.track_lifecycle_counts["predicted"] == 1
+
+
+def test_vision_core_records_id_switch_and_entity_reactivation():
+    observed = _detections([7], [[20, 20, 32, 60]])
+    empty = _detections([], [])
+    rebound = _detections([99], [[20, 20, 32, 60]])
+    tracker = _SequenceTracker([observed, empty, rebound])
+    core = VisionCore(
+        enable_pitch=False,
+        undistorter=_IdentityUndistorter(),
+        tracker=tracker,
+        max_prediction_gap_frames=2,
+        reactivation_window_frames=4,
+    )
+    core._predict_player = lambda frame: observed
+    frames = [
+        core.process(np.zeros((100, 100, 3), dtype=np.uint8), index)
+        for index in range(1, 4)
+    ]
+
+    assert frames[-1].rebindings == {99: 7}
+    assert core.track_id_switches == 1
+    assert core.track_reactivated_count == 1
+    assert core.track_lifecycle[99] == ["id_switch", "reactivated"]

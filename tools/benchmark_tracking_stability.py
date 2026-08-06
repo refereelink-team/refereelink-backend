@@ -116,10 +116,13 @@ def run_case(
                 "track_occlusion_events": core.track_occlusion_events,
                 "track_predicted_frames": core.track_predicted_frames,
                 "track_recovered_count": core.track_recovered_count,
+                "track_reactivated_count": core.track_reactivated_count,
+                "track_id_switches": core.track_id_switches,
                 "track_fragmentations": core.track_fragmentations,
                 "track_max_missing_frames": core.track_max_missing_frames,
                 "track_entity_rebinds": core.track_entity_rebinds,
                 "track_entity_fragmentations": core.track_entity_fragmentations,
+                "track_lifecycle_counts": dict(core.track_lifecycle_counts),
                 "pitch_detection_count": core.pitch_detection_count,
                 "homography_available_ratio": round(
                     core.homography_available_count / max(core.frames_processed, 1),

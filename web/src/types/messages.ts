@@ -86,10 +86,13 @@ export interface MetricsSnapshot {
   track_occlusion_events: number;
   track_predicted_frames: number;
   track_recovered_count: number;
+  track_reactivated_count: number;
+  track_id_switches: number;
   track_fragmentations: number;
   track_max_missing_frames: number;
   track_entity_rebinds: number;
   track_entity_fragmentations: number;
+  track_lifecycle_counts: Record<string, number>;
   semantic_inference_count: number;
   semantic_label_switches: number;
   team_inference_count: number;
