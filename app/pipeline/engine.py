@@ -57,6 +57,7 @@ def _draw_player_overlay(
     *,
     bbox: tuple[int, int, int, int],
     track_id: int,
+    entity_id: int | None = None,
     team_label: str,
     role_label: str = "UNKNOWN",
     color: tuple[int, int, int],
@@ -71,7 +72,8 @@ def _draw_player_overlay(
     y2 = max(y1 + 1, min(frame_height - 1, y2))
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-    label = f"ID {track_id} {team_label} {role_label}"
+    display_id = entity_id if entity_id is not None else track_id
+    label = f"ID {display_id} {team_label} {role_label}"
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.55
     text_thickness = 2
@@ -134,10 +136,14 @@ class InferencePipeline:
         team_calibration_path: Optional[str] = None,
         role_detection_interval: int = 3,
         team_classification_interval: int = 5,
+        player_confidence: float = 0.25,
+        player_iou: float = 0.7,
         track_activation_threshold: float = 0.25,
         track_lost_buffer: int = 45,
         track_matching_threshold: float = 0.8,
         track_minimum_consecutive_frames: int = 2,
+        max_prediction_gap_frames: int = 6,
+        track_reactivation_window_frames: int = 12,
         semantic_manager: Optional[object] = None,
         team_assignment_service: Optional[object] = None,
         inference_backend: str = "auto",
@@ -170,6 +176,12 @@ class InferencePipeline:
         self._team_calibration_path = team_calibration_path
         self._role_detection_interval = role_detection_interval
         self._team_classification_interval = team_classification_interval
+        self._player_confidence = min(max(float(player_confidence), 0.0), 1.0)
+        self._player_iou = min(max(float(player_iou), 0.0), 1.0)
+        self._max_prediction_gap_frames = max(int(max_prediction_gap_frames), 0)
+        self._track_reactivation_window_frames = max(
+            int(track_reactivation_window_frames), self._max_prediction_gap_frames
+        )
         self._track_activation_threshold = float(track_activation_threshold)
         self._track_lost_buffer = max(int(track_lost_buffer), 1)
         self._track_matching_threshold = float(track_matching_threshold)
@@ -213,7 +225,7 @@ class InferencePipeline:
         self._semantic_results: dict[int, object] = {}
         self._display_smoother = TrackDisplaySmoother(
             ema_alpha=0.65,
-            max_missing_frames=4,
+            max_missing_frames=self._max_prediction_gap_frames,
         )
         self.semantic_inference_count = 0
         self.team_inference_count = 0
@@ -280,10 +292,14 @@ class InferencePipeline:
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,
             imgsz=self._imgsz,
+            player_confidence=self._player_confidence,
+            player_iou=self._player_iou,
             track_activation_threshold=self._track_activation_threshold,
             track_lost_buffer=self._track_lost_buffer,
             track_matching_threshold=self._track_matching_threshold,
             track_minimum_consecutive_frames=self._track_minimum_consecutive_frames,
+            max_prediction_gap_frames=self._max_prediction_gap_frames,
+            reactivation_window_frames=self._track_reactivation_window_frames,
             inference_backend=self._inference_backend,
         )
         self._vision_core.load_models()
@@ -437,6 +453,7 @@ class InferencePipeline:
 
         player_states: list[PlayerState] = []
         semantic_results = self._update_semantics(
+            rebindings=vision_frame.rebindings,
             frame=vision_frame.undistorted_frame,
             detections=detections,
             frame_index=self._source.frame_count,
@@ -447,6 +464,8 @@ class InferencePipeline:
                 if detections.tracker_id is not None
                 else idx
             )
+            entity_id = vision_frame.entity_ids.get(tracker_id, tracker_id)
+            track_status = vision_frame.track_status.get(tracker_id, "detected")
             field_xy = vision_frame.field_xy[idx]
             has_field_xy = bool(np.isfinite(field_xy).all())
             semantic = semantic_results.get(tracker_id)
@@ -489,6 +508,9 @@ class InferencePipeline:
             player_states.append(
                 PlayerState(
                     track_id=tracker_id,
+                    entity_id=entity_id,
+                    track_status=track_status,
+                    missing_frames=0,
                     role=role,
                     team=team,
                     team_label=team,
@@ -518,7 +540,10 @@ class InferencePipeline:
         if display_smoother is None:
             # Keep lightweight ``__new__``-constructed test doubles and legacy
             # callers compatible with the new display-only state.
-            display_smoother = TrackDisplaySmoother(ema_alpha=0.65, max_missing_frames=4)
+            display_smoother = TrackDisplaySmoother(
+                ema_alpha=0.65,
+                max_missing_frames=getattr(self, "_max_prediction_gap_frames", 6),
+            )
             self._display_smoother = display_smoother
         for display in display_smoother.update(player_states):
             x1, y1, x2, y2 = map(int, display.bbox)
@@ -530,9 +555,10 @@ class InferencePipeline:
                 annotated_frame,
                 bbox=(x1, y1, x2, y2),
                 track_id=display.track_id,
+                entity_id=display.entity_id,
                 team_label=display.team_label.upper(),
                 role_label=display.role_label.upper()
-                + (" LOST" if display.missing_frames else ""),
+                + (" PREDICTED" if display.track_status == "predicted" else ""),
                 color=color,
             )
 
@@ -644,9 +670,17 @@ class InferencePipeline:
         frame: np.ndarray,
         detections: Any,
         frame_index: int,
+        rebindings: Optional[dict[int, int]] = None,
     ) -> dict[int, object]:
         if self._semantic_manager is None:
             return {}
+        rebind = getattr(self._semantic_manager, "rebind_track", None)
+        if callable(rebind):
+            for new_track_id, old_track_id in (rebindings or {}).items():
+                try:
+                    rebind(new_track_id, old_track_id)
+                except (AttributeError, TypeError, ValueError) as exc:
+                    logger.debug("Semantic rebind skipped: %s", exc)
         if (
             self._semantic_last_frame is None
             or frame_index - self._semantic_last_frame >= self._semantic_interval
@@ -814,6 +848,27 @@ class InferencePipeline:
         track_interruptions = (
             vision_core.track_id_interruptions if vision_core is not None else 0
         )
+        track_occlusion_events = (
+            vision_core.track_occlusion_events if vision_core is not None else 0
+        )
+        track_predicted_frames = (
+            vision_core.track_predicted_frames if vision_core is not None else 0
+        )
+        track_recovered_count = (
+            vision_core.track_recovered_count if vision_core is not None else 0
+        )
+        track_fragmentations = (
+            vision_core.track_fragmentations if vision_core is not None else 0
+        )
+        track_max_missing_frames = (
+            vision_core.track_max_missing_frames if vision_core is not None else 0
+        )
+        track_entity_rebinds = (
+            vision_core.track_entity_rebinds if vision_core is not None else 0
+        )
+        track_entity_fragmentations = (
+            vision_core.track_entity_fragmentations if vision_core is not None else 0
+        )
         ball_processor = self._ball_processor
         ball_calls = ball_processor.detection_count if ball_processor is not None else 0
         ball_predicted = ball_processor.predicted_frames if ball_processor is not None else 0
@@ -848,6 +903,13 @@ class InferencePipeline:
             homography_available_ratio=round(available / max(processed, 1), 3),
             camera_motion_refresh_count=camera_motion_refreshes,
             track_id_interruptions=track_interruptions,
+            track_occlusion_events=track_occlusion_events,
+            track_predicted_frames=track_predicted_frames,
+            track_recovered_count=track_recovered_count,
+            track_fragmentations=track_fragmentations,
+            track_max_missing_frames=track_max_missing_frames,
+            track_entity_rebinds=track_entity_rebinds,
+            track_entity_fragmentations=track_entity_fragmentations,
             semantic_inference_count=self.semantic_inference_count,
             semantic_label_switches=semantic_switches,
             team_inference_count=getattr(self, "team_inference_count", 0),

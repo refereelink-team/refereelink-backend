@@ -5,6 +5,7 @@ from app.vision.ball import BallProcessor
 from app.vision.backends import CallableBackend, DetectorBackend, UltralyticsBackend
 from app.vision.semantics import TrackSemanticManager
 from app.vision.display import DisplayTrack, TrackDisplaySmoother
+from app.vision.entities import EntityUpdate, TrackEntityManager
 
 __all__ = [
     "VisionCore",
@@ -13,6 +14,8 @@ __all__ = [
     "TrackSemanticManager",
     "DisplayTrack",
     "TrackDisplaySmoother",
+    "EntityUpdate",
+    "TrackEntityManager",
     "CallableBackend",
     "DetectorBackend",
     "UltralyticsBackend",

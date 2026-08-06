@@ -43,6 +43,9 @@ class SourceStatus(str, Enum):
 
 class PlayerState(BaseModel):
     track_id: int
+    entity_id: Optional[int] = None
+    track_status: str = "detected"
+    missing_frames: int = 0
     role: PlayerRole
     team: TeamLabel = TeamLabel.UNKNOWN
     team_label: TeamLabel = TeamLabel.UNKNOWN
@@ -118,6 +121,13 @@ class MetricsSnapshot(BaseModel):
     homography_available_ratio: float = 0.0
     camera_motion_refresh_count: int = 0
     track_id_interruptions: int = 0
+    track_occlusion_events: int = 0
+    track_predicted_frames: int = 0
+    track_recovered_count: int = 0
+    track_fragmentations: int = 0
+    track_max_missing_frames: int = 0
+    track_entity_rebinds: int = 0
+    track_entity_fragmentations: int = 0
     semantic_inference_count: int = 0
     semantic_label_switches: int = 0
     team_inference_count: int = 0
@@ -164,6 +174,10 @@ class PipelineConfig(BaseModel):
     calibration_alpha: float = Field(0.0, ge=0.0, le=1.0)
     pitch_detection_interval: int = Field(5, ge=1)
     imgsz: int = Field(640, ge=32)
+    player_confidence: float = Field(0.25, ge=0.0, le=1.0)
+    player_iou: float = Field(0.7, ge=0.0, le=1.0)
+    max_prediction_gap_frames: int = Field(6, ge=0)
+    track_reactivation_window_frames: int = Field(12, ge=0)
 
 
 class PipelineCommand(BaseModel):

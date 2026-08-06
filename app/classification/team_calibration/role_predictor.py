@@ -23,10 +23,31 @@ from app.classification.team_calibration.types import (
     TeamLabel,
     TeamPrototype,
 )
-from app.vision.semantics import normalize_role
-
-
 ROLE_ORDER = (PlayerRole.OUTFIELD, PlayerRole.GOALKEEPER, PlayerRole.REFEREE)
+
+
+def normalize_role(role: object) -> str:
+    """Normalize role values without importing the semantic runtime.
+
+    Keeping this small boundary helper local avoids a package import cycle:
+    the semantic runtime imports calibration types, while calibration role
+    prediction is also used by the semantic runtime.
+    """
+
+    if role is None:
+        return PlayerRole.UNKNOWN.value
+    value = getattr(role, "value", role)
+    normalized = str(value).strip().lower().replace("_", "")
+    aliases = {
+        "player": PlayerRole.OUTFIELD.value,
+        "outfield": PlayerRole.OUTFIELD.value,
+        "goalkeeper": PlayerRole.GOALKEEPER.value,
+        "keeper": PlayerRole.GOALKEEPER.value,
+        "referee": PlayerRole.REFEREE.value,
+        "staff": PlayerRole.STAFF.value,
+        "unknown": PlayerRole.UNKNOWN.value,
+    }
+    return aliases.get(normalized, PlayerRole.UNKNOWN.value)
 
 
 class SupervisedRolePrototypeClassifier:

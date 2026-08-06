@@ -6,6 +6,9 @@ export type SourceStatus = 'connected' | 'disconnected' | 'reconnecting' | 'erro
 
 export interface PlayerState {
   track_id: number;
+  entity_id: number | null;
+  track_status: string;
+  missing_frames: number;
   role: PlayerRole;
   team: TeamLabel;
   team_label: TeamLabel;
@@ -80,6 +83,13 @@ export interface MetricsSnapshot {
   homography_reuse_ratio: number;
   homography_available_ratio: number;
   track_id_interruptions: number;
+  track_occlusion_events: number;
+  track_predicted_frames: number;
+  track_recovered_count: number;
+  track_fragmentations: number;
+  track_max_missing_frames: number;
+  track_entity_rebinds: number;
+  track_entity_fragmentations: number;
   semantic_inference_count: number;
   semantic_label_switches: number;
   team_inference_count: number;
@@ -197,6 +207,10 @@ export interface PipelineConfig {
   calibration_alpha: number;
   pitch_detection_interval: number;
   imgsz: number;
+  player_confidence: number;
+  player_iou: number;
+  max_prediction_gap_frames: number;
+  track_reactivation_window_frames: number;
 }
 
 export interface PitchData {

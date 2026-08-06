@@ -95,6 +95,10 @@ def create_pipeline(
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
     imgsz: int = 640,
+    player_confidence: float = 0.25,
+    player_iou: float = 0.7,
+    max_prediction_gap_frames: int = 6,
+    track_reactivation_window_frames: int = 12,
     ball_model_path: str = BALL_DETECTION_MODEL_PATH,
     enable_ball: bool = True,
     ball_detection_interval: int = 2,
@@ -130,6 +134,10 @@ def create_pipeline(
         calibration_alpha=calibration_alpha,
         pitch_detection_interval=pitch_detection_interval,
         imgsz=imgsz,
+        player_confidence=player_confidence,
+        player_iou=player_iou,
+        max_prediction_gap_frames=max_prediction_gap_frames,
+        track_reactivation_window_frames=track_reactivation_window_frames,
         ball_model_path=ball_model_path,
         enable_ball=enable_ball,
         ball_detection_interval=ball_detection_interval,
@@ -254,6 +262,10 @@ def main() -> None:
     parser.add_argument("--calibration_alpha", type=float, default=0.0)
     parser.add_argument("--pitch_detection_interval", type=int, default=5)
     parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--player_confidence", type=float, default=0.25)
+    parser.add_argument("--player_iou", type=float, default=0.7)
+    parser.add_argument("--max_prediction_gap_frames", type=int, default=6)
+    parser.add_argument("--track_reactivation_window_frames", type=int, default=12)
     parser.add_argument("--ball_model_path", type=str, default=BALL_DETECTION_MODEL_PATH)
     parser.add_argument("--disable_ball", action="store_false", dest="enable_ball")
     parser.set_defaults(enable_ball=True)
@@ -291,6 +303,10 @@ def main() -> None:
         "calibration_alpha": args.calibration_alpha,
         "pitch_detection_interval": args.pitch_detection_interval,
         "imgsz": args.imgsz,
+        "player_confidence": args.player_confidence,
+        "player_iou": args.player_iou,
+        "max_prediction_gap_frames": args.max_prediction_gap_frames,
+        "track_reactivation_window_frames": args.track_reactivation_window_frames,
         "ball_model_path": args.ball_model_path,
         "enable_ball": args.enable_ball,
         "ball_detection_interval": args.ball_detection_interval,
@@ -323,6 +339,10 @@ def main() -> None:
             calibration_alpha=args.calibration_alpha,
             pitch_detection_interval=args.pitch_detection_interval,
             imgsz=args.imgsz,
+            player_confidence=args.player_confidence,
+            player_iou=args.player_iou,
+            max_prediction_gap_frames=args.max_prediction_gap_frames,
+            track_reactivation_window_frames=args.track_reactivation_window_frames,
             ball_model_path=args.ball_model_path,
             enable_ball=args.enable_ball,
             ball_detection_interval=args.ball_detection_interval,

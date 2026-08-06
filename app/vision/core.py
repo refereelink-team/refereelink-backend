@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import cv2
@@ -24,6 +24,7 @@ from app.geometry.camera import (
     build_undistorter,
 )
 from app.geometry.pitch_projection import PitchProjectionEngine, PitchProjectionResult
+from app.vision.entities import TrackEntityManager
 
 
 def _empty_detections() -> sv.Detections:
@@ -39,6 +40,9 @@ class VisionFrame:
     field_xy: np.ndarray
     color_lookup: np.ndarray
     person_only: bool
+    entity_ids: dict[int, int] = field(default_factory=dict)
+    track_status: dict[int, str] = field(default_factory=dict)
+    rebindings: dict[int, int] = field(default_factory=dict)
 
     @property
     def homography_status(self) -> str:
@@ -76,10 +80,15 @@ class VisionCore:
         inference_backend: str = "auto",
         camera_motion_threshold_px: float = 6.0,
         camera_motion_estimator: Optional[CameraMotionEstimator] = None,
+        player_confidence: float = 0.25,
+        player_iou: float = 0.7,
         track_activation_threshold: float = 0.25,
         track_lost_buffer: int = 45,
         track_matching_threshold: float = 0.8,
         track_minimum_consecutive_frames: int = 2,
+        max_prediction_gap_frames: int = 6,
+        reactivation_window_frames: int = 12,
+        entity_manager: Optional[TrackEntityManager] = None,
     ) -> None:
         self.device = device
         self.fps = max(float(fps), 1.0)
@@ -87,6 +96,16 @@ class VisionCore:
         self.pitch_model_path = pitch_model_path
         self.pitch_detection_interval = max(int(pitch_detection_interval), 1)
         self.imgsz = max(int(imgsz), 32)
+        self.player_confidence = min(max(float(player_confidence), 0.0), 1.0)
+        self.player_iou = min(max(float(player_iou), 0.0), 1.0)
+        self.max_prediction_gap_frames = max(int(max_prediction_gap_frames), 0)
+        self._entity_manager = entity_manager or TrackEntityManager(
+            max_prediction_gap_frames=self.max_prediction_gap_frames,
+            reactivation_window_frames=max(
+                int(reactivation_window_frames), self.max_prediction_gap_frames
+            ),
+        )
+        self.track_lost_buffer = max(int(track_lost_buffer), 1)
         self.enable_player = enable_player
         self.enable_pitch = enable_pitch
         self.person_only = person_only
@@ -99,7 +118,7 @@ class VisionCore:
             if tracker is not None
             else sv.ByteTrack(
                 track_activation_threshold=float(track_activation_threshold),
-                lost_track_buffer=max(int(track_lost_buffer), 1),
+                lost_track_buffer=self.track_lost_buffer,
                 minimum_matching_threshold=float(track_matching_threshold),
                 frame_rate=self.fps,
                 minimum_consecutive_frames=max(int(track_minimum_consecutive_frames), 1),
@@ -118,7 +137,15 @@ class VisionCore:
         self.pitch_reuse_count = 0
         self.homography_available_count = 0
         self.track_id_interruptions = 0
+        self.track_occlusion_events = 0
+        self.track_predicted_frames = 0
+        self.track_recovered_count = 0
+        self.track_fragmentations = 0
+        self.track_max_missing_frames = 0
+        self.track_entity_rebinds = 0
+        self.track_entity_fragmentations = 0
         self._previous_track_ids: set[int] = set()
+        self._track_missing_frames: dict[int, int] = {}
         self.player_inference_time_ms = 0.0
         self.pitch_inference_time_ms = 0.0
         self._undistorter = undistorter or build_undistorter(
@@ -152,22 +179,29 @@ class VisionCore:
                 device=self.device,
             )
 
-    def _run_model(self, model: object, frame: np.ndarray):
+    def _run_model(
+        self,
+        model: object,
+        frame: np.ndarray,
+        *,
+        conf: float | None = None,
+        iou: float | None = None,
+    ):
+        kwargs = {"imgsz": self.imgsz, "half": self._use_fp16}
+        if conf is not None:
+            kwargs["conf"] = conf
+        if iou is not None:
+            kwargs["iou"] = iou
         if hasattr(model, "predict"):
             try:
-                return model.predict(frame, imgsz=self.imgsz, half=self._use_fp16)
+                return model.predict(frame, **kwargs)
             except TypeError:
                 try:
                     return model.predict(frame, imgsz=self.imgsz)
                 except TypeError:
                     return model.predict(frame)
         try:
-            return model(
-                frame,
-                imgsz=self.imgsz,
-                verbose=False,
-                half=self._use_fp16,
-            )
+            return model(frame, verbose=False, **kwargs)
         except TypeError:
             try:
                 return model(frame, imgsz=self.imgsz, verbose=False)
@@ -179,7 +213,12 @@ class VisionCore:
             return _empty_detections()
         if self._player_model is None:
             raise RuntimeError("Player model has not been loaded")
-        result = self._run_model(self._player_model, frame)[0]
+        result = self._run_model(
+            self._player_model,
+            frame,
+            conf=self.player_confidence,
+            iou=self.player_iou,
+        )[0]
         detections = sv.Detections.from_ultralytics(result)
         if not self.person_only or len(detections) == 0:
             return detections
@@ -273,13 +312,51 @@ class VisionCore:
         self.player_inference_time_ms += (time.perf_counter() - start) * 1000
         self.player_inference_count += 1
         tracked_detections = self._tracker.update_with_detections(detections)
+        entity_update = self._entity_manager.update(
+            tracked_detections,
+            undistorted_frame,
+            frame_index,
+        )
+        self.track_entity_rebinds += len(entity_update.rebindings)
+        self.track_entity_fragmentations += entity_update.fragmentations
         current_track_ids = (
             {int(track_id) for track_id in tracked_detections.tracker_id}
             if tracked_detections.tracker_id is not None
             else set()
         )
-        if self._previous_track_ids and self._previous_track_ids.isdisjoint(current_track_ids):
-            self.track_id_interruptions += 1
+        known_track_ids = set(self._track_missing_frames) | self._previous_track_ids
+        missing_ids = known_track_ids - current_track_ids
+        recovered_ids = {
+            track_id
+            for track_id in current_track_ids
+            if self._track_missing_frames.get(track_id, 0) > 0
+        }
+        newly_missing_ids = {
+            track_id
+            for track_id in missing_ids
+            if self._track_missing_frames.get(track_id, 0) == 0
+        }
+        if newly_missing_ids:
+            self.track_id_interruptions += len(newly_missing_ids)
+            self.track_occlusion_events += len(newly_missing_ids)
+        if recovered_ids:
+            self.track_recovered_count += len(recovered_ids)
+        for track_id in current_track_ids:
+            self._track_missing_frames[track_id] = 0
+        for track_id in missing_ids:
+            missing = self._track_missing_frames.get(track_id, 0) + 1
+            self._track_missing_frames[track_id] = missing
+            self.track_max_missing_frames = max(self.track_max_missing_frames, missing)
+            if missing <= self.max_prediction_gap_frames:
+                self.track_predicted_frames += 1
+            elif missing == self.max_prediction_gap_frames + 1:
+                self.track_fragmentations += 1
+        for track_id in list(self._track_missing_frames):
+            if self._track_missing_frames[track_id] > max(
+                self.track_lost_buffer,
+                self.max_prediction_gap_frames,
+            ):
+                del self._track_missing_frames[track_id]
         self._previous_track_ids = current_track_ids
         motion = self._camera_motion_estimator.measure(undistorted_frame)
         force_pitch_refresh = bool(motion is not None and motion.requires_refresh)
@@ -309,4 +386,7 @@ class VisionCore:
             field_xy=field_xy,
             color_lookup=color_lookup,
             person_only=self.person_only,
+            entity_ids=entity_update.entity_ids,
+            track_status=entity_update.statuses,
+            rebindings=entity_update.rebindings,
         )

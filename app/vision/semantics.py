@@ -10,6 +10,7 @@ adapter intended for the future engine integration.
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import copy
 from dataclasses import dataclass, field
 import logging
 from typing import Any, Deque, Iterable, Mapping, Optional
@@ -151,6 +152,27 @@ class TrajectorySemanticManager:
 
     def get(self, track_id: int) -> Optional[TrackSemanticState]:
         return self._states.get(int(track_id))
+
+    def rebind_track(self, new_track_id: int, old_track_id: int) -> bool:
+        """Move semantic history across a conservative entity reactivation."""
+
+        new_key = int(new_track_id)
+        old_key = int(old_track_id)
+        if new_key == old_key:
+            return False
+        source = self._states.get(old_key)
+        if source is None:
+            return False
+        existing = self._states.get(new_key)
+        if existing is not None and (
+            existing.team_id != UNKNOWN_TEAM_ID or existing.role != UNKNOWN_ROLE
+        ):
+            return False
+        rebound = copy.deepcopy(source)
+        rebound.track_id = new_key
+        self._states[new_key] = rebound
+        del self._states[old_key]
+        return True
 
     def update(
         self,
@@ -356,6 +378,11 @@ class TrackSemanticManager:
 
     def get(self, track_id: int) -> Optional[TrackSemanticState]:
         return self._trajectory.get(track_id)
+
+    def rebind_track(self, new_track_id: int, old_track_id: int) -> bool:
+        """Transfer semantic history after a logical entity reactivation."""
+
+        return self._trajectory.rebind_track(new_track_id, old_track_id)
 
     def update(
         self,
