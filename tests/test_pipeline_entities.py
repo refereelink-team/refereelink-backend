@@ -114,3 +114,50 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) ->
     pipeline._recorder.stop()
     assert pipeline._recorder.frames_written == 1
     assert (tmp_path / "annotated.mp4").is_file()
+
+
+def test_pipeline_rebinds_semantic_history_before_new_track_update() -> None:
+    class RebindingSemanticManager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int]] = []
+
+        def rebind_track(self, new_track_id: int, old_track_id: int) -> bool:
+            self.calls.append((new_track_id, old_track_id))
+            return True
+
+        def update(self, *, frame, detections, frame_index):
+            del frame, detections, frame_index
+            return {
+                99: SemanticResult(
+                    track_id=99,
+                    role="outfield",
+                    team=TeamLabel.AWAY,
+                    team_id=1,
+                    role_confidence=0.9,
+                    team_confidence=0.9,
+                    status="stable",
+                )
+            }
+
+    pipeline = InferencePipeline.__new__(InferencePipeline)
+    manager = RebindingSemanticManager()
+    pipeline._semantic_manager = manager
+    pipeline._semantic_interval = 1
+    pipeline._semantic_last_frame = None
+    pipeline._semantic_results = {}
+    pipeline.semantic_inference_count = 0
+    detections = sv.Detections(
+        xyxy=np.array([[8, 8, 12, 12]], dtype=np.float32),
+        tracker_id=np.array([99]),
+    )
+
+    results = pipeline._update_semantics(
+        frame=np.zeros((20, 20, 3), dtype=np.uint8),
+        detections=detections,
+        frame_index=4,
+        rebindings={99: 7},
+    )
+
+    assert manager.calls == [(99, 7)]
+    assert results[99].team == TeamLabel.AWAY
+    assert pipeline.semantic_inference_count == 1
