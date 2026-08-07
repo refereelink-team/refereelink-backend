@@ -44,6 +44,13 @@ logger = logging.getLogger(__name__)
 METRICS_INTERVAL_SEC = 1.0
 POSSESSION_DISTANCE_MM = 900.0
 
+# Compact, high-contrast colours used by the final video overlay.  These are
+# BGR values because the pipeline renders with OpenCV.
+HOME_OVERLAY_COLOR = (147, 20, 255)  # pink / magenta
+AWAY_OVERLAY_COLOR = (255, 191, 0)  # cyan / blue
+REFEREE_OVERLAY_COLOR = (0, 215, 255)  # yellow
+UNKNOWN_OVERLAY_COLOR = (170, 170, 170)
+
 
 def _map_homography_status(status: str) -> HomographyStatus:
     try:
@@ -57,11 +64,22 @@ def _draw_player_overlay(
     *,
     bbox: tuple[int, int, int, int],
     track_id: int,
+    entity_id: int | None = None,
     team_label: str,
     role_label: str = "UNKNOWN",
     color: tuple[int, int, int],
 ) -> None:
-    """Draw a high-contrast player box, Track ID, and team on the frame."""
+    """Draw a compact team marker for the final output video.
+
+    The previous full bounding-box HUD was useful for debugging, but it
+    obscured players in the final recording.  The production-style overlay
+    uses a small team-coloured ellipse at the player's feet and a compact
+    label:
+
+    ``H10`` / ``A39`` for outfield players, ``HG`` / ``AG`` for goalkeepers,
+    and ``REF`` for referees.  Unknown semantics are intentionally omitted
+    from the final video.
+    """
 
     frame_height, frame_width = frame.shape[:2]
     x1, y1, x2, y2 = bbox
@@ -69,26 +87,62 @@ def _draw_player_overlay(
     y1 = max(0, min(frame_height - 1, y1))
     x2 = max(x1 + 1, min(frame_width - 1, x2))
     y2 = max(y1 + 1, min(frame_height - 1, y2))
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-    label = f"ID {track_id} {team_label} {role_label}"
+    display_id = entity_id if entity_id is not None else track_id
+    label = _format_player_overlay_label(
+        team_label=team_label,
+        role_label=role_label,
+        display_id=display_id,
+    )
+    if label is None:
+        return
+
+    marker_color = color
+    if role_label.strip().lower() in {"referee", "ref"}:
+        marker_color = REFEREE_OVERLAY_COLOR
+
+    # Keep the marker legible for both distant and nearby players without
+    # letting it grow into a large bounding-box-like element.  Only draw the
+    # lower half of the ellipse so the marker does not cross the player's
+    # legs or torso.
+    center_x = int(round((x1 + x2) / 2))
+    center_y = min(frame_height - 1, y2 + max(1, int(round((y2 - y1) * 0.03))))
+    box_width = max(1, x2 - x1)
+    radius_x = max(10, min(30, int(round(box_width * 0.65))))
+    radius_y = max(4, min(9, int(round(radius_x * 0.27))))
+    cv2.ellipse(
+        frame,
+        (center_x, center_y),
+        (radius_x, radius_y),
+        0,
+        0,
+        180,
+        marker_color,
+        2,
+        cv2.LINE_AA,
+    )
+
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.55
-    text_thickness = 2
-    outline_thickness = 4
+    font_scale = 0.38
+    text_thickness = 1
+    outline_thickness = 2
     (text_width, text_height), baseline = cv2.getTextSize(
         label,
         font,
         font_scale,
         text_thickness,
     )
-    text_x = x1 + 5
-    text_y = max(y1 - 5, text_height + baseline + 7)
-    box_top = max(0, text_y - text_height - baseline - 7)
-    box_right = min(frame_width - 1, text_x + text_width + 10)
-    box_bottom = min(frame_height - 1, text_y + 3)
-    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), (12, 18, 24), -1)
-    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), color, 1)
+    padding_x = 4
+    padding_y = 2
+    box_width = text_width + padding_x * 2
+    box_height = text_height + baseline + padding_y * 2
+    box_left = max(0, min(frame_width - box_width, center_x - box_width // 2))
+    box_top = max(0, min(frame_height - box_height, center_y - box_height // 2))
+    box_right = min(frame_width - 1, box_left + box_width)
+    box_bottom = min(frame_height - 1, box_top + box_height)
+    cv2.rectangle(frame, (box_left, box_top), (box_right, box_bottom), marker_color, -1)
+    text_x = box_left + padding_x
+    text_y = box_top + padding_y + text_height
     cv2.putText(
         frame,
         label,
@@ -109,6 +163,30 @@ def _draw_player_overlay(
         text_thickness,
         cv2.LINE_AA,
     )
+
+
+def _format_player_overlay_label(
+    *,
+    team_label: str,
+    role_label: str,
+    display_id: int,
+) -> Optional[str]:
+    """Return the compact final-video label, or ``None`` for UNKNOWN."""
+
+    team = str(team_label).strip().lower()
+    role = str(role_label).strip().lower().replace(" predicted", "")
+    if role in {"unknown", "", "none"} or team == "unknown":
+        return None
+    if role in {"referee", "ref"}:
+        return "REF"
+    if team == "home" and role in {"goalkeeper", "gk"}:
+        return "HG"
+    if team == "away" and role in {"goalkeeper", "gk"}:
+        return "AG"
+    if role in {"outfield", "player"} and team in {"home", "away"}:
+        prefix = "H" if team == "home" else "A"
+        return f"{prefix}{int(display_id)}"
+    return None
 
 
 class InferencePipeline:
@@ -134,10 +212,14 @@ class InferencePipeline:
         team_calibration_path: Optional[str] = None,
         role_detection_interval: int = 3,
         team_classification_interval: int = 5,
+        player_confidence: float = 0.25,
+        player_iou: float = 0.7,
         track_activation_threshold: float = 0.25,
         track_lost_buffer: int = 45,
         track_matching_threshold: float = 0.8,
         track_minimum_consecutive_frames: int = 2,
+        max_prediction_gap_frames: int = 6,
+        track_reactivation_window_frames: int = 12,
         semantic_manager: Optional[object] = None,
         team_assignment_service: Optional[object] = None,
         inference_backend: str = "auto",
@@ -170,6 +252,12 @@ class InferencePipeline:
         self._team_calibration_path = team_calibration_path
         self._role_detection_interval = role_detection_interval
         self._team_classification_interval = team_classification_interval
+        self._player_confidence = min(max(float(player_confidence), 0.0), 1.0)
+        self._player_iou = min(max(float(player_iou), 0.0), 1.0)
+        self._max_prediction_gap_frames = max(int(max_prediction_gap_frames), 0)
+        self._track_reactivation_window_frames = max(
+            int(track_reactivation_window_frames), self._max_prediction_gap_frames
+        )
         self._track_activation_threshold = float(track_activation_threshold)
         self._track_lost_buffer = max(int(track_lost_buffer), 1)
         self._track_matching_threshold = float(track_matching_threshold)
@@ -213,7 +301,7 @@ class InferencePipeline:
         self._semantic_results: dict[int, object] = {}
         self._display_smoother = TrackDisplaySmoother(
             ema_alpha=0.65,
-            max_missing_frames=4,
+            max_missing_frames=self._max_prediction_gap_frames,
         )
         self.semantic_inference_count = 0
         self.team_inference_count = 0
@@ -280,10 +368,14 @@ class InferencePipeline:
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,
             imgsz=self._imgsz,
+            player_confidence=self._player_confidence,
+            player_iou=self._player_iou,
             track_activation_threshold=self._track_activation_threshold,
             track_lost_buffer=self._track_lost_buffer,
             track_matching_threshold=self._track_matching_threshold,
             track_minimum_consecutive_frames=self._track_minimum_consecutive_frames,
+            max_prediction_gap_frames=self._max_prediction_gap_frames,
+            reactivation_window_frames=self._track_reactivation_window_frames,
             inference_backend=self._inference_backend,
         )
         self._vision_core.load_models()
@@ -437,6 +529,7 @@ class InferencePipeline:
 
         player_states: list[PlayerState] = []
         semantic_results = self._update_semantics(
+            rebindings=vision_frame.rebindings,
             frame=vision_frame.undistorted_frame,
             detections=detections,
             frame_index=self._source.frame_count,
@@ -447,6 +540,8 @@ class InferencePipeline:
                 if detections.tracker_id is not None
                 else idx
             )
+            entity_id = vision_frame.entity_ids.get(tracker_id, tracker_id)
+            track_status = vision_frame.track_status.get(tracker_id, "detected")
             field_xy = vision_frame.field_xy[idx]
             has_field_xy = bool(np.isfinite(field_xy).all())
             semantic = semantic_results.get(tracker_id)
@@ -489,6 +584,9 @@ class InferencePipeline:
             player_states.append(
                 PlayerState(
                     track_id=tracker_id,
+                    entity_id=entity_id,
+                    track_status=track_status,
+                    missing_frames=0,
                     role=role,
                     team=team,
                     team_label=team,
@@ -518,21 +616,25 @@ class InferencePipeline:
         if display_smoother is None:
             # Keep lightweight ``__new__``-constructed test doubles and legacy
             # callers compatible with the new display-only state.
-            display_smoother = TrackDisplaySmoother(ema_alpha=0.65, max_missing_frames=4)
+            display_smoother = TrackDisplaySmoother(
+                ema_alpha=0.65,
+                max_missing_frames=getattr(self, "_max_prediction_gap_frames", 6),
+            )
             self._display_smoother = display_smoother
         for display in display_smoother.update(player_states):
             x1, y1, x2, y2 = map(int, display.bbox)
-            color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(
+            color = {0: HOME_OVERLAY_COLOR, 1: AWAY_OVERLAY_COLOR}.get(
                 display.team_id,
-                (0, 215, 255),
+                UNKNOWN_OVERLAY_COLOR,
             )
             _draw_player_overlay(
                 annotated_frame,
                 bbox=(x1, y1, x2, y2),
                 track_id=display.track_id,
+                entity_id=display.entity_id,
                 team_label=display.team_label.upper(),
                 role_label=display.role_label.upper()
-                + (" LOST" if display.missing_frames else ""),
+                + (" PREDICTED" if display.track_status == "predicted" else ""),
                 color=color,
             )
 
@@ -644,9 +746,17 @@ class InferencePipeline:
         frame: np.ndarray,
         detections: Any,
         frame_index: int,
+        rebindings: Optional[dict[int, int]] = None,
     ) -> dict[int, object]:
         if self._semantic_manager is None:
             return {}
+        rebind = getattr(self._semantic_manager, "rebind_track", None)
+        if callable(rebind):
+            for new_track_id, old_track_id in (rebindings or {}).items():
+                try:
+                    rebind(new_track_id, old_track_id)
+                except (AttributeError, TypeError, ValueError) as exc:
+                    logger.debug("Semantic rebind skipped: %s", exc)
         if (
             self._semantic_last_frame is None
             or frame_index - self._semantic_last_frame >= self._semantic_interval
@@ -814,6 +924,38 @@ class InferencePipeline:
         track_interruptions = (
             vision_core.track_id_interruptions if vision_core is not None else 0
         )
+        track_occlusion_events = (
+            vision_core.track_occlusion_events if vision_core is not None else 0
+        )
+        track_predicted_frames = (
+            vision_core.track_predicted_frames if vision_core is not None else 0
+        )
+        track_reactivated_count = (
+            vision_core.track_reactivated_count if vision_core is not None else 0
+        )
+        track_id_switches = (
+            vision_core.track_id_switches if vision_core is not None else 0
+        )
+        track_recovered_count = (
+            vision_core.track_recovered_count if vision_core is not None else 0
+        )
+        track_fragmentations = (
+            vision_core.track_fragmentations if vision_core is not None else 0
+        )
+        track_max_missing_frames = (
+            vision_core.track_max_missing_frames if vision_core is not None else 0
+        )
+        track_entity_rebinds = (
+            vision_core.track_entity_rebinds if vision_core is not None else 0
+        )
+        track_entity_fragmentations = (
+            vision_core.track_entity_fragmentations if vision_core is not None else 0
+        )
+        track_lifecycle_counts = (
+            dict(vision_core.track_lifecycle_counts)
+            if vision_core is not None
+            else {}
+        )
         ball_processor = self._ball_processor
         ball_calls = ball_processor.detection_count if ball_processor is not None else 0
         ball_predicted = ball_processor.predicted_frames if ball_processor is not None else 0
@@ -848,6 +990,16 @@ class InferencePipeline:
             homography_available_ratio=round(available / max(processed, 1), 3),
             camera_motion_refresh_count=camera_motion_refreshes,
             track_id_interruptions=track_interruptions,
+            track_occlusion_events=track_occlusion_events,
+            track_predicted_frames=track_predicted_frames,
+            track_recovered_count=track_recovered_count,
+            track_reactivated_count=track_reactivated_count,
+            track_id_switches=track_id_switches,
+            track_fragmentations=track_fragmentations,
+            track_max_missing_frames=track_max_missing_frames,
+            track_entity_rebinds=track_entity_rebinds,
+            track_entity_fragmentations=track_entity_fragmentations,
+            track_lifecycle_counts=track_lifecycle_counts,
             semantic_inference_count=self.semantic_inference_count,
             semantic_label_switches=semantic_switches,
             team_inference_count=getattr(self, "team_inference_count", 0),

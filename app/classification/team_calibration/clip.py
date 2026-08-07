@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 from app.classification.team_calibration.session import CalibrationState, TeamCalibrationSession
-from app.classification.team_calibration.types import CalibrationLabel
+from app.classification.team_calibration.types import CalibrationLabel, PlayerRole
 from app.classification.team_calibration.quality import CropQualityAssessor
 from app.classification.team_calibration.roi import JerseyROIExtractor
 from app.vision.core import VisionCore
@@ -211,6 +211,7 @@ class CalibrationClipService:
         )
         if track is None:
             raise ValueError(f"unknown clip track: {track_id}")
+        role_label = value.role in {PlayerRole.GOALKEEPER, PlayerRole.REFEREE}
         observations = [
             {
                 **player,
@@ -219,7 +220,10 @@ class CalibrationClipService:
             for frame in metadata.get("frames", [])
             for player in frame.get("players", [])
             if int(player["track_id"]) == int(track_id)
-            and bool(player.get("quality_accepted", False))
+            and (
+                bool(player.get("quality_accepted", False))
+                or role_label
+            )
         ]
         observations.sort(key=lambda item: int(item["frame_index"]))
         max_samples = self.session.max_samples_per_track
@@ -242,6 +246,20 @@ class CalibrationClipService:
                 )
                 if quality.accepted:
                     samples.append((roi, quality.score, int(observation["frame_index"])))
+            # A manual role label is an explicit operator decision. If the
+            # regular quality pass produced no samples (for example when a
+            # tiny referee box is rejected by the metadata-time thresholds),
+            # retain valid crops and let the role-specific assessor in the
+            # session apply its narrower structural checks.
+            if not samples and role_label:
+                for observation in observations[:max_samples]:
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, int(observation["frame_index"]))
+                    ok, frame = capture.read()
+                    if not ok or frame is None:
+                        continue
+                    roi = self._roi_extractor.extract(frame, observation["bbox"])
+                    if roi.size:
+                        samples.append((roi, 1.0, int(observation["frame_index"])))
         finally:
             capture.release()
         return self.session.label_track(track_id, value, samples=samples)

@@ -41,6 +41,10 @@ class PipelineStartPayload(BaseModel):
     calibration_alpha: Optional[float] = None
     pitch_detection_interval: Optional[int] = None
     imgsz: Optional[int] = None
+    player_confidence: Optional[float] = None
+    player_iou: Optional[float] = None
+    max_prediction_gap_frames: Optional[int] = None
+    track_reactivation_window_frames: Optional[int] = None
     ball_model_path: Optional[str] = None
     enable_ball: Optional[bool] = None
     ball_detection_interval: Optional[int] = None
@@ -89,6 +93,10 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.calibration_alpha,
             payload.pitch_detection_interval,
             payload.imgsz,
+            payload.player_confidence,
+            payload.player_iou,
+            payload.max_prediction_gap_frames,
+            payload.track_reactivation_window_frames,
             payload.ball_model_path,
             payload.enable_ball,
             payload.ball_detection_interval,
@@ -125,6 +133,10 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.calibration_alpha is None
         and payload.pitch_detection_interval is None
         and payload.imgsz is None
+        and payload.player_confidence is None
+        and payload.player_iou is None
+        and payload.max_prediction_gap_frames is None
+        and payload.track_reactivation_window_frames is None
         and payload.ball_model_path is None
         and payload.enable_ball is None
         and payload.ball_detection_interval is None
@@ -201,6 +213,26 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     else store.config.pitch_detection_interval
                 ),
                 imgsz=payload.imgsz if payload.imgsz is not None else store.config.imgsz,
+                player_confidence=(
+                    payload.player_confidence
+                    if payload.player_confidence is not None
+                    else store.config.player_confidence
+                ),
+                player_iou=(
+                    payload.player_iou
+                    if payload.player_iou is not None
+                    else store.config.player_iou
+                ),
+                max_prediction_gap_frames=(
+                    payload.max_prediction_gap_frames
+                    if payload.max_prediction_gap_frames is not None
+                    else store.config.max_prediction_gap_frames
+                ),
+                track_reactivation_window_frames=(
+                    payload.track_reactivation_window_frames
+                    if payload.track_reactivation_window_frames is not None
+                    else store.config.track_reactivation_window_frames
+                ),
                 ball_model_path=payload.ball_model_path or store.config.ball_model_path,
                 enable_ball=(
                     payload.enable_ball
@@ -302,6 +334,26 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     else store.config.pitch_detection_interval
                 ),
                 "imgsz": payload.imgsz if payload.imgsz is not None else store.config.imgsz,
+                "player_confidence": (
+                    payload.player_confidence
+                    if payload.player_confidence is not None
+                    else store.config.player_confidence
+                ),
+                "player_iou": (
+                    payload.player_iou
+                    if payload.player_iou is not None
+                    else store.config.player_iou
+                ),
+                "max_prediction_gap_frames": (
+                    payload.max_prediction_gap_frames
+                    if payload.max_prediction_gap_frames is not None
+                    else store.config.max_prediction_gap_frames
+                ),
+                "track_reactivation_window_frames": (
+                    payload.track_reactivation_window_frames
+                    if payload.track_reactivation_window_frames is not None
+                    else store.config.track_reactivation_window_frames
+                ),
                 "ball_model_path": payload.ball_model_path or store.config.ball_model_path,
                 "enable_ball": (
                     payload.enable_ball

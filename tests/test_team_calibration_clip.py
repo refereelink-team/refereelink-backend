@@ -112,3 +112,32 @@ def test_offline_processing_keeps_stable_tracks_and_labels_immediately(tmp_path:
     assert labelled["tracks"][0]["label"] == CalibrationLabel.HOME_OUTFIELD.value
     assert labelled["tracks"][0]["sample_count"] > 0
     assert service.review_video_path().is_file()
+
+
+def test_manual_role_label_uses_relaxed_role_sampling(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    _make_video(source, frames=40, fps=10.0)
+    session = TeamCalibrationSession(require_appearance=False, min_samples_per_track=2)
+    service = CalibrationClipService(
+        session,
+        temp_root=tmp_path / "runtime",
+        vision_core_factory=FakeVisionCore,
+    )
+
+    service.preview(
+        source_path=str(source),
+        match_id="match-role",
+        camera_id="camera-1",
+        device="cuda",
+    )
+    service.start_clip(500)
+    service.finish_clip(2500)
+    deadline = time.monotonic() + 5.0
+    while session.state == CalibrationState.PROCESSING and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    labelled = service.label_track(7, CalibrationLabel.REFEREE)
+
+    track = next(item for item in labelled["tracks"] if item["track_id"] == 7)
+    assert track["role"] == "referee"
+    assert track["sample_count"] > 0

@@ -50,6 +50,8 @@ class DetectorBackend(Protocol):
         frame: np.ndarray,
         imgsz: int = 640,
         half: bool = False,
+        conf: float | None = None,
+        iou: float | None = None,
     ) -> Any:
         """Run inference for one frame and return the native model output."""
 
@@ -79,8 +81,15 @@ class CallableBackend:
         frame: np.ndarray,
         imgsz: int = 640,
         half: bool = False,
+        conf: float | None = None,
+        iou: float | None = None,
     ) -> Any:
-        return self._predictor(frame, imgsz=imgsz, half=half)
+        kwargs = {"imgsz": imgsz, "half": half}
+        if conf is not None:
+            kwargs["conf"] = conf
+        if iou is not None:
+            kwargs["iou"] = iou
+        return self._predictor(frame, **kwargs)
 
 
 def _normalize_backend(backend: str) -> BackendName:
@@ -184,16 +193,27 @@ class UltralyticsBackend:
         frame: np.ndarray,
         imgsz: int = 640,
         half: bool = False,
+        conf: float | None = None,
+        iou: float | None = None,
     ) -> Any:
         """Run one inference using the shared detector call signature."""
+        kwargs = {"imgsz": imgsz, "half": half, "verbose": False}
+        if conf is not None:
+            kwargs["conf"] = conf
+        if iou is not None:
+            kwargs["iou"] = iou
         try:
-            return self._model(frame, imgsz=imgsz, half=half, verbose=False)
+            return self._model(frame, **kwargs)
         except TypeError as exc:
             # Keep injected lightweight/fake models compatible when they do
             # not expose Ultralytics' optional ``verbose`` keyword.
-            if "verbose" not in str(exc):
+            if not any(name in str(exc) for name in ("verbose", "conf", "iou")):
                 raise
-            return self._model(frame, imgsz=imgsz, half=half)
+            fallback = {"imgsz": imgsz, "half": half}
+            try:
+                return self._model(frame, **fallback)
+            except TypeError:
+                return self._model(frame)
 
 
 __all__ = ["BackendName", "CallableBackend", "DetectorBackend", "UltralyticsBackend"]

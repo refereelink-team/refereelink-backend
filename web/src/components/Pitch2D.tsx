@@ -88,7 +88,7 @@ const Pitch2D: React.FC = () => {
       ctx.fillStyle = '#fff';
       ctx.font = '9px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(`${p.track_id}`, sx, sy - 11);
+    ctx.fillText(`${p.entity_id ?? p.track_id}`, sx, sy - 11);
     }
 
     if (ball?.field_x != null && ball.field_y != null) {

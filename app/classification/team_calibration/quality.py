@@ -82,9 +82,6 @@ class CropQualityAssessor:
 
         if blur_score < self.min_blur_score:
             reasons.append("blur_low")
-        if green_edge_ratio > self.max_green_edge_ratio:
-            reasons.append("green_edge_ratio_high")
-
         blur_quality = float(np.clip(blur_score / max(self.min_blur_score * 3.0, 1.0), 0.0, 1.0))
         confidence_quality = confidence
         brightness_quality = 1.0
@@ -93,7 +90,11 @@ class CropQualityAssessor:
             reasons.append("brightness_extreme")
         elif brightness < 0.16 or brightness > 0.90:
             brightness_quality = 0.65
-        green_quality = float(np.clip(1.0 - green_edge_ratio, 0.0, 1.0))
+        # Green pixels at the ROI edge are useful as a quality signal, but
+        # must not be a hard rejection: green goalkeeper jerseys are valid
+        # samples and small boxes can make the border mask over-sensitive.
+        green_excess = max(0.0, green_edge_ratio - self.max_green_edge_ratio)
+        green_quality = float(np.clip(1.0 - green_excess, 0.0, 1.0))
         score = float(
             np.clip(
                 0.30 * confidence_quality

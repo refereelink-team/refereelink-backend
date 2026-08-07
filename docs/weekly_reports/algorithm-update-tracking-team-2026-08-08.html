@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Soccer Analysis — Saturday Algorithm Update 2026.08.08</title>
+  <style>
+    :root { --ink:#141414; --muted:#606060; --rule:#1d1d1d; --paper:#fff; --blue:#2554c7; --soft:#eef2fb; --serif:"Noto Serif CJK SC","Songti SC",Georgia,serif; --sans:Inter,-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#d9d9d9; color:var(--ink); font-family:var(--sans); }
+    .paper { width:min(1180px,100%); margin:24px auto; padding:28px 52px 42px; background:var(--paper); box-shadow:0 10px 38px rgba(0,0,0,.12); }
+    .masthead { display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px; padding:10px 0 9px; border-top:3px solid var(--ink); border-bottom:1px solid var(--ink); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .masthead div:nth-child(2) { text-align:center; } .masthead div:last-child { text-align:right; }
+    .brandline { margin:24px 0 18px; border-bottom:4px solid var(--ink); font-family:var(--serif); font-size:clamp(50px,9vw,116px); line-height:.86; letter-spacing:-.065em; }
+    .kicker { display:grid; grid-template-columns:1fr 300px; gap:28px; align-items:end; padding:13px 0 16px; border-bottom:1px solid var(--ink); }
+    h1,h2,h3,p { margin:0; } h1 { padding-left:18px; border-left:10px solid var(--blue); font-family:var(--serif); font-size:clamp(32px,5vw,58px); line-height:.95; letter-spacing:-.04em; }
+    .dek { font-size:12px; line-height:1.45; text-transform:uppercase; letter-spacing:.07em; font-weight:700; }
+    .hero { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:24px; margin-top:18px; padding-bottom:18px; border-bottom:1px solid var(--ink); }
+    .summary { font-size:18px; line-height:1.55; max-width:760px; } .summary strong { color:var(--blue); }
+    .flow { width:100%; margin-top:18px; border:1px solid var(--ink); background:var(--soft); }
+    .brief { padding-left:18px; border-left:1px solid #777; } .label { color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
+    .metric-list { margin-top:9px; border-top:1px solid var(--rule); } .metric { display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid #aaa; font-size:11px; text-transform:uppercase; } .metric strong { color:var(--blue); font-size:19px; font-weight:600; }
+    .section-heading { margin-top:27px; padding-bottom:8px; border-bottom:2px solid var(--ink); font-family:var(--serif); font-size:30px; letter-spacing:-.03em; }
+    .stories { display:grid; grid-template-columns:repeat(3,1fr); margin-top:16px; border-bottom:1px solid var(--ink); } .story { min-height:220px; padding:0 18px 18px; border-right:1px solid #aaa; } .story:first-child { padding-left:0; } .story:last-child { border-right:0; }
+    .story-index { margin-bottom:8px; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; } .story h3 { margin-bottom:9px; font-family:var(--serif); font-size:25px; line-height:1; } .story p { font-size:13px; line-height:1.55; }
+    table { width:100%; border-collapse:collapse; margin-top:14px; font-size:12px; } th { text-align:left; color:var(--muted); font-size:10px; letter-spacing:.05em; text-transform:uppercase; } th,td { padding:9px 8px; border-bottom:1px solid #aaa; } th:first-child,td:first-child { padding-left:0; } .good { color:#14753c; font-weight:800; }
+    .notes { display:grid; grid-template-columns:1fr 1fr; gap:28px; margin-top:20px; padding-top:18px; border-top:1px solid var(--ink); } .notes h2 { margin-bottom:8px; font-family:var(--serif); font-size:26px; } .notes ul { margin:0; padding-left:18px; font-size:13px; line-height:1.65; }
+    .callout { margin-top:18px; padding:14px 18px; border-left:8px solid var(--blue); background:var(--soft); font-size:14px; line-height:1.55; } .callout strong { display:block; margin-bottom:4px; font-family:var(--serif); font-size:23px; line-height:1.1; }
+    .footer { display:flex; justify-content:space-between; gap:20px; margin-top:30px; padding-top:10px; border-top:1px solid var(--ink); color:var(--muted); font-size:10px; line-height:1.4; }
+    @media (max-width:760px) { .paper { margin:0; padding:18px 18px 30px; box-shadow:none; } .masthead,.kicker,.hero,.stories,.notes { grid-template-columns:1fr; } .masthead div,.masthead div:nth-child(2),.masthead div:last-child { text-align:left; } .brief { padding:16px 0 0; border-left:0; border-top:1px solid #777; } .story,.story:first-child,.story:last-child { min-height:0; padding:16px 0; border-right:0; border-top:1px solid #aaa; } .story:first-child { border-top:0; } .footer { display:block; } .footer span { display:block; margin-top:8px; } }
+    @media print { body { background:#fff; } .paper { width:100%; margin:0; padding:10mm 12mm; box-shadow:none; } }
+  </style>
+</head>
+<body>
+  <main class="paper">
+    <header class="masthead"><div>Saturday Algorithm Update</div><div>The Signal / The System</div><div>08.08.2026&nbsp; | &nbsp;Issue 33</div></header>
+    <div class="brandline">Soccer Analysis</div>
+    <section class="kicker"><h1>从丢失到稳定</h1><p class="dek">球员跟踪、逻辑实体重连与赛前监督分队的算法更新周报</p></section>
+
+    <section class="hero">
+      <div>
+        <p class="summary"><strong>本周结论：</strong>球员分队的主要风险来自检测短暂缺失和 Track ID 碎片化，而不是球队原型本身。当前方案保留 ByteTrack 作为底层跟踪器，增加显示级短时预测、逻辑球员实体层和语义标签继承；分队继续采用每场赛前人工 Track 标注、监督原型和 UNKNOWN 拒绝。</p>
+        <svg class="flow" viewBox="0 0 900 170" role="img" aria-label="球员跟踪和分队算法流程图">
+          <rect x="24" y="55" width="150" height="58" fill="#fff" stroke="#191919"/><rect x="205" y="55" width="150" height="58" fill="#fff" stroke="#191919"/><rect x="386" y="55" width="150" height="58" fill="#eef2fb" stroke="#2554c7"/><rect x="567" y="55" width="150" height="58" fill="#eef2fb" stroke="#2554c7"/><rect x="748" y="55" width="128" height="58" fill="#2554c7" stroke="#191919"/>
+          <path d="M174 84h31M355 84h31M536 84h31M717 84h31" stroke="#191919" stroke-width="2"/><path d="m198 78 8 6-8 6m181-12 8 6-8 6m181-12 8 6-8 6m181-12 8 6-8 6" fill="none" stroke="#191919" stroke-width="2"/>
+          <g font-family="Arial,sans-serif" text-anchor="middle"><text x="99" y="80" font-size="16" fill="#141414">YOLO person</text><text x="99" y="101" font-size="11" fill="#606060">检测</text><text x="280" y="80" font-size="16" fill="#141414">ByteTrack</text><text x="280" y="101" font-size="11" fill="#606060">底层 Track</text><text x="461" y="80" font-size="15" fill="#2554c7">Entity Rebind</text><text x="461" y="101" font-size="11" fill="#606060">逻辑球员</text><text x="642" y="80" font-size="15" fill="#2554c7">监督原型</text><text x="642" y="101" font-size="11" fill="#606060">球队 / 角色</text><text x="812" y="80" font-size="16" fill="#fff">H / A / ?</text><text x="812" y="101" font-size="11" fill="#eaf0ff">输出</text></g>
+        </svg>
+      </div>
+      <aside class="brief"><div class="label">Measured This Week</div><div style="font-family:var(--serif);font-size:25px;line-height:1.05;margin-top:4px;">可复现的稳定性证据</div><div class="metric-list"><div class="metric"><span>Regression tests</span><strong>144</strong></div><div class="metric"><span>test2 frames</span><strong>1,176</strong></div><div class="metric"><span>E2 entity frag.</span><strong>101</strong></div><div class="metric"><span>CUDA FPS</span><strong>61.45</strong></div></div></aside>
+    </section>
+
+    <h2 class="section-heading">Algorithm Changes</h2>
+    <section class="stories">
+      <article class="story"><div class="story-index">01 / 球员跟踪</div><h3>底层跟踪不变，恢复层前移</h3><p>保留 YOLOv11 person + ByteTrack。6 帧短时预测只服务于画面连续性，不重新输入 tracker，不更新球队原型，也不参与越位、犯规等高风险判定。</p></article>
+      <article class="story"><div class="story-index">02 / 逻辑实体</div><h3>Track ID 之上再加一层身份</h3><p>Track ID 短暂丢失后，通过位置、速度、球队语义、外观和唯一候选约束，把新 Track 重新绑定到旧的 entity_id。存在歧义时拒绝合并，避免两个相邻同队球员被强行粘连。</p></article>
+      <article class="story"><div class="story-index">03 / 监督分队</div><h3>赛前标定，比赛中冻结</h3><p>操作员按 Track 标记主队、客队、守门员和裁判；系统提取高质量球衣 ROI，构建 HSV/Lab 与 MobileNetV3 外观原型。正式运行时原型冻结，证据不足输出 UNKNOWN。</p></article>
+    </section>
+
+    <section class="notes"><article><div class="label">Team Semantics</div><h2>球队与角色分离</h2><ul><li>球队：HOME、AWAY、NONE、UNKNOWN。</li><li>角色：OUTFIELD、GOALKEEPER、REFEREE、UNKNOWN。</li><li>守门员使用 HG / AG 语义，裁判不再显示 NONE REF，而是只显示 REF。</li><li>未知目标不绘制最终视频标记，减少视觉噪声。</li></ul></article><article><div class="label">Final Video Rendering</div><h2>输出层同步收敛</h2><ul><li>球队使用稳定颜色：主队洋红、客队青蓝。</li><li>普通球员显示 H10 / A39 等紧凑标签。</li><li>脚底标记采用下半环，顶部开口，避免穿过腿部。</li><li>标记只属于最终产出视频；检测、跟踪和分类数据结构不被改变。</li></ul></article></section>
+
+    <h2 class="section-heading">CUDA Evidence</h2>
+    <table><thead><tr><th>视频 / Profile</th><th>实际帧数</th><th>FPS</th><th>Raw fragmentation</th><th>Entity fragmentation</th><th>ID switches</th><th>Predicted frames</th></tr></thead><tbody>
+      <tr><td>test1 / E0 current</td><td>1,930</td><td>56.06</td><td>469</td><td>469</td><td>0</td><td>0</td></tr>
+      <tr><td>test1 / E2 prediction + entity</td><td>1,930</td><td>65.11</td><td>364</td><td class="good">187</td><td>154</td><td>2,747</td></tr>
+      <tr><td>test2 / E0 current</td><td>1,176</td><td>55.89</td><td>257</td><td>257</td><td>0</td><td>0</td></tr>
+      <tr><td>test2 / E2 prediction + entity</td><td>1,176</td><td>61.45</td><td>156</td><td class="good">101</td><td>49</td><td>1,283</td></tr>
+    </tbody></table>
+    <div class="callout"><strong>如何解读这组数据</strong>实体层碎片化在 test1 从 469 降到 187、在 test2 从 257 降到 101；这说明“逻辑球员”对短暂丢失有效。但当前没有逐帧人工 ID ground truth，因此不能把这些结果等同于 IDF1、HOTA 或真实身份准确率。</div>
+
+    <section class="notes"><article><div class="label">Current Guardrails</div><h2>明确不做的事</h2><ul><li>不把预测框重新送回 ByteTrack。</li><li>不使用预测框更新球队原型。</li><li>不以球队颜色单独决定唯一球员身份。</li><li>不在分队失败时静默切换 KMeans。</li></ul></article><article><div class="label">Next Saturday</div><h2>下一轮验证重点</h2><ul><li>建立困难片段的逐帧 Track / entity 标注集。</li><li>计算 IDF1、HOTA、fragmentation 和恢复延迟。</li><li>比较 ByteTrack、OC-SORT、BoT-SORT 的真实遮挡表现。</li><li>评估队服相近、阴影和严重重叠下的 UNKNOWN 拒绝率。</li></ul></article></section>
+
+    <footer class="footer"><span>Saturday report · based on repository tests, CUDA benchmark and test2 visual output.</span><span>Snapshot: 2026.08.08 · branch: codex/supervised-team-calibration</span></footer>
+  </main>
+</body>
+</html>

@@ -58,6 +58,17 @@ const TeamCalibrationPanel: React.FC = () => {
 
   const phase: CalibrationPhase = calibration.state;
   const validation = calibration.validation_report;
+  const reviewSourceUrl = useMemo(() => {
+    if (!calibration.source_url) return calibration.review_video_url;
+    const startSeconds = Math.max(0, (calibration.clip_start_ms ?? 0) / 1000);
+    const endSeconds = calibration.clip_end_ms !== null && calibration.clip_end_ms !== undefined
+      ? Math.max(startSeconds, calibration.clip_end_ms / 1000)
+      : null;
+    const fragment = endSeconds === null
+      ? `#t=${startSeconds}`
+      : `#t=${startSeconds},${endSeconds}`;
+    return `${calibration.source_url}${fragment}`;
+  }, [calibration.clip_end_ms, calibration.clip_start_ms, calibration.review_video_url, calibration.source_url]);
   const tracks = useMemo(() => {
     const query = search.trim().toLowerCase();
     return calibration.tracks.filter((track) => {
@@ -184,7 +195,8 @@ const TeamCalibrationPanel: React.FC = () => {
     if (!context) return;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
-    const timestamp = video.currentTime * 1000;
+    const clipStartMs = calibration.clip_start_ms ?? 0;
+    const timestamp = Math.max(0, video.currentTime * 1000 - clipStartMs);
     let frame = metadata.frames[0];
     for (const candidate of metadata.frames) {
       if (candidate.timestamp_ms <= timestamp) frame = candidate;
@@ -209,7 +221,7 @@ const TeamCalibrationPanel: React.FC = () => {
       context.fillStyle = '#ffffff';
       context.fillText(label, left + 5, Math.max(15, top - 7));
     }
-  }, [metadata]);
+  }, [calibration.clip_start_ms, metadata]);
 
   useEffect(() => {
     if (phase !== 'review') return undefined;
@@ -244,8 +256,9 @@ const TeamCalibrationPanel: React.FC = () => {
     setSelectedTrackId(track.track_id);
     const video = reviewVideoRef.current;
     if (video && track.representative_timestamp_ms !== undefined) {
-      video.currentTime = track.representative_timestamp_ms / 1000;
-      setCurrentTime(video.currentTime);
+      const clipStartSeconds = (calibration.clip_start_ms ?? 0) / 1000;
+      video.currentTime = clipStartSeconds + track.representative_timestamp_ms / 1000;
+      setCurrentTime(track.representative_timestamp_ms / 1000);
       video.pause();
     }
   };
@@ -349,11 +362,17 @@ const TeamCalibrationPanel: React.FC = () => {
                 <video
                   ref={reviewVideoRef}
                   className="calibration-video"
-                  src={calibration.review_video_url}
+                  src={reviewSourceUrl ?? undefined}
                   controls
                   preload="metadata"
-                  onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-                  onLoadedMetadata={drawOverlay}
+                  onTimeUpdate={(event) => setCurrentTime(Math.max(0, event.currentTarget.currentTime - (calibration.clip_start_ms ?? 0) / 1000))}
+                  onLoadedMetadata={(event) => {
+                    const clipStartSeconds = (calibration.clip_start_ms ?? 0) / 1000;
+                    if (Math.abs(event.currentTarget.currentTime - clipStartSeconds) > 0.1) {
+                      event.currentTarget.currentTime = clipStartSeconds;
+                    }
+                    drawOverlay();
+                  }}
                 />
                 <canvas ref={overlayRef} className="review-overlay" />
               </div>

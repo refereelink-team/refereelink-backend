@@ -137,6 +137,9 @@ def test_official_person_model_uses_unknown_role_and_neutral_team():
 
     assert player.model_dump() == {
         "track_id": 7,
+        "entity_id": None,
+        "track_status": "detected",
+        "missing_frames": 0,
         "role": "unknown",
         "team": "unknown",
         "team_label": "unknown",
