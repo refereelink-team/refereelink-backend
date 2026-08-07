@@ -44,6 +44,13 @@ logger = logging.getLogger(__name__)
 METRICS_INTERVAL_SEC = 1.0
 POSSESSION_DISTANCE_MM = 900.0
 
+# Compact, high-contrast colours used by the final video overlay.  These are
+# BGR values because the pipeline renders with OpenCV.
+HOME_OVERLAY_COLOR = (147, 20, 255)  # pink / magenta
+AWAY_OVERLAY_COLOR = (255, 191, 0)  # cyan / blue
+REFEREE_OVERLAY_COLOR = (0, 215, 255)  # yellow
+UNKNOWN_OVERLAY_COLOR = (170, 170, 170)
+
 
 def _map_homography_status(status: str) -> HomographyStatus:
     try:
@@ -62,7 +69,17 @@ def _draw_player_overlay(
     role_label: str = "UNKNOWN",
     color: tuple[int, int, int],
 ) -> None:
-    """Draw a high-contrast player box, Track ID, and team on the frame."""
+    """Draw a compact team marker for the final output video.
+
+    The previous full bounding-box HUD was useful for debugging, but it
+    obscured players in the final recording.  The production-style overlay
+    uses a small team-coloured ellipse at the player's feet and a compact
+    label:
+
+    ``H10`` / ``A39`` for outfield players, ``HG`` / ``AG`` for goalkeepers,
+    and ``REF`` for referees.  Unknown semantics are intentionally omitted
+    from the final video.
+    """
 
     frame_height, frame_width = frame.shape[:2]
     x1, y1, x2, y2 = bbox
@@ -70,27 +87,62 @@ def _draw_player_overlay(
     y1 = max(0, min(frame_height - 1, y1))
     x2 = max(x1 + 1, min(frame_width - 1, x2))
     y2 = max(y1 + 1, min(frame_height - 1, y2))
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
     display_id = entity_id if entity_id is not None else track_id
-    label = f"ID {display_id} {team_label} {role_label}"
+    label = _format_player_overlay_label(
+        team_label=team_label,
+        role_label=role_label,
+        display_id=display_id,
+    )
+    if label is None:
+        return
+
+    marker_color = color
+    if role_label.strip().lower() in {"referee", "ref"}:
+        marker_color = REFEREE_OVERLAY_COLOR
+
+    # Keep the marker legible for both distant and nearby players without
+    # letting it grow into a large bounding-box-like element.  Only draw the
+    # lower half of the ellipse so the marker does not cross the player's
+    # legs or torso.
+    center_x = int(round((x1 + x2) / 2))
+    center_y = min(frame_height - 1, y2 + max(1, int(round((y2 - y1) * 0.03))))
+    box_width = max(1, x2 - x1)
+    radius_x = max(10, min(30, int(round(box_width * 0.65))))
+    radius_y = max(4, min(9, int(round(radius_x * 0.27))))
+    cv2.ellipse(
+        frame,
+        (center_x, center_y),
+        (radius_x, radius_y),
+        0,
+        0,
+        180,
+        marker_color,
+        2,
+        cv2.LINE_AA,
+    )
+
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.55
-    text_thickness = 2
-    outline_thickness = 4
+    font_scale = 0.38
+    text_thickness = 1
+    outline_thickness = 2
     (text_width, text_height), baseline = cv2.getTextSize(
         label,
         font,
         font_scale,
         text_thickness,
     )
-    text_x = x1 + 5
-    text_y = max(y1 - 5, text_height + baseline + 7)
-    box_top = max(0, text_y - text_height - baseline - 7)
-    box_right = min(frame_width - 1, text_x + text_width + 10)
-    box_bottom = min(frame_height - 1, text_y + 3)
-    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), (12, 18, 24), -1)
-    cv2.rectangle(frame, (x1, box_top), (box_right, box_bottom), color, 1)
+    padding_x = 4
+    padding_y = 2
+    box_width = text_width + padding_x * 2
+    box_height = text_height + baseline + padding_y * 2
+    box_left = max(0, min(frame_width - box_width, center_x - box_width // 2))
+    box_top = max(0, min(frame_height - box_height, center_y - box_height // 2))
+    box_right = min(frame_width - 1, box_left + box_width)
+    box_bottom = min(frame_height - 1, box_top + box_height)
+    cv2.rectangle(frame, (box_left, box_top), (box_right, box_bottom), marker_color, -1)
+    text_x = box_left + padding_x
+    text_y = box_top + padding_y + text_height
     cv2.putText(
         frame,
         label,
@@ -111,6 +163,30 @@ def _draw_player_overlay(
         text_thickness,
         cv2.LINE_AA,
     )
+
+
+def _format_player_overlay_label(
+    *,
+    team_label: str,
+    role_label: str,
+    display_id: int,
+) -> Optional[str]:
+    """Return the compact final-video label, or ``None`` for UNKNOWN."""
+
+    team = str(team_label).strip().lower()
+    role = str(role_label).strip().lower().replace(" predicted", "")
+    if role in {"unknown", "", "none"} or team == "unknown":
+        return None
+    if role in {"referee", "ref"}:
+        return "REF"
+    if team == "home" and role in {"goalkeeper", "gk"}:
+        return "HG"
+    if team == "away" and role in {"goalkeeper", "gk"}:
+        return "AG"
+    if role in {"outfield", "player"} and team in {"home", "away"}:
+        prefix = "H" if team == "home" else "A"
+        return f"{prefix}{int(display_id)}"
+    return None
 
 
 class InferencePipeline:
@@ -547,9 +623,9 @@ class InferencePipeline:
             self._display_smoother = display_smoother
         for display in display_smoother.update(player_states):
             x1, y1, x2, y2 = map(int, display.bbox)
-            color = {0: (147, 20, 255), 1: (255, 191, 0)}.get(
+            color = {0: HOME_OVERLAY_COLOR, 1: AWAY_OVERLAY_COLOR}.get(
                 display.team_id,
-                (0, 215, 255),
+                UNKNOWN_OVERLAY_COLOR,
             )
             _draw_player_overlay(
                 annotated_frame,
