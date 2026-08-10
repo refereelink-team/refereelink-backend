@@ -98,7 +98,11 @@ class EventEngine:
 
     def _offside_candidates(self, frame: FrameState, timestamp: float) -> list[GameEvent]:
         ball = frame.ball
-        if ball is None or ball.field_x is None:
+        if (
+            ball is None
+            or ball.field_x is None
+            or not frame.camera_measurement_usable
+        ):
             return []
         players = [
             player
@@ -106,6 +110,7 @@ class EventEngine:
             if player.team_id in (0, 1)
             and player.role != PlayerRole.REFEREE
             and player.field_x is not None
+            and player.field_coordinate_usable
         ]
         results: list[GameEvent] = []
         for attacking_team in (0, 1):

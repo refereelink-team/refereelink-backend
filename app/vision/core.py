@@ -31,13 +31,15 @@ from app.geometry.pitch_projection import (
     ProjectedPitchKeypoint,
 )
 from app.field_registration.camera_model import CameraRigProfile
+from app.field_registration.contact_point import GroundContactPointSelector
 from app.field_registration.perception import LegacyKeypointPerceptionBackend
 from app.field_registration.pitch_model import PitchDimensions, PitchModel
+from app.field_registration.projection import PitchProjector
 from app.field_registration.tracker import (
     FieldRegistrationConfig,
     FieldRegistrationCore,
 )
-from app.field_registration.types import CameraTrackingStatus
+from app.field_registration.types import CameraState, CameraTrackingStatus, PitchCoordinate
 from app.vision.entities import TrackEntityManager
 
 
@@ -65,6 +67,7 @@ class VisionFrame:
     field_xy: np.ndarray
     color_lookup: np.ndarray
     person_only: bool
+    pitch_coordinates: tuple[PitchCoordinate, ...] = ()
     entity_ids: dict[int, int] = field(default_factory=dict)
     track_status: dict[int, str] = field(default_factory=dict)
     rebindings: dict[int, int] = field(default_factory=dict)
@@ -144,6 +147,9 @@ class VisionCore:
         )
         self.camera_rig_profile_path = camera_rig_profile_path
         self._field_registration_core = field_registration_core
+        self._last_camera_state: Optional[CameraState] = None
+        self._pitch_projector: Optional[PitchProjector] = None
+        self._contact_point_selector = GroundContactPointSelector()
         self.camera_motion_refresh_count = 0
         self._player_model = player_model
         self._pitch_model = pitch_model
@@ -356,6 +362,7 @@ class VisionCore:
             registration.diagnostics.get("semantic_inference_time_ms", 0.0)
         )
         state = registration.camera_state
+        self._last_camera_state = state
         homography_cm = None
         if state.image_to_pitch is not None:
             homography_cm = np.diag([100.0, 100.0, 1.0]) @ state.image_to_pitch
@@ -433,14 +440,27 @@ class VisionCore:
         self,
         detections: sv.Detections,
         projection: PitchProjectionResult,
-    ) -> np.ndarray:
+        frame_shape: tuple[int, ...],
+    ) -> tuple[np.ndarray, tuple[PitchCoordinate, ...]]:
         field_xy = np.full((len(detections), 2), np.nan, dtype=np.float32)
+        if self.enable_field_registration_v2 and self._last_camera_state is not None:
+            return self._field_coordinates_v2(detections, frame_shape, projection)
+
+        unavailable = tuple(
+            PitchCoordinate(
+                xy_m=None,
+                sigma_m=None,
+                source="none",
+                camera_status=self._camera_status_from_projection(projection),
+            )
+            for _ in range(len(detections))
+        )
         if (
             projection.homography is None
             or not projection.measurement_usable
             or len(detections) == 0
         ):
-            return field_xy
+            return field_xy, unavailable
 
         image_xy = detections.get_anchors_coordinates(
             anchor=sv.Position.BOTTOM_CENTER
@@ -450,7 +470,7 @@ class VisionCore:
                 image_xy.reshape(-1, 1, 2), projection.homography
             ).reshape(-1, 2)
         except cv2.error:
-            return field_xy
+            return field_xy, unavailable
 
         config = self._projection_engine.config
         valid = (
@@ -461,7 +481,75 @@ class VisionCore:
             & (transformed[:, 1] <= config.width)
         )
         field_xy[valid] = transformed[valid]
-        return field_xy
+        status = self._camera_status_from_projection(projection)
+        coordinates = tuple(
+            PitchCoordinate(
+                xy_m=(float(point[0]) / 100.0, float(point[1]) / 100.0)
+                if is_valid
+                else None,
+                sigma_m=None,
+                source="bbox_bottom" if is_valid else "none",
+                camera_status=status,
+            )
+            for point, is_valid in zip(transformed, valid)
+        )
+        return field_xy, coordinates
+
+    @staticmethod
+    def _camera_status_from_projection(
+        projection: PitchProjectionResult,
+    ) -> CameraTrackingStatus:
+        mapping = {
+            "fresh": CameraTrackingStatus.RELOCALIZED,
+            "relocalized": CameraTrackingStatus.RELOCALIZED,
+            "corrected": CameraTrackingStatus.CORRECTED,
+            "reused": CameraTrackingStatus.TRACKED,
+            "tracked": CameraTrackingStatus.TRACKED,
+            "stale": CameraTrackingStatus.PREDICTED,
+            "predicted": CameraTrackingStatus.PREDICTED,
+        }
+        return mapping.get(
+            projection.homography_status,
+            CameraTrackingStatus.LOST,
+        )
+
+    def _field_coordinates_v2(
+        self,
+        detections: sv.Detections,
+        frame_shape: tuple[int, ...],
+        projection: PitchProjectionResult,
+    ) -> tuple[np.ndarray, tuple[PitchCoordinate, ...]]:
+        field_xy = np.full((len(detections), 2), np.nan, dtype=np.float32)
+        state = self._last_camera_state
+        core = self._field_registration_core
+        if state is None or core is None or not projection.measurement_usable:
+            status = state.status if state is not None else CameraTrackingStatus.LOST
+            return field_xy, tuple(
+                PitchCoordinate(None, None, "none", status) for _ in range(len(detections))
+            )
+        if self._pitch_projector is None:
+            self._pitch_projector = PitchProjector(core.pitch_model, core.rig_profile)
+
+        frame_height, frame_width = frame_shape[:2]
+        coordinates: list[PitchCoordinate] = []
+        for bbox in detections.xyxy:
+            contact = self._contact_point_selector.select(
+                bbox,
+                frame_size=(frame_width, frame_height),
+            )
+            if contact.image_xy is None:
+                coordinates.append(PitchCoordinate(None, None, "none", state.status))
+                continue
+            coordinate = self._pitch_projector.image_to_pitch(
+                contact.image_xy,
+                state,
+                source=contact.source,
+                image_covariance_px2=contact.covariance_px2,
+            )
+            coordinates.append(coordinate)
+            if coordinate.xy_m is not None:
+                field_xy[len(coordinates) - 1] = np.asarray(coordinate.xy_m) * 100.0
+        return field_xy, tuple(coordinates)
 
     def _record_lifecycle(
         self,
@@ -619,6 +707,7 @@ class VisionCore:
         force_pitch_refresh = bool(motion is not None and motion.requires_refresh)
         if force_pitch_refresh:
             self.camera_motion_refresh_count += 1
+        self._last_camera_state = None
         projection = self._projection_for_frame(
             undistorted_frame,
             frame_index,
@@ -631,7 +720,11 @@ class VisionCore:
             CameraTrackingStatus.CORRECTED.value,
         }:
             self._camera_motion_estimator.mark_reference(undistorted_frame)
-        field_xy = self._field_coordinates(tracked_detections, projection)
+        field_xy, pitch_coordinates = self._field_coordinates(
+            tracked_detections,
+            projection,
+            undistorted_frame.shape,
+        )
         self.frames_processed += 1
         if projection.available:
             self.homography_available_count += 1
@@ -648,6 +741,7 @@ class VisionCore:
             field_xy=field_xy,
             color_lookup=color_lookup,
             person_only=self.person_only,
+            pitch_coordinates=pitch_coordinates,
             entity_ids=entity_update.entity_ids,
             track_status=entity_update.statuses,
             rebindings=entity_update.rebindings,

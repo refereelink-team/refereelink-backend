@@ -20,6 +20,7 @@ from app.constants.paths import (
     FOUL_MODEL_PATH,
 )
 from app.events.engine import EventEngine, FoulEventAdapter
+from app.field_registration.types import CameraTrackingStatus
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
 from app.pipeline.recorder import VideoRecorder
 from app.pipeline.source import VideoSource
@@ -550,6 +551,16 @@ class InferencePipeline:
             track_status = vision_frame.track_status.get(tracker_id, "detected")
             field_xy = vision_frame.field_xy[idx]
             has_field_xy = bool(np.isfinite(field_xy).all())
+            pitch_coordinate = (
+                vision_frame.pitch_coordinates[idx]
+                if idx < len(vision_frame.pitch_coordinates)
+                else None
+            )
+            field_xy_m = (
+                pitch_coordinate.xy_m
+                if pitch_coordinate is not None and pitch_coordinate.xy_m is not None
+                else None
+            )
             semantic = semantic_results.get(tracker_id)
             role = PlayerRole.UNKNOWN
             team = TeamLabel.UNKNOWN
@@ -599,6 +610,30 @@ class InferencePipeline:
                     team_id=team_id,
                     field_x=float(field_xy[0]) if has_field_xy else None,
                     field_y=float(field_xy[1]) if has_field_xy else None,
+                    field_x_m=float(field_xy_m[0]) if field_xy_m is not None else None,
+                    field_y_m=float(field_xy_m[1]) if field_xy_m is not None else None,
+                    field_sigma_m=(
+                        pitch_coordinate.sigma_m if pitch_coordinate is not None else None
+                    ),
+                    field_coordinate_source=(
+                        pitch_coordinate.source if pitch_coordinate is not None else "none"
+                    ),
+                    field_coordinate_usable=bool(
+                        has_field_xy
+                        and pitch_coordinate is not None
+                        and pitch_coordinate.xy_m is not None
+                        and pitch_coordinate.camera_status
+                        in {
+                            CameraTrackingStatus.RELOCALIZED,
+                            CameraTrackingStatus.CORRECTED,
+                            CameraTrackingStatus.TRACKED,
+                        }
+                    ),
+                    field_camera_status=(
+                        _map_homography_status(pitch_coordinate.camera_status.value)
+                        if pitch_coordinate is not None
+                        else None
+                    ),
                     confidence=(
                         float(detections.confidence[idx])
                         if detections.confidence is not None
@@ -890,7 +925,9 @@ class InferencePipeline:
         candidates = [
             player
             for player in players
-            if player.field_x is not None and player.field_y is not None
+            if player.field_x is not None
+            and player.field_y is not None
+            and player.field_coordinate_usable
         ]
         if not candidates:
             return None

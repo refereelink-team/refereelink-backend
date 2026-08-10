@@ -24,6 +24,12 @@ export interface PlayerState {
   team_id: number;
   field_x: number | null;
   field_y: number | null;
+  field_x_m: number | null;
+  field_y_m: number | null;
+  field_sigma_m: number | null;
+  field_coordinate_source: string;
+  field_coordinate_usable: boolean;
+  field_camera_status: HomographyStatus | null;
   confidence: number;
   role_confidence: number;
   team_confidence: number;

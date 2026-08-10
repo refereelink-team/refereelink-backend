@@ -13,6 +13,9 @@ def _player(track_id: int, team_id: int, x: float, y: float = 3000.0) -> PlayerS
         team_id=team_id,
         field_x=x,
         field_y=y,
+        field_x_m=x / 100.0,
+        field_y_m=y / 100.0,
+        field_coordinate_usable=True,
         confidence=0.9,
         team_confidence=0.9,
         role_confidence=0.9,
@@ -24,6 +27,7 @@ def _frame(frame_id: int, timestamp: float, possession: int | None) -> FrameStat
     return FrameState(
         frame_id=frame_id,
         capture_timestamp_ms=timestamp * 1000.0,
+        camera_measurement_usable=True,
         possession_track_id=possession,
         players=[
             _player(1, 0, 1000.0),
@@ -60,6 +64,21 @@ def test_event_engine_emits_offside_candidate_with_known_teams() -> None:
     offside = next(event for event in events if event.event_type == "offside_candidate")
     assert offside.involved_track_ids == [2, 3]
     assert offside.evidence["attacking_team"] == 0
+
+
+def test_event_engine_rejects_offside_when_projection_is_not_safe() -> None:
+    frame = _frame(1, 0.0, 1)
+    frame.camera_measurement_usable = False
+
+    assert not any(
+        event.event_type == "offside_candidate" for event in EventEngine().update(frame)
+    )
+
+    frame.camera_measurement_usable = True
+    frame.players[1].field_coordinate_usable = False
+    assert not any(
+        event.event_type == "offside_candidate" for event in EventEngine().update(frame)
+    )
 
 
 def test_event_engine_applies_shot_cooldown() -> None:

@@ -6,6 +6,7 @@ import numpy as np
 import supervision as sv
 
 from app.geometry.pitch_projection import PitchProjectionResult
+from app.field_registration.types import CameraTrackingStatus, PitchCoordinate
 from app.pipeline.engine import InferencePipeline
 from app.pipeline.recorder import VideoRecorder
 from app.state.models import BallStatus, PlayerRole, TeamLabel
@@ -71,6 +72,14 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) ->
         field_xy=np.array([[10.0, 12.0]], dtype=np.float32),
         color_lookup=np.array([4], dtype=np.int64),
         person_only=True,
+        pitch_coordinates=(
+            PitchCoordinate(
+                xy_m=(0.1, 0.12),
+                sigma_m=0.08,
+                source="bbox_bottom",
+                camera_status=CameraTrackingStatus.RELOCALIZED,
+            ),
+        ),
     )
 
     processor = BallProcessor(
@@ -107,6 +116,9 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) ->
     assert frame_state.players[0].team_id == 0
     assert frame_state.players[0].bbox == (8.0, 8.0, 12.0, 12.0)
     assert frame_state.players[0].semantic_status == "stable"
+    assert frame_state.players[0].field_x_m == 0.1
+    assert frame_state.players[0].field_sigma_m == 0.08
+    assert frame_state.players[0].field_coordinate_usable
     assert frame_state.ball is not None
     assert frame_state.ball.status == BallStatus.FRESH
     assert frame_state.ball.field_x == 10.0

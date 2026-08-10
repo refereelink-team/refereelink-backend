@@ -57,6 +57,12 @@ class PlayerState(BaseModel):
     team_id: int
     field_x: Optional[float] = None
     field_y: Optional[float] = None
+    field_x_m: Optional[float] = None
+    field_y_m: Optional[float] = None
+    field_sigma_m: Optional[float] = None
+    field_coordinate_source: str = "none"
+    field_coordinate_usable: bool = False
+    field_camera_status: Optional[HomographyStatus] = None
     confidence: float
     role_confidence: float = 0.0
     team_confidence: float = 0.0
