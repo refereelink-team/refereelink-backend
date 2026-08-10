@@ -61,6 +61,10 @@ def test_trtexec_command_is_explicit_and_supports_fp16(tmp_path: Path) -> None:
 
 
 def test_memory_slope_uses_elapsed_minutes() -> None:
-    samples = [(0.0, 100.0), (60.0, 102.0), (120.0, 104.0)]
+    samples = [(0.0, 100.0), (300.0, 110.0), (600.0, 120.0)]
 
     assert _memory_slope_mb_per_minute(samples) == pytest.approx(2.0)
+
+
+def test_memory_slope_rejects_short_smoke_run() -> None:
+    assert _memory_slope_mb_per_minute([(0.0, 100.0), (30.0, 105.0)]) is None

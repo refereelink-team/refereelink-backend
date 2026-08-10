@@ -71,6 +71,8 @@ uv run python tools/benchmark_pitch_registration_long_run.py \
 
 该报告没有真值，因此固定写入 `accuracy_valid=false`。它只能证明性能和稳定性；JaC、线误差、网格米制误差与球员坐标误差必须由独立人工真值报告给出。
 
+默认先预热 30 帧，预热不进入延迟与显存统计。少于 5 分钟的 smoke run 不报告 RSS 线性斜率，避免把模型和分配器冷启动误判为持续内存泄漏。
+
 ## 4. 验收门槛
 
 在选定生产模型前，至少满足：

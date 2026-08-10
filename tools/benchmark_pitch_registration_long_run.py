@@ -31,7 +31,9 @@ def _distribution(values: list[float]) -> dict[str, float | None]:
 
 
 def _memory_slope_mb_per_minute(samples: list[tuple[float, float]]) -> float | None:
-    if len(samples) < 2 or samples[-1][0] - samples[0][0] < 1.0:
+    # Short smoke runs are dominated by allocator warm-up and produce wildly
+    # misleading slopes. Five minutes is the minimum useful observation span.
+    if len(samples) < 2 or samples[-1][0] - samples[0][0] < 300.0:
         return None
     elapsed_minutes = np.asarray([row[0] / 60.0 for row in samples])
     rss_mb = np.asarray([row[1] for row in samples])
@@ -49,6 +51,7 @@ def run_benchmark(
     camera_rig_profile_path: str | None,
     duration_minutes: float,
     max_frames: int | None,
+    warmup_frames: int,
     imgsz: int,
     pitch_detection_interval: int,
     sample_interval_frames: int,
@@ -84,7 +87,24 @@ def run_benchmark(
     coordinate_count = 0
     usable_coordinate_count = 0
     frame_count = 0
+    absolute_frame_index = 0
     video_loops = 0
+    for _ in range(max(warmup_frames, 0)):
+        ok, frame = capture.read()
+        if not ok:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            video_loops += 1
+            ok, frame = capture.read()
+            if not ok:
+                capture.release()
+                raise RuntimeError("source video could not be rewound during warm-up")
+        absolute_frame_index += 1
+        core.process(frame, absolute_frame_index)
+    if device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+    semantic_start = core.pitch_detection_count
+    reuse_start = core.pitch_reuse_count
     started = time.perf_counter()
     deadline = started + duration_minutes * 60.0
     try:
@@ -97,8 +117,9 @@ def run_benchmark(
                 if not ok:
                     raise RuntimeError("source video could not be rewound")
             frame_count += 1
+            absolute_frame_index += 1
             frame_started = time.perf_counter()
-            result = core.process(frame, frame_count)
+            result = core.process(frame, absolute_frame_index)
             if device.startswith("cuda") and torch.cuda.is_available():
                 torch.cuda.synchronize()
             frame_latencies_ms.append((time.perf_counter() - frame_started) * 1000.0)
@@ -124,6 +145,7 @@ def run_benchmark(
         "source": str(source),
         "device": device,
         "source_fps": source_fps,
+        "warmup_frames": warmup_frames,
         "frames": frame_count,
         "video_loops": video_loops,
         "elapsed_sec": elapsed,
@@ -131,8 +153,8 @@ def run_benchmark(
         "frame_latency_ms": _distribution(frame_latencies_ms),
         "camera_status_counts": dict(camera_statuses),
         "homography_available_ratio": core.homography_available_count / max(frame_count, 1),
-        "semantic_inference_count": core.pitch_detection_count,
-        "semantic_reuse_ratio": core.pitch_reuse_count / max(frame_count, 1),
+        "semantic_inference_count": core.pitch_detection_count - semantic_start,
+        "semantic_reuse_ratio": (core.pitch_reuse_count - reuse_start) / max(frame_count, 1),
         "coordinate_usable_ratio": usable_coordinate_count / max(coordinate_count, 1),
         "coordinate_sigma_m": _distribution(coordinate_sigmas_m),
         "rss_mb": {
@@ -169,6 +191,7 @@ def main() -> None:
     parser.add_argument("--camera-rig-profile-path")
     parser.add_argument("--duration-minutes", type=float, default=30.0)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument("--warmup-frames", type=int, default=30)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--pitch-detection-interval", type=int, default=5)
     parser.add_argument("--sample-interval-frames", type=int, default=250)
@@ -177,6 +200,8 @@ def main() -> None:
         parser.error("--duration-minutes must be positive")
     if arguments.max_frames is not None and arguments.max_frames <= 0:
         parser.error("--max-frames must be positive")
+    if arguments.warmup_frames < 0:
+        parser.error("--warmup-frames cannot be negative")
     report = run_benchmark(
         source=arguments.source,
         device=arguments.device,
@@ -186,6 +211,7 @@ def main() -> None:
         camera_rig_profile_path=arguments.camera_rig_profile_path,
         duration_minutes=arguments.duration_minutes,
         max_frames=arguments.max_frames,
+        warmup_frames=arguments.warmup_frames,
         imgsz=arguments.imgsz,
         pitch_detection_interval=arguments.pitch_detection_interval,
         sample_interval_frames=arguments.sample_interval_frames,
