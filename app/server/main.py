@@ -91,6 +91,8 @@ def create_pipeline(
     player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
     pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
     camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    camera_rig_profile_path: Optional[str] = None,
+    enable_field_registration_v2: bool = False,
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
@@ -130,6 +132,8 @@ def create_pipeline(
         player_model_path=player_model_path,
         pitch_model_path=pitch_model_path,
         camera_calibration_path=camera_calibration_path,
+        camera_rig_profile_path=camera_rig_profile_path,
+        enable_field_registration_v2=enable_field_registration_v2,
         enable_undistortion=enable_undistortion,
         calibration_alpha=calibration_alpha,
         pitch_detection_interval=pitch_detection_interval,
@@ -257,6 +261,8 @@ def main() -> None:
     parser.add_argument("--player_model_path", type=str, default=PLAYER_DETECTION_MODEL_PATH)
     parser.add_argument("--pitch_model_path", type=str, default=PITCH_DETECTION_MODEL_PATH)
     parser.add_argument("--camera_calibration_path", type=str, default=CAMERA_CALIBRATION_PATH)
+    parser.add_argument("--camera_rig_profile_path", type=str, default=None)
+    parser.add_argument("--enable_field_registration_v2", action="store_true")
     parser.add_argument("--disable_undistortion", action="store_false", dest="enable_undistortion")
     parser.set_defaults(enable_undistortion=True)
     parser.add_argument("--calibration_alpha", type=float, default=0.0)
@@ -299,6 +305,8 @@ def main() -> None:
         "player_model_path": args.player_model_path,
         "pitch_model_path": args.pitch_model_path,
         "camera_calibration_path": args.camera_calibration_path,
+        "camera_rig_profile_path": args.camera_rig_profile_path,
+        "enable_field_registration_v2": args.enable_field_registration_v2,
         "enable_undistortion": args.enable_undistortion,
         "calibration_alpha": args.calibration_alpha,
         "pitch_detection_interval": args.pitch_detection_interval,
@@ -335,6 +343,8 @@ def main() -> None:
             player_model_path=args.player_model_path,
             pitch_model_path=args.pitch_model_path,
             camera_calibration_path=args.camera_calibration_path,
+            camera_rig_profile_path=args.camera_rig_profile_path,
+            enable_field_registration_v2=args.enable_field_registration_v2,
             enable_undistortion=args.enable_undistortion,
             calibration_alpha=args.calibration_alpha,
             pitch_detection_interval=args.pitch_detection_interval,

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 import supervision as sv
 
 from app.config.pitch import SoccerPitchConfiguration
 from app.geometry.camera import CameraMotionEstimator
 from app.geometry.pitch_projection import PitchProjectionResult
+from app.field_registration.perception import PitchPerceptionOutput, StaticPerceptionBackend
+from app.field_registration.pitch_model import PitchDimensions, PitchModel
+from app.field_registration.tracker import FieldRegistrationCore
+from app.field_registration.types import PointObservation
 from app.vision.core import VisionCore
 
 
@@ -206,3 +211,37 @@ def test_camera_motion_does_not_reuse_old_homography_when_refresh_fails() -> Non
     assert moved.projection.homography_status == "unavailable"
     assert projection_engine.invalidations == 1
     assert np.isnan(moved.field_xy).all()
+
+
+def test_v2_field_registration_integrates_without_changing_legacy_projection_units() -> None:
+    pitch_model = PitchModel(PitchDimensions(length_m=120.0, width_m=70.0))
+    pitch_points = pitch_model.grid(6, 5)
+    image_points = pitch_points * np.array([8.0, 5.0]) + np.array([100.0, 100.0])
+    observations = tuple(
+        PointObservation(str(index), tuple(image), tuple(pitch), 0.95)
+        for index, (image, pitch) in enumerate(zip(image_points, pitch_points))
+    )
+    registration_core = FieldRegistrationCore(
+        pitch_model,
+        StaticPerceptionBackend([PitchPerceptionOutput(points=observations)]),
+    )
+    detections = sv.Detections(
+        xyxy=np.array([[480.0, 200.0, 520.0, 300.0]], dtype=np.float32),
+        confidence=np.array([0.9], dtype=np.float32),
+        class_id=np.array([0]),
+        tracker_id=np.array([7]),
+    )
+    core = VisionCore(
+        undistorter=_IdentityUndistorter(),
+        tracker=_Tracker(),
+        field_registration_core=registration_core,
+    )
+    core._predict_player = lambda frame: detections
+
+    result = core.process(np.zeros((720, 1280, 3), dtype=np.uint8), 1)
+
+    assert result.projection.homography_status == "relocalized"
+    assert result.projection.measurement_usable
+    # The V2 core works in metres; VisionCore preserves the legacy centimetre
+    # contract until all downstream consumers migrate.
+    assert result.field_xy[0] == pytest.approx((5000.0, 4000.0), abs=0.1)

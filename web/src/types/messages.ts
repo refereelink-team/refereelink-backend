@@ -1,4 +1,13 @@
-export type HomographyStatus = 'fresh' | 'reused' | 'stale' | 'unavailable';
+export type HomographyStatus =
+  | 'fresh'
+  | 'reused'
+  | 'stale'
+  | 'unavailable'
+  | 'relocalized'
+  | 'corrected'
+  | 'tracked'
+  | 'predicted'
+  | 'lost';
 export type BallStatus = 'fresh' | 'predicted' | 'stale' | 'unavailable';
 export type PlayerRole = 'outfield' | 'player' | 'goalkeeper' | 'referee' | 'staff' | 'unknown';
 export type TeamLabel = 'home' | 'away' | 'none' | 'unknown';
@@ -59,6 +68,9 @@ export interface FrameState {
   processed_timestamp_ms: number;
   processing_fps: number;
   homography_status: HomographyStatus;
+  camera_confidence: number;
+  camera_pan_rad: number | null;
+  camera_measurement_usable: boolean;
   players: PlayerState[];
   ball: BallState | null;
   possession_track_id: number | null;
@@ -82,6 +94,14 @@ export interface MetricsSnapshot {
   pitch_detection_count: number;
   homography_reuse_ratio: number;
   homography_available_ratio: number;
+  camera_tracking_status: string;
+  camera_tracking_confidence: number;
+  camera_pan_rad: number | null;
+  camera_pan_velocity_rad_s: number | null;
+  field_flow_update_count: number;
+  field_prediction_count: number;
+  field_lost_count: number;
+  field_relocalization_count: number;
   track_id_interruptions: number;
   track_occlusion_events: number;
   track_predicted_frames: number;
@@ -206,6 +226,8 @@ export interface PipelineConfig {
   ball_detection_interval: number;
   ball_max_prediction_frames: number;
   camera_calibration_path: string;
+  camera_rig_profile_path: string | null;
+  enable_field_registration_v2: boolean;
   enable_undistortion: boolean;
   calibration_alpha: number;
   pitch_detection_interval: number;

@@ -15,6 +15,11 @@ class HomographyStatus(str, Enum):
     REUSED = "reused"
     STALE = "stale"
     UNAVAILABLE = "unavailable"
+    RELOCALIZED = "relocalized"
+    CORRECTED = "corrected"
+    TRACKED = "tracked"
+    PREDICTED = "predicted"
+    LOST = "lost"
 
 
 class BallStatus(str, Enum):
@@ -96,6 +101,9 @@ class FrameState(BaseModel):
     processed_timestamp_ms: float = Field(default_factory=lambda: time.time() * 1000)
     processing_fps: float = 0.0
     homography_status: HomographyStatus = HomographyStatus.UNAVAILABLE
+    camera_confidence: float = 0.0
+    camera_pan_rad: Optional[float] = None
+    camera_measurement_usable: bool = False
     players: list[PlayerState] = Field(default_factory=list)
     ball: Optional[BallState] = None
     possession_track_id: Optional[int] = None
@@ -120,6 +128,14 @@ class MetricsSnapshot(BaseModel):
     homography_reuse_ratio: float = 0.0
     homography_available_ratio: float = 0.0
     camera_motion_refresh_count: int = 0
+    camera_tracking_status: str = "unavailable"
+    camera_tracking_confidence: float = 0.0
+    camera_pan_rad: Optional[float] = None
+    camera_pan_velocity_rad_s: Optional[float] = None
+    field_flow_update_count: int = 0
+    field_prediction_count: int = 0
+    field_lost_count: int = 0
+    field_relocalization_count: int = 0
     track_id_interruptions: int = 0
     track_occlusion_events: int = 0
     track_predicted_frames: int = 0
@@ -173,6 +189,8 @@ class PipelineConfig(BaseModel):
     ball_detection_interval: int = Field(2, ge=1)
     ball_max_prediction_frames: int = Field(8, ge=0)
     camera_calibration_path: str = "assets/calibration/camera.npz"
+    camera_rig_profile_path: Optional[str] = None
+    enable_field_registration_v2: bool = False
     enable_undistortion: bool = True
     calibration_alpha: float = Field(0.0, ge=0.0, le=1.0)
     pitch_detection_interval: int = Field(5, ge=1)

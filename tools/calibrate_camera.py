@@ -23,6 +23,7 @@ def calibrate(
     image_paths: list[Path],
     pattern_size: tuple[int, int],
     square_size: float,
+    lens_model: str = "pinhole",
 ) -> tuple[np.ndarray, np.ndarray, tuple[int, int], float, int]:
     if not image_paths:
         raise ValueError("No calibration images were found")
@@ -83,13 +84,42 @@ def calibrate(
             f"At least 3 valid chessboard images are required; found {len(object_points_all)}"
         )
 
-    rms, camera_matrix, distortion, _, _ = cv2.calibrateCamera(
-        object_points_all,
-        image_points_all,
-        image_size,
-        None,
-        None,
-    )
+    if lens_model == "fisheye":
+        fisheye_objects = [
+            points.astype(np.float64).reshape(-1, 1, 3) for points in object_points_all
+        ]
+        fisheye_images = [
+            points.astype(np.float64).reshape(-1, 1, 2) for points in image_points_all
+        ]
+        camera_matrix = np.eye(3, dtype=np.float64)
+        distortion = np.zeros((4, 1), dtype=np.float64)
+        rms, camera_matrix, distortion, _, _ = cv2.fisheye.calibrate(
+            fisheye_objects,
+            fisheye_images,
+            image_size,
+            camera_matrix,
+            distortion,
+            flags=(
+                cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
+                | cv2.fisheye.CALIB_CHECK_COND
+                | cv2.fisheye.CALIB_FIX_SKEW
+            ),
+            criteria=(
+                cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER,
+                100,
+                1e-7,
+            ),
+        )
+    elif lens_model == "pinhole":
+        rms, camera_matrix, distortion, _, _ = cv2.calibrateCamera(
+            object_points_all,
+            image_points_all,
+            image_size,
+            None,
+            None,
+        )
+    else:
+        raise ValueError("lens_model must be 'pinhole' or 'fisheye'")
     return camera_matrix, distortion, image_size, float(rms), len(object_points_all)
 
 
@@ -104,14 +134,33 @@ def main() -> None:
     parser.add_argument("--pattern-cols", type=int, default=9)
     parser.add_argument("--pattern-rows", type=int, default=6)
     parser.add_argument("--square-size", type=float, default=1.0)
+    parser.add_argument(
+        "--lens-model",
+        choices=("pinhole", "fisheye", "auto"),
+        default="auto",
+        help="Fit one model or compare both by chessboard reprojection RMS",
+    )
     args = parser.parse_args()
 
     paths = _image_paths(args.images)
-    matrix, distortion, image_size, rms, valid_count = calibrate(
-        paths,
-        pattern_size=(args.pattern_cols, args.pattern_rows),
-        square_size=args.square_size,
-    )
+    models = ("pinhole", "fisheye") if args.lens_model == "auto" else (args.lens_model,)
+    candidates = []
+    for lens_model in models:
+        try:
+            result = calibrate(
+                paths,
+                pattern_size=(args.pattern_cols, args.pattern_rows),
+                square_size=args.square_size,
+                lens_model=lens_model,
+            )
+            candidates.append((float(result[3]), lens_model, result))
+            print(f"{lens_model} RMS: {result[3]:.4f}")
+        except (cv2.error, ValueError) as exc:
+            print(f"{lens_model} calibration failed: {exc}")
+    if not candidates:
+        raise RuntimeError("neither camera model could be calibrated")
+    _, selected_model, selected = min(candidates, key=lambda item: item[0])
+    matrix, distortion, image_size, rms, valid_count = selected
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         args.output,
@@ -120,11 +169,13 @@ def main() -> None:
         image_width=np.array(image_size[0], dtype=np.int32),
         image_height=np.array(image_size[1], dtype=np.int32),
         reprojection_error=np.array(rms, dtype=np.float64),
+        lens_model=np.array(selected_model),
     )
     print(f"Saved {args.output}")
     print(f"Valid images: {valid_count}/{len(paths)}")
     print(f"Image size: {image_size[0]}x{image_size[1]}")
     print(f"RMS reprojection error: {rms:.4f}")
+    print(f"Selected lens model: {selected_model}")
 
 
 if __name__ == "__main__":

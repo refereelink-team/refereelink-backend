@@ -62,6 +62,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     ball_detection_interval: 2,
     ball_max_prediction_frames: 8,
     camera_calibration_path: 'assets/calibration/camera.npz',
+    camera_rig_profile_path: null,
+    enable_field_registration_v2: false,
     enable_undistortion: true,
     calibration_alpha: 0,
     pitch_detection_interval: 5,

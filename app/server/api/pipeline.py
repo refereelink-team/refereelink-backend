@@ -37,6 +37,8 @@ class PipelineStartPayload(BaseModel):
     player_model_path: Optional[str] = None
     pitch_model_path: Optional[str] = None
     camera_calibration_path: Optional[str] = None
+    camera_rig_profile_path: Optional[str] = None
+    enable_field_registration_v2: Optional[bool] = None
     enable_undistortion: Optional[bool] = None
     calibration_alpha: Optional[float] = None
     pitch_detection_interval: Optional[int] = None
@@ -89,6 +91,8 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.player_model_path,
             payload.pitch_model_path,
             payload.camera_calibration_path,
+            payload.camera_rig_profile_path,
+            payload.enable_field_registration_v2,
             payload.enable_undistortion,
             payload.calibration_alpha,
             payload.pitch_detection_interval,
@@ -129,6 +133,8 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.player_model_path is None
         and payload.pitch_model_path is None
         and payload.camera_calibration_path is None
+        and payload.camera_rig_profile_path is None
+        and payload.enable_field_registration_v2 is None
         and payload.enable_undistortion is None
         and payload.calibration_alpha is None
         and payload.pitch_detection_interval is None
@@ -196,6 +202,16 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.camera_calibration_path
                     if payload.camera_calibration_path is not None
                     else store.config.camera_calibration_path
+                ),
+                camera_rig_profile_path=(
+                    payload.camera_rig_profile_path
+                    if payload.camera_rig_profile_path is not None
+                    else store.config.camera_rig_profile_path
+                ),
+                enable_field_registration_v2=(
+                    payload.enable_field_registration_v2
+                    if payload.enable_field_registration_v2 is not None
+                    else store.config.enable_field_registration_v2
                 ),
                 enable_undistortion=(
                     payload.enable_undistortion
@@ -317,6 +333,16 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.camera_calibration_path
                     if payload.camera_calibration_path is not None
                     else store.config.camera_calibration_path
+                ),
+                "camera_rig_profile_path": (
+                    payload.camera_rig_profile_path
+                    if payload.camera_rig_profile_path is not None
+                    else store.config.camera_rig_profile_path
+                ),
+                "enable_field_registration_v2": (
+                    payload.enable_field_registration_v2
+                    if payload.enable_field_registration_v2 is not None
+                    else store.config.enable_field_registration_v2
                 ),
                 "enable_undistortion": (
                     payload.enable_undistortion

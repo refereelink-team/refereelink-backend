@@ -6,6 +6,11 @@ import numpy as np
 import supervision as sv
 
 from app.config.pitch import SoccerPitchConfiguration
+from app.field_registration.initializer import (
+    HomographyInitializer,
+    HomographyInitializerConfig,
+)
+from app.field_registration.types import PointObservation
 
 
 MIN_KEYPOINT_CONFIDENCE = 0.35
@@ -46,6 +51,7 @@ class PitchProjectionResult:
     homography: Optional[np.ndarray]
     homography_status: str
     reprojection_error: Optional[float]
+    measurement_usable: bool = True
 
     @property
     def available(self) -> bool:
@@ -88,6 +94,13 @@ class PitchProjectionEngine:
         self.min_keypoint_confidence = min_keypoint_confidence
         self.max_reprojection_error_px = max_reprojection_error_px
         self.max_stale_frames = max(1, int(round(max(fps, 1.0) * MAX_STALE_SECONDS)))
+        self._initializer = HomographyInitializer(
+            HomographyInitializerConfig(
+                min_confidence=min_keypoint_confidence,
+                max_mean_reprojection_error_px=max_reprojection_error_px,
+                max_p95_reprojection_error_px=max_reprojection_error_px * 1.5,
+            )
+        )
 
         self.prev_valid_homography: Optional[np.ndarray] = None
         self.stale_frames = 0
@@ -106,7 +119,8 @@ class PitchProjectionEngine:
         observations = self._extract_model_observations(frame, keypoints)
 
         homography, inlier_labels, reprojection_error = self._estimate_homography(
-            observations
+            observations,
+            image_size=(int(frame.shape[1]), int(frame.shape[0])),
         )
 
         homography_status = 'unavailable'
@@ -225,73 +239,40 @@ class PitchProjectionEngine:
     def _estimate_homography(
         self,
         observations: Dict[str, PitchKeypointObservation],
+        image_size: Tuple[int, int],
     ) -> Tuple[Optional[np.ndarray], List[str], Optional[float]]:
         if len(observations) < MIN_KEYPOINTS_FOR_HOMOGRAPHY:
             return None, [], None
 
         ordered = list(observations.values())
-        image_points = np.array(
-            [observation.image_xy for observation in ordered],
-            dtype=np.float32,
-        )
-        world_points = np.array(
-            [observation.reference.world_xy for observation in ordered],
-            dtype=np.float32,
-        )
-        minimum_inliers = (
-            MIN_INLIERS_FOR_HOMOGRAPHY
-            if len(ordered) >= MIN_INLIERS_FOR_HOMOGRAPHY
-            else len(ordered)
-        )
-
-        for method in (cv2.RANSAC, cv2.RHO, cv2.LMEDS):
-            try:
-                homography, mask = cv2.findHomography(
-                    image_points,
-                    world_points,
-                    method,
-                    5.0,
-                )
-            except cv2.error:
-                homography = None
-                mask = None
-
-            if homography is None:
-                continue
-
-            inlier_mask = (
-                np.ones(len(ordered), dtype=bool)
-                if mask is None
-                else mask.flatten().astype(bool)
+        metric_observations = [
+            PointObservation(
+                label=observation.reference.label,
+                image_xy=observation.image_xy,
+                pitch_xy_m=(
+                    observation.reference.world_xy[0] / 100.0,
+                    observation.reference.world_xy[1] / 100.0,
+                ),
+                confidence=observation.confidence,
+                source=observation.source,
             )
-            if int(np.count_nonzero(inlier_mask)) < max(
-                MIN_KEYPOINTS_FOR_HOMOGRAPHY,
-                minimum_inliers,
-            ):
-                continue
-
-            try:
-                inverse_homography = np.linalg.inv(homography)
-            except np.linalg.LinAlgError:
-                continue
-
-            reprojected = cv2.perspectiveTransform(
-                world_points.reshape(-1, 1, 2),
-                inverse_homography,
-            ).reshape(-1, 2)
-            reprojection_error = np.linalg.norm(reprojected - image_points, axis=1)
-            mean_error = float(np.mean(reprojection_error[inlier_mask]))
-            if mean_error > self.max_reprojection_error_px:
-                continue
-
-            inlier_labels = [
-                ordered[index].reference.label
-                for index, is_inlier in enumerate(inlier_mask)
-                if is_inlier
-            ]
-            return homography, inlier_labels, mean_error
-
-        return None, [], None
+            for observation in ordered
+        ]
+        initialization = self._initializer.estimate(
+            metric_observations,
+            image_size=image_size,
+            pitch_size_m=(self.config.length / 100.0, self.config.width / 100.0),
+        )
+        if not initialization.success or initialization.image_to_pitch is None:
+            return None, [], None
+        centimetre_scale = np.diag([100.0, 100.0, 1.0])
+        homography_cm = centimetre_scale @ initialization.image_to_pitch
+        inlier_labels = [ordered[index].reference.label for index in initialization.inlier_indices]
+        return (
+            homography_cm,
+            inlier_labels,
+            initialization.mean_reprojection_error_px,
+        )
 
     def _project_keypoints(
         self,

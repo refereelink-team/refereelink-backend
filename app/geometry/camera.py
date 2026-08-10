@@ -23,6 +23,7 @@ class CameraCalibration:
     distortion_coefficients: np.ndarray
     image_size: Tuple[int, int]
     reprojection_error: Optional[float] = None
+    lens_model: str = "pinhole"
 
     @classmethod
     def load(cls, path: str | Path) -> "CameraCalibration":
@@ -49,10 +50,19 @@ class CameraCalibration:
                 value = float(np.asarray(data["reprojection_error"]).item())
                 if np.isfinite(value):
                     reprojection_error = value
+            lens_model = (
+                str(np.asarray(data["lens_model"]).item())
+                if "lens_model" in data.files
+                else "pinhole"
+            )
 
         if camera_matrix.shape != (3, 3):
             raise CameraCalibrationError("camera_matrix must have shape (3, 3)")
-        if distortion.size < 4:
+        if lens_model not in {"pinhole", "fisheye"}:
+            raise CameraCalibrationError("lens_model must be 'pinhole' or 'fisheye'")
+        if lens_model == "fisheye" and distortion.size != 4:
+            raise CameraCalibrationError("fisheye calibration must contain exactly 4 values")
+        if lens_model == "pinhole" and distortion.size < 4:
             raise CameraCalibrationError("distortion_coefficients must contain at least 4 values")
         if image_size[0] <= 0 or image_size[1] <= 0:
             raise CameraCalibrationError("Calibration image size must be positive")
@@ -62,6 +72,7 @@ class CameraCalibration:
             distortion_coefficients=distortion,
             image_size=image_size,
             reprojection_error=reprojection_error,
+            lens_model=lens_model,
         )
 
 
@@ -257,21 +268,40 @@ class CameraUndistorter:
             raise CameraCalibrationError("No camera calibration is loaded")
 
         camera_matrix = self._scaled_camera_matrix(width, height)
-        new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
-            camera_matrix,
-            self.calibration.distortion_coefficients,
-            (width, height),
-            self.alpha,
-            (width, height),
-        )
-        map_x, map_y = cv2.initUndistortRectifyMap(
-            camera_matrix,
-            self.calibration.distortion_coefficients,
-            None,
-            new_camera_matrix,
-            (width, height),
-            cv2.CV_32FC1,
-        )
+        if self.calibration.lens_model == "fisheye":
+            distortion = self.calibration.distortion_coefficients.reshape(4, 1)
+            new_camera_matrix = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
+                camera_matrix,
+                distortion,
+                (width, height),
+                np.eye(3),
+                balance=self.alpha,
+                new_size=(width, height),
+            )
+            map_x, map_y = cv2.fisheye.initUndistortRectifyMap(
+                camera_matrix,
+                distortion,
+                np.eye(3),
+                new_camera_matrix,
+                (width, height),
+                cv2.CV_32FC1,
+            )
+        else:
+            new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+                camera_matrix,
+                self.calibration.distortion_coefficients,
+                (width, height),
+                self.alpha,
+                (width, height),
+            )
+            map_x, map_y = cv2.initUndistortRectifyMap(
+                camera_matrix,
+                self.calibration.distortion_coefficients,
+                None,
+                new_camera_matrix,
+                (width, height),
+                cv2.CV_32FC1,
+            )
         self._maps[key] = (map_x, map_y)
         return map_x, map_y
 

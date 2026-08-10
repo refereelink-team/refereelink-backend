@@ -24,7 +24,20 @@ from app.geometry.camera import (
     CameraUndistorter,
     build_undistorter,
 )
-from app.geometry.pitch_projection import PitchProjectionEngine, PitchProjectionResult
+from app.geometry.pitch_projection import (
+    PitchKeypointObservation,
+    PitchProjectionEngine,
+    PitchProjectionResult,
+    ProjectedPitchKeypoint,
+)
+from app.field_registration.camera_model import CameraRigProfile
+from app.field_registration.perception import LegacyKeypointPerceptionBackend
+from app.field_registration.pitch_model import PitchDimensions, PitchModel
+from app.field_registration.tracker import (
+    FieldRegistrationConfig,
+    FieldRegistrationCore,
+)
+from app.field_registration.types import CameraTrackingStatus
 from app.vision.entities import TrackEntityManager
 
 
@@ -102,6 +115,9 @@ class VisionCore:
         max_prediction_gap_frames: int = 6,
         reactivation_window_frames: int = 12,
         entity_manager: Optional[TrackEntityManager] = None,
+        enable_field_registration_v2: bool = False,
+        camera_rig_profile_path: Optional[str] = None,
+        field_registration_core: Optional[FieldRegistrationCore] = None,
     ) -> None:
         self.device = device
         self.fps = max(float(fps), 1.0)
@@ -123,6 +139,11 @@ class VisionCore:
         self.enable_pitch = enable_pitch
         self.person_only = person_only
         self.inference_backend = inference_backend
+        self.enable_field_registration_v2 = bool(
+            enable_field_registration_v2 or field_registration_core is not None
+        )
+        self.camera_rig_profile_path = camera_rig_profile_path
+        self._field_registration_core = field_registration_core
         self.camera_motion_refresh_count = 0
         self._player_model = player_model
         self._pitch_model = pitch_model
@@ -181,6 +202,14 @@ class VisionCore:
     @property
     def projection_engine(self) -> PitchProjectionEngine:
         return self._projection_engine
+
+    @property
+    def field_registration_state(self):
+        return (
+            self._field_registration_core.state
+            if self._field_registration_core is not None
+            else None
+        )
 
     def load_models(self) -> None:
         from app.vision.backends import UltralyticsBackend
@@ -260,11 +289,113 @@ class VisionCore:
             >= self.pitch_detection_interval
         )
 
+    def _build_field_registration_core(self) -> FieldRegistrationCore:
+        pitch_config = self._projection_engine.config
+        dimensions = PitchDimensions(
+            length_m=pitch_config.length / 100.0,
+            width_m=pitch_config.width / 100.0,
+            penalty_area_depth_m=pitch_config.penalty_box_length / 100.0,
+            penalty_area_width_m=pitch_config.penalty_box_width / 100.0,
+            goal_area_depth_m=pitch_config.goal_box_length / 100.0,
+            goal_area_width_m=pitch_config.goal_box_width / 100.0,
+            centre_circle_radius_m=pitch_config.centre_circle_radius / 100.0,
+            penalty_spot_distance_m=pitch_config.penalty_spot_distance / 100.0,
+        )
+        rig_profile = (
+            CameraRigProfile.load(self.camera_rig_profile_path)
+            if self.camera_rig_profile_path
+            else None
+        )
+        if rig_profile is not None and (
+            not np.isclose(rig_profile.pitch_length_m, dimensions.length_m, atol=0.01)
+            or not np.isclose(rig_profile.pitch_width_m, dimensions.width_m, atol=0.01)
+        ):
+            raise ValueError(
+                "camera rig pitch dimensions do not match the configured pitch: "
+                f"rig={rig_profile.pitch_length_m}x{rig_profile.pitch_width_m}m, "
+                f"config={dimensions.length_m}x{dimensions.width_m}m"
+            )
+        backend = LegacyKeypointPerceptionBackend(
+            predictor=self._predict_pitch,
+            references=self._projection_engine.references,
+            minimum_confidence=self._projection_engine.min_keypoint_confidence,
+        )
+        return FieldRegistrationCore(
+            pitch_model=PitchModel(dimensions),
+            perception_backend=backend,
+            rig_profile=rig_profile,
+            config=FieldRegistrationConfig(
+                fps=self.fps,
+                normal_semantic_interval=self.pitch_detection_interval,
+                stable_semantic_interval=max(self.pitch_detection_interval * 2, 1),
+            ),
+        )
+
+    def _projection_for_frame_v2(
+        self,
+        frame: np.ndarray,
+        frame_index: int,
+        tracked_detections: Optional[sv.Detections],
+    ) -> PitchProjectionResult:
+        if self._field_registration_core is None:
+            self._field_registration_core = self._build_field_registration_core()
+        before_count = self._field_registration_core.semantic_inference_count
+        registration = self._field_registration_core.process(
+            frame,
+            frame_index,
+            person_masks_or_boxes=(
+                tracked_detections.xyxy
+                if tracked_detections is not None and len(tracked_detections) > 0
+                else None
+            ),
+        )
+        semantic_delta = self._field_registration_core.semantic_inference_count - before_count
+        self.pitch_detection_count += semantic_delta
+        self.pitch_reuse_count += int(semantic_delta == 0)
+        self.pitch_inference_time_ms += float(
+            registration.diagnostics.get("semantic_inference_time_ms", 0.0)
+        )
+        state = registration.camera_state
+        homography_cm = None
+        if state.image_to_pitch is not None:
+            homography_cm = np.diag([100.0, 100.0, 1.0]) @ state.image_to_pitch
+        tracking_observations = []
+        projected_keypoints = []
+        for observation in registration.point_observations:
+            reference = self._projection_engine.reference_by_label.get(observation.label)
+            if reference is None:
+                continue
+            tracking_observations.append(
+                PitchKeypointObservation(
+                    reference=reference,
+                    image_xy=observation.image_xy,
+                    confidence=observation.confidence,
+                    source=observation.source,
+                )
+            )
+            projected_keypoints.append(
+                ProjectedPitchKeypoint(
+                    reference=reference,
+                    projected_world_xy=reference.world_xy,
+                    source=observation.source,
+                )
+            )
+        return PitchProjectionResult(
+            tracking_observations=tracking_observations,
+            projected_keypoints=projected_keypoints,
+            homography=homography_cm,
+            homography_status=state.status.value,
+            reprojection_error=state.mean_segment_error_px,
+            measurement_usable=state.usable_for_measurement
+            and state.confidence >= self._field_registration_core.config.measurement_confidence_threshold,
+        )
+
     def _projection_for_frame(
         self,
         frame: np.ndarray,
         frame_index: int,
         force_refresh: bool = False,
+        tracked_detections: Optional[sv.Detections] = None,
     ) -> PitchProjectionResult:
         if not self.enable_pitch:
             return PitchProjectionResult(
@@ -274,6 +405,8 @@ class VisionCore:
                 homography_status="unavailable",
                 reprojection_error=None,
             )
+        if self.enable_field_registration_v2:
+            return self._projection_for_frame_v2(frame, frame_index, tracked_detections)
         if force_refresh or self._should_detect_pitch(frame_index):
             start = time.perf_counter()
             keypoints = self._predict_pitch(frame)
@@ -302,7 +435,11 @@ class VisionCore:
         projection: PitchProjectionResult,
     ) -> np.ndarray:
         field_xy = np.full((len(detections), 2), np.nan, dtype=np.float32)
-        if projection.homography is None or len(detections) == 0:
+        if (
+            projection.homography is None
+            or not projection.measurement_usable
+            or len(detections) == 0
+        ):
             return field_xy
 
         image_xy = detections.get_anchors_coordinates(
@@ -474,7 +611,11 @@ class VisionCore:
             ):
                 del self._track_missing_frames[track_id]
         self._previous_track_ids = current_track_ids
-        motion = self._camera_motion_estimator.measure(undistorted_frame)
+        motion = (
+            None
+            if self.enable_field_registration_v2
+            else self._camera_motion_estimator.measure(undistorted_frame)
+        )
         force_pitch_refresh = bool(motion is not None and motion.requires_refresh)
         if force_pitch_refresh:
             self.camera_motion_refresh_count += 1
@@ -482,8 +623,13 @@ class VisionCore:
             undistorted_frame,
             frame_index,
             force_refresh=force_pitch_refresh,
+            tracked_detections=tracked_detections,
         )
-        if projection.homography_status == "fresh":
+        if projection.homography_status in {
+            "fresh",
+            CameraTrackingStatus.RELOCALIZED.value,
+            CameraTrackingStatus.CORRECTED.value,
+        }:
             self._camera_motion_estimator.mark_reference(undistorted_frame)
         field_xy = self._field_coordinates(tracked_detections, projection)
         self.frames_processed += 1

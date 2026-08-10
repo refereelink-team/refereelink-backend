@@ -199,6 +199,8 @@ class InferencePipeline:
         player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
         pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
         camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+        camera_rig_profile_path: Optional[str] = None,
+        enable_field_registration_v2: bool = False,
         enable_undistortion: bool = True,
         calibration_alpha: float = 0.0,
         pitch_detection_interval: int = 5,
@@ -239,6 +241,8 @@ class InferencePipeline:
         self._player_model_path = player_model_path
         self._pitch_model_path = pitch_model_path
         self._camera_calibration_path = camera_calibration_path
+        self._camera_rig_profile_path = camera_rig_profile_path
+        self._enable_field_registration_v2 = bool(enable_field_registration_v2)
         self._enable_undistortion = enable_undistortion
         self._calibration_alpha = calibration_alpha
         self._pitch_detection_interval = pitch_detection_interval
@@ -364,6 +368,8 @@ class InferencePipeline:
             player_model_path=self._player_model_path,
             pitch_model_path=self._pitch_model_path,
             camera_calibration_path=self._camera_calibration_path,
+            camera_rig_profile_path=self._camera_rig_profile_path,
+            enable_field_registration_v2=self._enable_field_registration_v2,
             enable_undistortion=self._enable_undistortion,
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,
@@ -675,11 +681,19 @@ class InferencePipeline:
         elapsed = time.monotonic() - self._metrics_start
         current_fps = self._metrics_frames / max(elapsed, 0.001)
 
+        camera_state = getattr(self._vision_core, "field_registration_state", None)
         frame_state = FrameState(
             frame_id=self._source.frame_count,
             capture_timestamp_ms=capture_timestamp_ms,
             processing_fps=current_fps,
             homography_status=_map_homography_status(projection.homography_status),
+            camera_confidence=(camera_state.confidence if camera_state is not None else 0.0),
+            camera_pan_rad=(
+                camera_state.pan_rad
+                if camera_state is not None and np.isfinite(camera_state.pan_rad)
+                else None
+            ),
+            camera_measurement_usable=projection.measurement_usable,
             players=player_states,
             ball=ball_state,
             possession_track_id=self._find_possession_track_id(player_states, ball_state),
@@ -826,7 +840,7 @@ class InferencePipeline:
                 age_frames=estimate.age_frames,
             )
         field_xy: Optional[np.ndarray] = None
-        if projection.homography is not None:
+        if projection.homography is not None and projection.measurement_usable:
             try:
                 field_xy = cv2.perspectiveTransform(
                     image_xy.reshape(1, 1, 2), projection.homography
@@ -970,6 +984,12 @@ class InferencePipeline:
             if self._semantic_manager is not None
             else 0
         )
+        field_core = (
+            getattr(vision_core, "_field_registration_core", None)
+            if vision_core is not None
+            else None
+        )
+        camera_state = field_core.state if field_core is not None else None
 
         metrics = MetricsSnapshot(
             processing_fps=round(fps, 1),
@@ -989,6 +1009,29 @@ class InferencePipeline:
             homography_reuse_ratio=round(reused / max(processed, 1), 3),
             homography_available_ratio=round(available / max(processed, 1), 3),
             camera_motion_refresh_count=camera_motion_refreshes,
+            camera_tracking_status=(
+                camera_state.status.value if camera_state is not None else "unavailable"
+            ),
+            camera_tracking_confidence=(
+                round(camera_state.confidence, 3) if camera_state is not None else 0.0
+            ),
+            camera_pan_rad=(
+                round(camera_state.pan_rad, 6)
+                if camera_state is not None and np.isfinite(camera_state.pan_rad)
+                else None
+            ),
+            camera_pan_velocity_rad_s=(
+                round(camera_state.pan_velocity_rad_s, 6)
+                if camera_state is not None
+                and np.isfinite(camera_state.pan_velocity_rad_s)
+                else None
+            ),
+            field_flow_update_count=(field_core.flow_update_count if field_core else 0),
+            field_prediction_count=(field_core.prediction_count if field_core else 0),
+            field_lost_count=(field_core.lost_count if field_core else 0),
+            field_relocalization_count=(
+                field_core.relocalization_count if field_core else 0
+            ),
             track_id_interruptions=track_interruptions,
             track_occlusion_events=track_occlusion_events,
             track_predicted_frames=track_predicted_frames,
