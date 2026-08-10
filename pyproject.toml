@@ -35,6 +35,9 @@ test = [
 desktop = [
     "PySide6==6.10.2",
 ]
+export = [
+    "onnx>=1.17",
+]
 
 [dependency-groups]
 dev = [

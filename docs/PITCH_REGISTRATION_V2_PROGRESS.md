@@ -49,6 +49,13 @@
 - `PREDICTED/LOST` 或投影不确定性超限时 `field_coordinate_usable=false`；
 - 控球距离和越位候选只消费通过门禁的球员坐标。
 
+### 部署与长时间验收工具
+
+- 增加训练 checkpoint 的 ONNX checker 导出和 `trtexec` TensorRT 构建入口；
+- 缺少 ONNX/TensorRT 时输出明确能力错误，不生成替代模型；
+- 增加循环视频的 30–60 分钟 CUDA 稳定性工具，记录延迟、RSS 斜率、峰值显存、相机状态和安全坐标率；
+- 性能报告固定声明 `accuracy_valid=false`，不以无真值运行替代准确率评估。
+
 ## 验证结果
 
 ### 自动化测试
