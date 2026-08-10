@@ -10,6 +10,27 @@ from typing import Protocol, Sequence, Tuple, runtime_checkable
 import numpy as np
 
 from app.field_registration.types import LineObservation, PointObservation
+from app.field_registration.pitch_model import PitchModel
+
+
+@dataclass(frozen=True)
+class PitchPerceptionVocabulary:
+    semantic_labels: Tuple[str, ...]
+    landmark_labels: Tuple[str, ...]
+
+    @classmethod
+    def from_pitch_model(cls, pitch_model: PitchModel) -> "PitchPerceptionVocabulary":
+        semantic = tuple(sorted(pitch_model.semantic_elements()))
+        landmarks = tuple(
+            sorted(pitch_model.landmarks | pitch_model.point_landmarks)
+        )
+        return cls(semantic_labels=semantic, landmark_labels=landmarks)
+
+    @property
+    def semantic_class_count(self) -> int:
+        """Include class zero reserved for background."""
+
+        return len(self.semantic_labels) + 1
 
 
 @dataclass(frozen=True)

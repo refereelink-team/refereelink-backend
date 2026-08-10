@@ -32,6 +32,14 @@
 - 多 pan 人工锚帧统一在去畸变坐标系中生成 `CameraRigProfile`；
 - 相机中心离散和锚帧重投影误差不通过门禁时不保存运行 profile。
 
+### 球场感知候选 C1
+
+- 固化 20 类语义线/圆弧、33 个 landmark 和 offset 的统一输出契约；
+- 实现 MobileNetV3-Large 共享 backbone 双 head、数据集、损失、训练脚本和 PyTorch 推理适配；
+- 亚像素 heatmap 解码已消费 offset head；
+- RTX 5060 Ti 512×288 FP16：mean 4.29 ms，P95 6.82 ms，峰值 48.45 MB；
+- 上述为随机权重结构延迟，准确率仍待真实训练/测试，未选定生产模型。
+
 ## 验证结果
 
 ### 自动化测试
