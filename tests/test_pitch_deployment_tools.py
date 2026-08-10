@@ -7,6 +7,7 @@ import torch
 
 from app.field_registration.models import build_pitch_perception_model
 from tools.benchmark_pitch_registration_long_run import (
+    BoundedReservoir,
     _counter_ratio,
     _memory_slope_mb_per_minute,
 )
@@ -75,3 +76,14 @@ def test_memory_slope_rejects_short_smoke_run() -> None:
 
 def test_counter_ratio_excludes_warmup_counts() -> None:
     assert _counter_ratio(current=330, baseline=30, measured_frames=300) == 1.0
+
+
+def test_bounded_reservoir_has_fixed_memory_and_exact_maximum() -> None:
+    reservoir = BoundedReservoir(capacity=10, seed=7)
+    for value in range(100):
+        reservoir.add(float(value))
+
+    summary = reservoir.summary()
+    assert summary["count"] == 100
+    assert summary["sample_count"] == 10
+    assert summary["maximum"] == 99.0

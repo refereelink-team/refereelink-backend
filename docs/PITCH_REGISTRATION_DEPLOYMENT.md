@@ -73,6 +73,10 @@ uv run python tools/benchmark_pitch_registration_long_run.py \
 
 默认先预热 30 帧，预热不进入延迟与显存统计。少于 5 分钟的 smoke run 不报告 RSS 线性斜率，避免把模型和分配器冷启动误判为持续内存泄漏。
 
+延迟和坐标 σ 分位数使用固定容量、固定随机种子的 reservoir sample，最大值单独精确记录。这样长跑工具自身不会因无限追加观测而制造线性 RSS 增长；JSON 同时输出总观测数和实际样本数。
+
+未传入 `--camera-rig-profile-path` 时，V2 只能依赖通用单应性重定位，报告会明确写入 `physical_pan_constraint_active=false`。这种运行可用于兼容性和吞吐测试，不能作为固定云台生产几何验收；后者必须加载由真实多 pan 锚帧生成并通过门禁的 rig profile。
+
 ## 4. 验收门槛
 
 在选定生产模型前，至少满足：

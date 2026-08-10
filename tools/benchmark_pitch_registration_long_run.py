@@ -19,15 +19,48 @@ from app.constants.paths import PITCH_DETECTION_MODEL_PATH, PLAYER_DETECTION_MOD
 from app.vision.core import VisionCore
 
 
-def _distribution(values: list[float]) -> dict[str, float | None]:
-    if not values:
-        return {"median": None, "p95": None, "maximum": None}
-    array = np.asarray(values, dtype=np.float64)
-    return {
-        "median": float(np.median(array)),
-        "p95": float(np.percentile(array, 95)),
-        "maximum": float(np.max(array)),
-    }
+class BoundedReservoir:
+    """Fixed-memory deterministic sample with an exact observed maximum."""
+
+    def __init__(self, capacity: int, seed: int) -> None:
+        if capacity <= 0:
+            raise ValueError("reservoir capacity must be positive")
+        self.capacity = int(capacity)
+        self._rng = np.random.default_rng(seed)
+        self._values: list[float] = []
+        self.count = 0
+        self.maximum: float | None = None
+
+    def add(self, value: float) -> None:
+        if not np.isfinite(value):
+            return
+        numeric = float(value)
+        self.count += 1
+        self.maximum = numeric if self.maximum is None else max(self.maximum, numeric)
+        if len(self._values) < self.capacity:
+            self._values.append(numeric)
+            return
+        replacement = int(self._rng.integers(0, self.count))
+        if replacement < self.capacity:
+            self._values[replacement] = numeric
+
+    def summary(self) -> dict[str, float | int | None]:
+        if not self._values:
+            return {
+                "count": 0,
+                "sample_count": 0,
+                "median": None,
+                "p95": None,
+                "maximum": None,
+            }
+        array = np.asarray(self._values, dtype=np.float64)
+        return {
+            "count": self.count,
+            "sample_count": len(self._values),
+            "median": float(np.median(array)),
+            "p95": float(np.percentile(array, 95)),
+            "maximum": self.maximum,
+        }
 
 
 def _memory_slope_mb_per_minute(samples: list[tuple[float, float]]) -> float | None:
@@ -84,8 +117,8 @@ def run_benchmark(
     if device.startswith("cuda") and torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
-    frame_latencies_ms: list[float] = []
-    coordinate_sigmas_m: list[float] = []
+    frame_latencies_ms = BoundedReservoir(capacity=10_000, seed=7)
+    coordinate_sigmas_m = BoundedReservoir(capacity=50_000, seed=11)
     camera_statuses: Counter[str] = Counter()
     memory_samples: list[tuple[float, float]] = []
     coordinate_count = 0
@@ -127,14 +160,14 @@ def run_benchmark(
             result = core.process(frame, absolute_frame_index)
             if device.startswith("cuda") and torch.cuda.is_available():
                 torch.cuda.synchronize()
-            frame_latencies_ms.append((time.perf_counter() - frame_started) * 1000.0)
+            frame_latencies_ms.add((time.perf_counter() - frame_started) * 1000.0)
             camera_statuses[result.homography_status] += 1
             coordinate_count += len(result.pitch_coordinates)
             for coordinate in result.pitch_coordinates:
                 if coordinate.xy_m is not None:
                     usable_coordinate_count += 1
                 if coordinate.sigma_m is not None and np.isfinite(coordinate.sigma_m):
-                    coordinate_sigmas_m.append(float(coordinate.sigma_m))
+                    coordinate_sigmas_m.add(float(coordinate.sigma_m))
             if frame_count == 1 or frame_count % max(sample_interval_frames, 1) == 0:
                 elapsed = time.perf_counter() - started
                 rss_mb = process.memory_info().rss / (1024 * 1024)
@@ -149,13 +182,15 @@ def run_benchmark(
         "accuracy_valid": False,
         "source": str(source),
         "device": device,
+        "camera_rig_profile": camera_rig_profile_path,
+        "physical_pan_constraint_active": camera_rig_profile_path is not None,
         "source_fps": source_fps,
         "warmup_frames": warmup_frames,
         "frames": frame_count,
         "video_loops": video_loops,
         "elapsed_sec": elapsed,
         "end_to_end_fps": frame_count / max(elapsed, 1e-9),
-        "frame_latency_ms": _distribution(frame_latencies_ms),
+        "frame_latency_ms": frame_latencies_ms.summary(),
         "camera_status_counts": dict(camera_statuses),
         "homography_available_ratio": _counter_ratio(
             core.homography_available_count,
@@ -169,7 +204,7 @@ def run_benchmark(
             frame_count,
         ),
         "coordinate_usable_ratio": usable_coordinate_count / max(coordinate_count, 1),
-        "coordinate_sigma_m": _distribution(coordinate_sigmas_m),
+        "coordinate_sigma_m": coordinate_sigmas_m.summary(),
         "rss_mb": {
             "first": memory_samples[0][1],
             "last": memory_samples[-1][1],
@@ -189,6 +224,11 @@ def run_benchmark(
         "notes": [
             "This is a stability/performance run, not an accuracy evaluation.",
             "The V2 tracker uses the legacy keypoint model until a trained dual-head checkpoint exists.",
+            (
+                "A calibrated physical pan constraint is active."
+                if camera_rig_profile_path is not None
+                else "No rig profile was supplied; generic homography relocalization is not production geometry."
+            ),
         ],
     }
 
