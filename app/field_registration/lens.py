@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -20,6 +20,13 @@ class LensCalibrationError(ValueError):
     pass
 
 
+def _optional_finite_scalar(data: Any, name: str) -> Optional[float]:
+    if name not in data:
+        return None
+    value = float(np.asarray(data[name]).item())
+    return value if np.isfinite(value) else None
+
+
 @dataclass(frozen=True)
 class LensCalibration:
     lens_model: LensModel
@@ -27,7 +34,10 @@ class LensCalibration:
     distortion_coefficients: np.ndarray
     image_size: Tuple[int, int]
     reprojection_error_px: Optional[float] = None
-    version: int = 1
+    validation_median_error_px: Optional[float] = None
+    validation_p95_error_px: Optional[float] = None
+    valid_image_count: Optional[int] = None
+    version: int = 2
 
     def __post_init__(self) -> None:
         matrix = np.asarray(self.camera_matrix, dtype=np.float64)
@@ -42,10 +52,18 @@ class LensCalibration:
             raise LensCalibrationError("distortion coefficients must be finite")
         if len(self.image_size) != 2 or min(self.image_size) <= 0:
             raise LensCalibrationError("calibration image size must be positive")
-        if self.reprojection_error_px is not None and (
-            not np.isfinite(self.reprojection_error_px) or self.reprojection_error_px < 0
+        for name in (
+            "reprojection_error_px",
+            "validation_median_error_px",
+            "validation_p95_error_px",
         ):
-            raise LensCalibrationError("reprojection error must be finite and non-negative")
+            value = getattr(self, name)
+            if value is not None and (not np.isfinite(value) or value < 0):
+                raise LensCalibrationError(f"{name} must be finite and non-negative")
+        if self.valid_image_count is not None and self.valid_image_count < 1:
+            raise LensCalibrationError("valid_image_count must be positive")
+        if self.version not in {1, 2}:
+            raise LensCalibrationError(f"unsupported lens calibration version: {self.version}")
         object.__setattr__(self, "camera_matrix", matrix)
         object.__setattr__(self, "distortion_coefficients", distortion)
 
@@ -53,6 +71,15 @@ class LensCalibration:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         reprojection = np.nan if self.reprojection_error_px is None else self.reprojection_error_px
+        validation_median = (
+            np.nan
+            if self.validation_median_error_px is None
+            else self.validation_median_error_px
+        )
+        validation_p95 = (
+            np.nan if self.validation_p95_error_px is None else self.validation_p95_error_px
+        )
+        valid_image_count = -1 if self.valid_image_count is None else self.valid_image_count
         np.savez(
             target,
             version=np.array(self.version, dtype=np.int64),
@@ -62,6 +89,9 @@ class LensCalibration:
             image_width=np.array(self.image_size[0], dtype=np.int64),
             image_height=np.array(self.image_size[1], dtype=np.int64),
             reprojection_error=np.array(reprojection, dtype=np.float64),
+            validation_median_error=np.array(validation_median, dtype=np.float64),
+            validation_p95_error=np.array(validation_p95, dtype=np.float64),
+            valid_image_count=np.array(valid_image_count, dtype=np.int64),
         )
 
     @classmethod
@@ -82,7 +112,7 @@ class LensCalibration:
                     f"calibration file is missing fields: {', '.join(sorted(missing))}"
                 )
             version = int(np.asarray(data["version"]).item()) if "version" in data else 1
-            if version != 1:
+            if version not in {1, 2}:
                 raise LensCalibrationError(f"unsupported lens calibration version: {version}")
             model_value = (
                 str(np.asarray(data["lens_model"]).item())
@@ -94,6 +124,13 @@ class LensCalibration:
                 candidate = float(np.asarray(data["reprojection_error"]).item())
                 if np.isfinite(candidate):
                     reprojection = candidate
+            validation_median = _optional_finite_scalar(data, "validation_median_error")
+            validation_p95 = _optional_finite_scalar(data, "validation_p95_error")
+            valid_image_count = None
+            if "valid_image_count" in data:
+                candidate_count = int(np.asarray(data["valid_image_count"]).item())
+                if candidate_count > 0:
+                    valid_image_count = candidate_count
             return cls(
                 lens_model=LensModel(model_value),
                 camera_matrix=np.asarray(data["camera_matrix"], dtype=np.float64),
@@ -105,6 +142,9 @@ class LensCalibration:
                     int(np.asarray(data["image_height"]).item()),
                 ),
                 reprojection_error_px=reprojection,
+                validation_median_error_px=validation_median,
+                validation_p95_error_px=validation_p95,
+                valid_image_count=valid_image_count,
                 version=version,
             )
 
