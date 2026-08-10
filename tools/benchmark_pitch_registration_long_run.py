@@ -40,6 +40,10 @@ def _memory_slope_mb_per_minute(samples: list[tuple[float, float]]) -> float | N
     return float(np.polyfit(elapsed_minutes, rss_mb, 1)[0])
 
 
+def _counter_ratio(current: int, baseline: int, measured_frames: int) -> float:
+    return max(int(current) - int(baseline), 0) / max(int(measured_frames), 1)
+
+
 @torch.inference_mode()
 def run_benchmark(
     *,
@@ -105,6 +109,7 @@ def run_benchmark(
         torch.cuda.reset_peak_memory_stats()
     semantic_start = core.pitch_detection_count
     reuse_start = core.pitch_reuse_count
+    homography_available_start = core.homography_available_count
     started = time.perf_counter()
     deadline = started + duration_minutes * 60.0
     try:
@@ -152,9 +157,17 @@ def run_benchmark(
         "end_to_end_fps": frame_count / max(elapsed, 1e-9),
         "frame_latency_ms": _distribution(frame_latencies_ms),
         "camera_status_counts": dict(camera_statuses),
-        "homography_available_ratio": core.homography_available_count / max(frame_count, 1),
+        "homography_available_ratio": _counter_ratio(
+            core.homography_available_count,
+            homography_available_start,
+            frame_count,
+        ),
         "semantic_inference_count": core.pitch_detection_count - semantic_start,
-        "semantic_reuse_ratio": (core.pitch_reuse_count - reuse_start) / max(frame_count, 1),
+        "semantic_reuse_ratio": _counter_ratio(
+            core.pitch_reuse_count,
+            reuse_start,
+            frame_count,
+        ),
         "coordinate_usable_ratio": usable_coordinate_count / max(coordinate_count, 1),
         "coordinate_sigma_m": _distribution(coordinate_sigmas_m),
         "rss_mb": {

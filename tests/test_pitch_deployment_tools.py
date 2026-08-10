@@ -6,7 +6,10 @@ import pytest
 import torch
 
 from app.field_registration.models import build_pitch_perception_model
-from tools.benchmark_pitch_registration_long_run import _memory_slope_mb_per_minute
+from tools.benchmark_pitch_registration_long_run import (
+    _counter_ratio,
+    _memory_slope_mb_per_minute,
+)
 from tools.export_pitch_perception import build_trtexec_command, load_trained_model
 
 
@@ -68,3 +71,7 @@ def test_memory_slope_uses_elapsed_minutes() -> None:
 
 def test_memory_slope_rejects_short_smoke_run() -> None:
     assert _memory_slope_mb_per_minute([(0.0, 100.0), (30.0, 105.0)]) is None
+
+
+def test_counter_ratio_excludes_warmup_counts() -> None:
+    assert _counter_ratio(current=330, baseline=30, measured_frames=300) == 1.0
