@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pitch Registration Ground Truth</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07131f;
+      --surface: #0a1a29;
+      --surface-2: #0d2234;
+      --border: #264158;
+      --text: #f4f8fb;
+      --muted: #8fa4b7;
+      --cyan: #1ec8ff;
+      --amber: #ffbe21;
+      --green: #55d36f;
+      --red: #ff5c64;
+      --radius: 4px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+    button, input { font: inherit; }
+    button { color: var(--text); }
+    .app { height: 100%; display: grid; grid-template-rows: 64px minmax(0, 1fr) 38px; }
+    .toolbar {
+      display: flex; align-items: center; gap: 12px; padding: 0 18px;
+      border-bottom: 1px solid var(--border); background: #081827;
+    }
+    .title { font-size: 17px; font-weight: 700; margin-right: auto; }
+    .toolbar .meta { color: var(--muted); font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .button {
+      min-height: 36px; padding: 0 14px; border: 1px solid var(--border);
+      border-radius: var(--radius); background: var(--surface); cursor: pointer;
+      font-size: 13px; font-weight: 650;
+    }
+    .button:hover, .button:focus-visible { border-color: var(--cyan); outline: none; }
+    .button.primary { background: #087cf0; border-color: #1592ff; }
+    .workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 390px; }
+    .stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) 132px; border-right: 1px solid var(--border); }
+    .canvas-wrap {
+      min-height: 0; display: grid; place-items: center; padding: 10px;
+      background: #02070b; overflow: hidden;
+    }
+    canvas { display: block; max-width: 100%; max-height: 100%; width: 100%; height: auto; cursor: crosshair; }
+    .timeline { padding: 13px 18px; border-top: 1px solid var(--border); background: #081827; }
+    .frame-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .frame-readout { text-align: center; flex: 1; }
+    .frame-readout strong { display: block; font: 16px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .frame-readout span { color: var(--muted); font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .frames { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(38px, 1fr); overflow-x: auto; border: 1px solid var(--border); }
+    .frame-cell { min-height: 42px; border: 0; border-right: 1px solid var(--border); background: transparent; cursor: pointer; color: var(--muted); font: 12px ui-monospace, monospace; }
+    .frame-cell.complete { color: var(--green); }
+    .frame-cell.current { color: var(--text); background: #0e3451; box-shadow: inset 0 -2px var(--cyan); }
+    .inspector { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--surface); }
+    .mode { display: grid; grid-template-columns: 1fr 1fr; padding: 14px; border-bottom: 1px solid var(--border); }
+    .mode button { height: 38px; border: 1px solid var(--border); background: transparent; cursor: pointer; color: var(--muted); font-weight: 700; }
+    .mode button.active { color: var(--cyan); border-color: var(--cyan); background: #09283b; }
+    .panel { min-height: 0; overflow: auto; padding: 14px; }
+    .panel h2, .validation h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .02em; }
+    .search, .contact-id { width: 100%; height: 36px; border: 1px solid var(--border); border-radius: var(--radius); background: #071521; color: var(--text); padding: 0 10px; outline: none; }
+    .search:focus, .contact-id:focus { border-color: var(--cyan); }
+    .list { margin-top: 10px; border-top: 1px solid var(--border); }
+    .landmark-row, .contact-row {
+      display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+      min-height: 38px; padding: 6px 8px; border: 1px solid transparent; border-bottom-color: var(--border);
+      color: var(--muted); cursor: pointer; font-size: 12px;
+    }
+    .landmark-row:hover, .landmark-row.selected { color: var(--text); background: #0d2a40; }
+    .landmark-row.selected { border-color: var(--cyan); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #526579; }
+    .annotated .dot { background: var(--cyan); }
+    .contact-row .dot { background: var(--amber); }
+    .label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .remove { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 4px; }
+    .remove:hover { color: var(--red); }
+    .empty { color: var(--muted); font-size: 12px; line-height: 1.6; padding: 14px 4px; }
+    .contact-form { display: flex; gap: 8px; margin-bottom: 10px; }
+    .contact-form .contact-id { flex: 1; }
+    .validation { border-top: 1px solid var(--border); padding: 14px; background: #081827; }
+    .validation-grid { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; color: var(--muted); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .validation-grid strong { color: var(--text); }
+    .issue { margin-top: 10px; color: var(--red); font-size: 12px; }
+    .issue.ok { color: var(--green); }
+    .statusbar { display: flex; align-items: center; gap: 18px; padding: 0 14px; border-top: 1px solid var(--border); color: var(--muted); background: #071521; font: 11px ui-monospace, monospace; }
+    .statusbar .save-state { margin-left: auto; }
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; grid-template-rows: minmax(520px, 1fr) 420px; overflow: auto; }
+      .stage { border-right: 0; }
+      .inspector { border-top: 1px solid var(--border); }
+      .toolbar .meta { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="toolbar">
+      <div class="title">Pitch Registration Ground Truth</div>
+      <span class="meta" id="sourceMeta">Loading manifest…</span>
+      <button class="button" id="saveButton">Save draft</button>
+      <button class="button primary" id="exportButton">Export JSON</button>
+    </header>
+    <section class="workspace">
+      <section class="stage">
+        <div class="canvas-wrap"><canvas id="canvas" aria-label="Annotation frame"></canvas></div>
+        <div class="timeline">
+          <div class="frame-nav">
+            <button class="button" id="firstButton" aria-label="First frame">|‹</button>
+            <button class="button" id="previousButton" aria-label="Previous frame">‹</button>
+            <div class="frame-readout"><strong id="frameLabel">Frame —</strong><span id="timeLabel">—</span></div>
+            <button class="button" id="nextButton" aria-label="Next frame">›</button>
+            <button class="button" id="lastButton" aria-label="Last frame">›|</button>
+          </div>
+          <div class="frames" id="frames"></div>
+        </div>
+      </section>
+      <aside class="inspector">
+        <div class="mode">
+          <button class="active" data-mode="landmark">Pitch landmarks</button>
+          <button data-mode="contact">Contact points</button>
+        </div>
+        <div class="panel">
+          <section id="landmarkPanel">
+            <h2>Landmarks</h2>
+            <input class="search" id="search" type="search" placeholder="Search landmarks">
+            <div class="list" id="landmarkList"></div>
+          </section>
+          <section id="contactPanel" hidden>
+            <h2>Contact points</h2>
+            <div class="contact-form">
+              <input class="contact-id" id="contactId" placeholder="Player / Track ID">
+            </div>
+            <div class="empty">Enter a stable player or Track ID, then click the support centre between the visible feet. Do not guess truncated or fully occluded feet.</div>
+            <div class="list" id="contactList"></div>
+          </section>
+        </div>
+        <section class="validation">
+          <h2>Validation</h2>
+          <div class="validation-grid">
+            <span>Pitch landmarks</span><strong id="landmarkCount">0</strong>
+            <span>Contact points</span><strong id="contactCount">0</strong>
+            <span>Annotated frames</span><strong id="annotatedCount">0</strong>
+          </div>
+          <div class="issue" id="issue">4 correspondences required</div>
+        </section>
+      </aside>
+    </section>
+    <footer class="statusbar">
+      <span>1 landmarks</span><span>2 contacts</span><span>←/→ frames</span><span>Delete remove selected</span>
+      <span class="save-state" id="saveState">Not saved</span>
+    </footer>
+  </main>
+  <script>
+    const state = { manifest: null, frame: 0, mode: 'landmark', selected: null, image: null, history: [] };
+    const $ = (id) => document.getElementById(id);
+    const canvas = $('canvas');
+    const context = canvas.getContext('2d');
+
+    function currentFrame() { return state.manifest.frames[state.frame]; }
+    function snapshot() { state.history.push(JSON.stringify(state.manifest.frames)); if (state.history.length > 50) state.history.shift(); }
+    function markDirty() { $('saveState').textContent = 'Unsaved changes'; }
+    function setMode(mode) {
+      state.mode = mode;
+      document.querySelectorAll('.mode button').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
+      $('landmarkPanel').hidden = mode !== 'landmark';
+      $('contactPanel').hidden = mode !== 'contact';
+      draw();
+    }
+    function loadFrame(index) {
+      state.frame = Math.max(0, Math.min(index, state.manifest.frames.length - 1));
+      const image = new Image();
+      image.onload = () => { state.image = image; canvas.width = image.naturalWidth; canvas.height = image.naturalHeight; render(); };
+      image.onerror = () => { state.image = null; render(); $('issue').textContent = 'Frame image failed to load'; };
+      image.src = currentFrame().image_path;
+      renderChrome();
+    }
+    function canvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      return [(event.clientX - rect.left) * canvas.width / rect.width, (event.clientY - rect.top) * canvas.height / rect.height];
+    }
+    function addPoint(event) {
+      const frame = currentFrame();
+      const point = canvasPoint(event).map((value) => Math.round(value * 100) / 100);
+      snapshot();
+      if (state.mode === 'landmark') {
+        if (!state.selected) return;
+        frame.correspondences = frame.correspondences.filter((item) => item.label !== state.selected);
+        frame.correspondences.push({ label: state.selected, image_xy: point, pitch_xy_m: state.manifest.landmarks_m[state.selected] });
+      } else {
+        const contactId = $('contactId').value.trim();
+        if (!contactId) { $('issue').textContent = 'Enter a Player / Track ID before clicking'; return; }
+        frame.contact_points = frame.contact_points.filter((item) => String(item.contact_id) !== contactId);
+        frame.contact_points.push({ contact_id: contactId, image_xy: point, visibility: 'visible' });
+      }
+      markDirty(); render();
+    }
+    function removeLandmark(label) {
+      snapshot(); currentFrame().correspondences = currentFrame().correspondences.filter((item) => item.label !== label); markDirty(); render();
+    }
+    function removeContact(contactId) {
+      snapshot(); currentFrame().contact_points = currentFrame().contact_points.filter((item) => String(item.contact_id) !== String(contactId)); markDirty(); render();
+    }
+    function drawMarker(point, color, label) {
+      const [x, y] = point;
+      context.beginPath(); context.arc(x, y, 6, 0, Math.PI * 2); context.fillStyle = color; context.fill();
+      context.lineWidth = 2; context.strokeStyle = '#04101a'; context.stroke();
+      context.font = '600 13px ui-monospace, monospace';
+      const width = context.measureText(label).width + 10;
+      context.fillStyle = '#04101ae8'; context.fillRect(x + 9, y - 20, width, 20);
+      context.fillStyle = color; context.fillText(label, x + 14, y - 6);
+    }
+    function draw() {
+      if (!state.image) return;
+      context.clearRect(0, 0, canvas.width, canvas.height); context.drawImage(state.image, 0, 0);
+      currentFrame().correspondences.forEach((item) => drawMarker(item.image_xy, '#1ec8ff', item.label));
+      currentFrame().contact_points.forEach((item) => drawMarker(item.image_xy, '#ffbe21', String(item.contact_id)));
+    }
+    function renderLandmarks() {
+      const query = $('search').value.trim().toLowerCase();
+      const annotated = new Set(currentFrame().correspondences.map((item) => item.label));
+      const labels = Object.keys(state.manifest.landmarks_m).filter((label) => label.includes(query));
+      $('landmarkList').innerHTML = '';
+      labels.forEach((label) => {
+        const row = document.createElement('div'); row.className = `landmark-row ${annotated.has(label) ? 'annotated' : ''} ${state.selected === label ? 'selected' : ''}`;
+        row.innerHTML = `<span class="dot"></span><span class="label-name">${label}</span><button class="remove" title="Remove">${annotated.has(label) ? '×' : ''}</button>`;
+        row.addEventListener('click', (event) => { if (event.target.classList.contains('remove') && annotated.has(label)) removeLandmark(label); else { state.selected = label; render(); } });
+        $('landmarkList').appendChild(row);
+      });
+    }
+    function renderContacts() {
+      $('contactList').innerHTML = '';
+      currentFrame().contact_points.forEach((item) => {
+        const row = document.createElement('div'); row.className = 'contact-row';
+        row.innerHTML = `<span class="dot"></span><span class="label-name">${String(item.contact_id)}</span><button class="remove">×</button>`;
+        row.querySelector('.remove').addEventListener('click', () => removeContact(item.contact_id));
+        $('contactList').appendChild(row);
+      });
+    }
+    function renderTimeline() {
+      $('frames').innerHTML = '';
+      state.manifest.frames.forEach((frame, index) => {
+        const button = document.createElement('button');
+        const complete = frame.correspondences.length >= 4 && frame.contact_points.length > 0;
+        button.className = `frame-cell ${complete ? 'complete' : ''} ${index === state.frame ? 'current' : ''}`;
+        button.textContent = String(index + 1).padStart(2, '0'); button.addEventListener('click', () => loadFrame(index)); $('frames').appendChild(button);
+      });
+      document.querySelector('.frame-cell.current')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }
+    function renderChrome() {
+      if (!state.manifest) return;
+      const frame = currentFrame();
+      $('frameLabel').textContent = `Frame ${String(state.frame + 1).padStart(2, '0')} / ${String(state.manifest.frames.length).padStart(2, '0')}`;
+      $('timeLabel').textContent = `${(frame.timestamp_ms / 1000).toFixed(3)}s · source frame ${frame.frame_index}`;
+      $('landmarkCount').textContent = frame.correspondences.length;
+      $('contactCount').textContent = frame.contact_points.length;
+      $('annotatedCount').textContent = state.manifest.frames.filter((item) => item.correspondences.length || item.contact_points.length).length;
+      const issue = $('issue');
+      if (frame.correspondences.length < 4) { issue.className = 'issue'; issue.textContent = `${4 - frame.correspondences.length} more correspondences required`; }
+      else if (!frame.contact_points.length) { issue.className = 'issue'; issue.textContent = 'Add visible contact points or tag this frame as no-player'; }
+      else { issue.className = 'issue ok'; issue.textContent = 'Current frame meets minimum annotation counts'; }
+      renderLandmarks(); renderContacts(); renderTimeline();
+    }
+    function render() { draw(); renderChrome(); }
+    function saveDraft() {
+      localStorage.setItem(`pitch-annotation:${state.manifest.source.name}:${state.manifest.split}`, JSON.stringify(state.manifest));
+      $('saveState').textContent = `Saved ${new Date().toLocaleTimeString()}`;
+    }
+    function exportJson() {
+      saveDraft();
+      const blob = new Blob([JSON.stringify(state.manifest, null, 2) + '\n'], { type: 'application/json' });
+      const link = document.createElement('a');
+      const objectUrl = URL.createObjectURL(blob);
+      link.href = objectUrl; link.download = `pitch-annotations-${state.manifest.source.name}.json`;
+      document.body.appendChild(link); link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+      $('saveState').textContent = `Exported ${new Date().toLocaleTimeString()}`;
+    }
+    function undo() { if (!state.history.length) return; state.manifest.frames = JSON.parse(state.history.pop()); markDirty(); loadFrame(state.frame); }
+    async function initialize() {
+      const response = await fetch('manifest.json'); if (!response.ok) throw new Error(`manifest.json: ${response.status}`);
+      state.manifest = await response.json();
+      const draftKey = `pitch-annotation:${state.manifest.source.name}:${state.manifest.split}`;
+      const draft = localStorage.getItem(draftKey);
+      if (draft && confirm('A local draft exists for this annotation pack. Restore it?')) state.manifest = JSON.parse(draft);
+      $('sourceMeta').textContent = `${state.manifest.source.name} · ${state.manifest.image_size.join('×')} · ${state.manifest.split}`;
+      state.selected = Object.keys(state.manifest.landmarks_m)[0]; loadFrame(0);
+    }
+    document.querySelectorAll('.mode button').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
+    $('canvas').addEventListener('click', addPoint); $('search').addEventListener('input', renderLandmarks);
+    $('saveButton').addEventListener('click', saveDraft); $('exportButton').addEventListener('click', exportJson);
+    $('firstButton').addEventListener('click', () => loadFrame(0)); $('lastButton').addEventListener('click', () => loadFrame(state.manifest.frames.length - 1));
+    $('previousButton').addEventListener('click', () => loadFrame(state.frame - 1)); $('nextButton').addEventListener('click', () => loadFrame(state.frame + 1));
+    window.addEventListener('keydown', (event) => {
+      if (event.target.matches('input')) return;
+      if (event.key === '1') setMode('landmark'); else if (event.key === '2') setMode('contact');
+      else if (event.key === 'ArrowLeft') loadFrame(state.frame - 1); else if (event.key === 'ArrowRight') loadFrame(state.frame + 1);
+      else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') undo();
+    });
+    initialize().catch((error) => { $('issue').textContent = `Failed to load annotation pack: ${error.message}`; console.error(error); });
+  </script>
+</body>
+</html>

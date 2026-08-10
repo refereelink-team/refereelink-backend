@@ -35,6 +35,7 @@ from app.field_registration.metrics import (
     grid_projection_errors,
     template_jitter_px,
 )
+from app.field_registration.geometry import transform_points
 from app.field_registration.pitch_model import PitchDimensions, PitchModel
 
 
@@ -62,6 +63,8 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     pitch_errors: list[float] = []
     grid_errors: list[float] = []
     latencies: list[float] = []
+    contact_image_errors: list[float] = []
+    contact_pitch_errors: list[float] = []
     predicted_pitch_to_image: list[np.ndarray] = []
     status_counts: dict[str, int] = {}
     total_frames = 0
@@ -78,6 +81,9 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
             latencies.append(float(frame["latency_ms"]))
         predicted_raw = frame.get("predicted_image_to_pitch")
         truth_raw = frame.get("ground_truth_image_to_pitch")
+        correspondence_payload = frame.get("correspondences", [])
+        if truth_raw is not None or correspondence_payload:
+            annotated_frames += 1
         frame_result: dict[str, Any] = {"frame_index": frame_index, "status": status}
         if predicted_raw is None:
             frame_result["available"] = False
@@ -87,12 +93,6 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         available_frames += 1
         frame_result["available"] = True
         predicted_pitch_to_image.append(np.linalg.inv(predicted))
-        if truth_raw is None:
-            per_frame.append(frame_result)
-            continue
-        truth = _matrix(truth_raw, "ground_truth_image_to_pitch")
-        annotated_frames += 1
-        correspondence_payload = frame.get("correspondences", [])
         if correspondence_payload:
             image = np.asarray(
                 [item["image_xy"] for item in correspondence_payload], dtype=np.float64
@@ -111,6 +111,43 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
             frame_result["pitch_projection_m"] = ErrorSummary.from_values(
                 frame_pitch_errors
             ).to_dict()
+        contact_payload = frame.get("contact_points", [])
+        frame_contact_image_errors: list[float] = []
+        frame_contact_pitch_errors: list[float] = []
+        for contact in contact_payload:
+            truth_image_raw = contact.get(
+                "ground_truth_image_xy", contact.get("image_xy")
+            )
+            predicted_image_raw = contact.get("predicted_image_xy")
+            if truth_image_raw is None or predicted_image_raw is None:
+                continue
+            truth_image = np.asarray(truth_image_raw, dtype=np.float64)
+            predicted_image = np.asarray(predicted_image_raw, dtype=np.float64)
+            if truth_image.shape != (2,) or predicted_image.shape != (2,):
+                raise ValueError("contact image coordinates must be pairs")
+            image_error = float(np.linalg.norm(predicted_image - truth_image))
+            frame_contact_image_errors.append(image_error)
+            contact_image_errors.append(image_error)
+            if truth_raw is not None:
+                truth = _matrix(truth_raw, "ground_truth_image_to_pitch")
+                pitch_pair = transform_points(
+                    np.vstack((truth_image, predicted_image)), truth
+                )
+                pitch_error = float(np.linalg.norm(pitch_pair[1] - pitch_pair[0]))
+                frame_contact_pitch_errors.append(pitch_error)
+                contact_pitch_errors.append(pitch_error)
+        if frame_contact_image_errors:
+            frame_result["contact_image_error_px"] = ErrorSummary.from_values(
+                frame_contact_image_errors
+            ).to_dict()
+        if frame_contact_pitch_errors:
+            frame_result["contact_pitch_error_m"] = ErrorSummary.from_values(
+                frame_contact_pitch_errors
+            ).to_dict()
+        if truth_raw is None:
+            per_frame.append(frame_result)
+            continue
+        truth = _matrix(truth_raw, "ground_truth_image_to_pitch")
         frame_grid_errors, valid_ratio = grid_projection_errors(
             predicted, truth, image_size
         )
@@ -131,6 +168,12 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "image_reprojection_px": ErrorSummary.from_values(image_errors).to_dict(),
         "pitch_projection_m": ErrorSummary.from_values(pitch_errors).to_dict(),
         "grid_projection_m": ErrorSummary.from_values(grid_errors).to_dict(),
+        "contact_image_error_px": ErrorSummary.from_values(
+            contact_image_errors
+        ).to_dict(),
+        "contact_pitch_error_m": ErrorSummary.from_values(
+            contact_pitch_errors
+        ).to_dict(),
         "latency_ms": ErrorSummary.from_values(latencies).to_dict(),
         "template_jitter_px": template_jitter_px(
             predicted_pitch_to_image, pitch_grid
