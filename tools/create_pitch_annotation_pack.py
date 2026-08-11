@@ -110,6 +110,18 @@ def decode_unique_frame(
     return actual_index, frame
 
 
+def decodable_frame_count(
+    capture: cv2.VideoCapture,
+    reported_frame_count: int,
+) -> int:
+    """Return the actual decodable count when container metadata is optimistic."""
+
+    if reported_frame_count <= 0:
+        raise ValueError("reported frame count must be positive")
+    last_index, _ = decode_frame_with_backoff(capture, reported_frame_count - 1)
+    return last_index + 1
+
+
 def create_annotation_pack(
     source: str | Path,
     output_directory: str | Path,
@@ -133,7 +145,14 @@ def create_annotation_pack(
     frames_path = output_path / "frames"
     frames_path.mkdir(parents=True, exist_ok=True)
 
-    fps, total_frames, image_size = _video_metadata(source_path)
+    fps, reported_frames, image_size = _video_metadata(source_path)
+    probe = cv2.VideoCapture(str(source_path))
+    if not probe.isOpened():
+        raise ValueError(f"cannot open video: {source_path}")
+    try:
+        total_frames = decodable_frame_count(probe, reported_frames)
+    finally:
+        probe.release()
     indices = select_frame_indices(
         fps,
         total_frames,
@@ -183,6 +202,7 @@ def create_annotation_pack(
             "path_at_creation": str(source_path),
             "fps": fps,
             "frame_count": total_frames,
+            "reported_frame_count": reported_frames,
             "duration_ms": round(total_frames * 1000.0 / fps, 3),
         },
         "image_size": list(image_size),

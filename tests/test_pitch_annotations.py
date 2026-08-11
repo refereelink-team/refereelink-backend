@@ -121,6 +121,7 @@ def test_annotation_pack_extracts_uniform_frames_and_ui(tmp_path) -> None:
 
     assert payload["split"] == "validation"
     assert payload["image_size"] == [160, 90]
+    assert payload["source"]["reported_frame_count"] == 20
     assert len(payload["frames"]) == 5
     assert [frame["frame_index"] for frame in payload["frames"]] == [0, 5, 10, 14, 19]
     assert all((output_path / frame["image_path"]).is_file() for frame in payload["frames"])
@@ -188,6 +189,30 @@ def test_annotation_pack_decoder_avoids_duplicate_fallback_frames() -> None:
 
     assert actual_index == 17
     assert int(frame[0, 0, 0]) == 17
+
+
+def test_annotation_pack_uses_actual_decodable_frame_count() -> None:
+    generator = _load_pack_generator()
+
+    class TailLimitedCapture:
+        def __init__(self) -> None:
+            self.index = 0
+
+        def set(self, property_id: int, value: float) -> bool:
+            assert property_id == cv2.CAP_PROP_POS_FRAMES
+            self.index = int(value)
+            return True
+
+        def read(self) -> tuple[bool, np.ndarray | None]:
+            if self.index >= 19:
+                return False, None
+            frame = np.full((4, 4, 3), self.index, dtype=np.uint8)
+            self.index += 1
+            return True, frame
+
+    count = generator.decodable_frame_count(TailLimitedCapture(), 21)
+
+    assert count == 19
 
 
 def test_annotation_pack_refuses_accidental_overwrite(tmp_path) -> None:
