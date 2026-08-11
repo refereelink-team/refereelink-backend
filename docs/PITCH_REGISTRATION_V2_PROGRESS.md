@@ -114,6 +114,8 @@
 
 人工采集、标注、复核和交付流程见 `docs/PITCH_REGISTRATION_MANUAL_DATA_GUIDE.md`。
 
+面向三位组员、可从 GitHub 独立部署执行的任务书见 `docs/tasks/PITCH_REGISTRATION_TASK_ASSIGNMENTS.md`。
+
 1. 完成镜头留出集模型选择和多 pan 锚帧 profile 工具；
 2. 固化球场感知训练数据契约、双 head 基线和模型竞赛脚本；
 3. 在人工真值到位后冻结 P0 准确率基线，再决定 C1/C2/C3 的生产模型；

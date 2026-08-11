@@ -203,6 +203,14 @@ cd web && npm run build
 uv run pytest tests/ -v
 ```
 
+## Pitch-registration collaborator tasks
+
+The three standalone handoff guides for test1 annotation, locked test2
+annotation, and physical camera/pan calibration are indexed in
+[`docs/tasks/PITCH_REGISTRATION_TASK_ASSIGNMENTS.md`](docs/tasks/PITCH_REGISTRATION_TASK_ASSIGNMENTS.md).
+The annotation tasks use a lightweight CPU-only `uv --no-project` workflow;
+they do not require the full inference environment.
+
 Tests cover camera calibration, VisionCore scheduling/projection, trajectory semantics, ball prediction and pipeline entity integration, Pydantic models, the bounded buffer (realtime drop
 + offline block), the video source abstraction (factory routing,
 reconnect state), the StateStore and EventBus (thread safety,
