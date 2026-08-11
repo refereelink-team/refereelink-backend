@@ -52,8 +52,10 @@
 ### 部署与长时间验收工具
 
 - 增加训练 checkpoint 的 ONNX checker 导出和 `trtexec` TensorRT 构建入口；
+- 增加 PyTorch/ONNX Runtime 数值一致性与延迟检查，拒绝静默 CPU fallback；
 - 缺少 ONNX/TensorRT 时输出明确能力错误，不生成替代模型；
 - 增加循环视频的 30–60 分钟 CUDA 稳定性工具，记录延迟、RSS 斜率、峰值显存、相机状态和安全坐标率；
+- 增加可执行的 soak 报告门禁：时长、RSS 斜率、峰值显存、FPS 降幅、P95 延迟和物理 pan profile 均可独立约束；
 - 性能报告固定声明 `accuracy_valid=false`，不以无真值运行替代准确率评估。
 
 ## 验证结果
@@ -62,8 +64,12 @@
 
 - CPT 首次实现提交前：本地 `163 passed`，远端 CUDA 环境 `163 passed`；
 - 标注与评估增量：`24 passed`；
+- 当前完整回归：本地与远端 `14186de` 隔离快照均为 `201 passed`、11 warnings；
+- 本次修改文件 Ruff 和 Web TypeScript/Vite build 通过；
 - 浏览器实测：真实 `test1.mp4` 8 帧包，4 锚点、1 接触点、草稿恢复、翻帧和导出反馈通过；
 - 响应式：1536×1024、900 px 和 430 px 宽度验证，无横向溢出。
+- 远端已生成按序列隔离的 `test1-calibration` 与 `test2-test` 空真值包，各 30 个可解码帧并通过结构校验；人工锚点和接触点仍待填写；
+- 修复 MP4 容器高报尾部帧数、尾部随机 seek 失败及多个请求回退到同一帧的问题，清单始终记录真实解码帧号。
 
 ### RTX 5060 Ti 兼容链路
 
@@ -76,6 +82,23 @@
 
 上述结果只能证明当前兼容路径的速度和矩阵可用性，不能证明投影准确。真实 P95 线误差、网格米制误差和球员接触点误差必须等待独立真值标注后填写。
 
+### C1 ONNX CUDA 部署链路
+
+- FP16 ONNX checker 与 ONNX Runtime 1.28 CUDA provider 通过；
+- 三个输出头相对 PyTorch 的最大绝对误差不超过 `1.221e-4`；
+- 512×288、batch=1：PyTorch FP16 P95 `5.99 ms`，ONNX Runtime `session.run` P95 `4.89 ms`；
+- checkpoint 为明确标记的随机权重，仅验证导出/运行时，不构成准确率结果；
+- 目标机缺少 `trtexec`，TensorRT engine 尚未验证。
+
+### 30 分钟 CUDA soak
+
+- `test2.mp4` 循环 86 次，共 101,212 帧，56.23 FPS；
+- 帧延迟 median `13.04 ms`、P95 `30.16 ms`，峰值显存 `222.41 MB`；
+- RSS 30 分钟增长 `38.66 MB`，线性斜率 `0.90 MB/min`；
+- 无 rig 稳定性门禁通过；物理 pan 生产门禁未执行且不应视为通过；
+- 安全坐标可用率 `27.66%`，反映无 rig 时 PREDICTED/LOST 坐标被正确拒绝；
+- 发现并修复 Ultralytics `half` 参数逐帧输出弃用日志，20 帧远端 CUDA 复测不再重复打印。
+
 ## 尚未完成
 
 1. `test1/test2/真实云台` 的人工真值和至少 200 个接触点尚未完成；
@@ -83,7 +106,7 @@
 3. 尚无真实固定机位的多 pan 锚帧，因此物理 pan-only 链路目前只有合成几何测试；
 4. MobileNetV3-LR-ASPP、PIDNet-S、SegFormer-B0 尚未在同数据上训练比较；
 5. 接触点神经 head 尚未训练，当前已接入 bbox 安全回退、米制不确定性和下游门禁；
-6. 新感知模型尚无 ONNX/TensorRT 和 30–60 分钟长视频报告。
+6. 随机权重 C1 的 ONNX CUDA 链路和无 rig 30 分钟稳定性报告已完成；训练后权重的准确率、TensorRT engine 与真实 rig 长跑仍未完成。
 
 ## 下一里程碑
 
