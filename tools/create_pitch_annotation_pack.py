@@ -58,22 +58,56 @@ def decode_frame_with_backoff(
     capture: cv2.VideoCapture,
     requested_index: int,
     *,
-    max_backoff_frames: int = 8,
+    max_seek_backoff_frames: int = 512,
 ) -> tuple[int, np.ndarray]:
-    """Decode a requested frame, tolerating optimistic container tail metadata."""
+    """Decode a requested frame despite optimistic metadata or sparse keyframes."""
 
-    if requested_index < 0 or max_backoff_frames < 0:
+    if requested_index < 0 or max_seek_backoff_frames < 0:
         raise ValueError("frame index and backoff must be non-negative")
-    for backoff in range(min(requested_index, max_backoff_frames) + 1):
+    maximum_backoff = min(requested_index, max_seek_backoff_frames)
+    backoffs = [0]
+    candidate = 1
+    while candidate < maximum_backoff:
+        backoffs.append(candidate)
+        candidate *= 2
+    if maximum_backoff not in backoffs:
+        backoffs.append(maximum_backoff)
+    if requested_index not in backoffs:
+        backoffs.append(requested_index)
+
+    for backoff in backoffs:
         actual_index = requested_index - backoff
         capture.set(cv2.CAP_PROP_POS_FRAMES, actual_index)
         ok, frame = capture.read()
         if ok and frame is not None:
+            while actual_index < requested_index:
+                ok, next_frame = capture.read()
+                if not ok or next_frame is None:
+                    break
+                actual_index += 1
+                frame = next_frame
             return actual_index, frame
     raise RuntimeError(
-        f"failed to decode frame {requested_index} or the previous "
-        f"{min(requested_index, max_backoff_frames)} frames"
+        f"failed to decode frame {requested_index} from a prior seek anchor"
     )
+
+
+def decode_unique_frame(
+    capture: cv2.VideoCapture,
+    requested_index: int,
+    decoded_indices: set[int],
+) -> tuple[int, np.ndarray]:
+    actual_index, frame = decode_frame_with_backoff(capture, requested_index)
+    while actual_index in decoded_indices:
+        if actual_index == 0:
+            raise RuntimeError(
+                f"could not find a unique decodable frame for {requested_index}"
+            )
+        actual_index, frame = decode_frame_with_backoff(
+            capture,
+            actual_index - 1,
+        )
+    return actual_index, frame
 
 
 def create_annotation_pack(
@@ -112,11 +146,11 @@ def create_annotation_pack(
     decoded_indices: set[int] = set()
     try:
         for index in indices.tolist():
-            actual_index, frame = decode_frame_with_backoff(capture, index)
-            if actual_index in decoded_indices:
-                raise RuntimeError(
-                    f"frame {index} fell back to duplicate frame {actual_index}"
-                )
+            actual_index, frame = decode_unique_frame(
+                capture,
+                index,
+                decoded_indices,
+            )
             decoded_indices.add(actual_index)
             relative_path = Path("frames") / f"frame-{actual_index:08d}.jpg"
             target = output_path / relative_path
@@ -136,6 +170,7 @@ def create_annotation_pack(
             frame_entries.append(entry)
     finally:
         capture.release()
+    frame_entries.sort(key=lambda entry: int(entry["frame_index"]))
 
     pitch_dimensions = dimensions or PitchDimensions()
     pitch_model = PitchModel(pitch_dimensions)

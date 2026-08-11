@@ -148,7 +148,9 @@ def test_annotation_pack_decoder_backs_off_from_unreadable_tail() -> None:
         def read(self) -> tuple[bool, np.ndarray | None]:
             if self.index >= 19:
                 return False, None
-            return True, np.full((4, 4, 3), self.index, dtype=np.uint8)
+            frame = np.full((4, 4, 3), self.index, dtype=np.uint8)
+            self.index += 1
+            return True, frame
 
     actual_index, frame = generator.decode_frame_with_backoff(
         TailLimitedCapture(),
@@ -157,6 +159,35 @@ def test_annotation_pack_decoder_backs_off_from_unreadable_tail() -> None:
 
     assert actual_index == 18
     assert int(frame[0, 0, 0]) == 18
+
+
+def test_annotation_pack_decoder_avoids_duplicate_fallback_frames() -> None:
+    generator = _load_pack_generator()
+
+    class TailLimitedCapture:
+        def __init__(self) -> None:
+            self.index = 0
+
+        def set(self, property_id: int, value: float) -> bool:
+            assert property_id == cv2.CAP_PROP_POS_FRAMES
+            self.index = int(value)
+            return True
+
+        def read(self) -> tuple[bool, np.ndarray | None]:
+            if self.index >= 19:
+                return False, None
+            frame = np.full((4, 4, 3), self.index, dtype=np.uint8)
+            self.index += 1
+            return True, frame
+
+    actual_index, frame = generator.decode_unique_frame(
+        TailLimitedCapture(),
+        20,
+        {18},
+    )
+
+    assert actual_index == 17
+    assert int(frame[0, 0, 0]) == 17
 
 
 def test_annotation_pack_refuses_accidental_overwrite(tmp_path) -> None:
