@@ -38,6 +38,20 @@ uv run python tools/export_pitch_perception.py \
 
 导出脚本会执行 ONNX checker；TensorRT 构建交由官方 `trtexec` 完成。生产验收仍需用同一测试集比较 PyTorch、ONNX 与 TensorRT 的输出误差。
 
+在目标机上先执行确定性输入的数值一致性和运行时检查：
+
+```bash
+uv run python tools/validate_pitch_perception_deployment.py \
+  --checkpoint runs/pitch/c1-best.pt \
+  --model runs/pitch/c1.onnx \
+  --device cuda:0 \
+  --provider CUDAExecutionProvider \
+  --precision fp16 \
+  --report runs/pitch/c1-onnx-cuda-report.json
+```
+
+工具会拒绝静默回退到 CPU，并分别记录同步后的 PyTorch forward 延迟和包含传输/输出物化的 ONNX Runtime `session.run` 延迟。该命令仍固定声明 `deployment_accuracy_valid=false`；数值接近只说明导出未明显改变网络输出，不能替代带真值测试集的准确率评估。
+
 ## 3. 长时间 CUDA 联调
 
 以下命令循环读取本地视频，默认连续运行 30 分钟：
