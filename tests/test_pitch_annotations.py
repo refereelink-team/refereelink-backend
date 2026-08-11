@@ -133,6 +133,32 @@ def test_annotation_pack_extracts_uniform_frames_and_ui(tmp_path) -> None:
     assert empty_report.valid
 
 
+def test_annotation_pack_decoder_backs_off_from_unreadable_tail() -> None:
+    generator = _load_pack_generator()
+
+    class TailLimitedCapture:
+        def __init__(self) -> None:
+            self.index = 0
+
+        def set(self, property_id: int, value: float) -> bool:
+            assert property_id == cv2.CAP_PROP_POS_FRAMES
+            self.index = int(value)
+            return True
+
+        def read(self) -> tuple[bool, np.ndarray | None]:
+            if self.index >= 19:
+                return False, None
+            return True, np.full((4, 4, 3), self.index, dtype=np.uint8)
+
+    actual_index, frame = generator.decode_frame_with_backoff(
+        TailLimitedCapture(),
+        19,
+    )
+
+    assert actual_index == 18
+    assert int(frame[0, 0, 0]) == 18
+
+
 def test_annotation_pack_refuses_accidental_overwrite(tmp_path) -> None:
     generator = _load_pack_generator()
     video_path = tmp_path / "source.avi"

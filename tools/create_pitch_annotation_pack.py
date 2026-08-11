@@ -54,6 +54,28 @@ def select_frame_indices(
     return np.unique(np.rint(np.linspace(first, last, count)).astype(np.int64))
 
 
+def decode_frame_with_backoff(
+    capture: cv2.VideoCapture,
+    requested_index: int,
+    *,
+    max_backoff_frames: int = 8,
+) -> tuple[int, np.ndarray]:
+    """Decode a requested frame, tolerating optimistic container tail metadata."""
+
+    if requested_index < 0 or max_backoff_frames < 0:
+        raise ValueError("frame index and backoff must be non-negative")
+    for backoff in range(min(requested_index, max_backoff_frames) + 1):
+        actual_index = requested_index - backoff
+        capture.set(cv2.CAP_PROP_POS_FRAMES, actual_index)
+        ok, frame = capture.read()
+        if ok and frame is not None:
+            return actual_index, frame
+    raise RuntimeError(
+        f"failed to decode frame {requested_index} or the previous "
+        f"{min(requested_index, max_backoff_frames)} frames"
+    )
+
+
 def create_annotation_pack(
     source: str | Path,
     output_directory: str | Path,
@@ -87,27 +109,31 @@ def create_annotation_pack(
     )
     capture = cv2.VideoCapture(str(source_path))
     frame_entries: list[dict[str, object]] = []
+    decoded_indices: set[int] = set()
     try:
         for index in indices.tolist():
-            capture.set(cv2.CAP_PROP_POS_FRAMES, index)
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                raise RuntimeError(f"failed to decode frame {index}")
-            relative_path = Path("frames") / f"frame-{index:08d}.jpg"
+            actual_index, frame = decode_frame_with_backoff(capture, index)
+            if actual_index in decoded_indices:
+                raise RuntimeError(
+                    f"frame {index} fell back to duplicate frame {actual_index}"
+                )
+            decoded_indices.add(actual_index)
+            relative_path = Path("frames") / f"frame-{actual_index:08d}.jpg"
             target = output_path / relative_path
             if not cv2.imwrite(str(target), frame, [cv2.IMWRITE_JPEG_QUALITY, 95]):
                 raise RuntimeError(f"failed to write {target}")
-            frame_entries.append(
-                {
-                    "frame_index": index,
-                    "timestamp_ms": round(index * 1000.0 / fps, 3),
-                    "image_path": relative_path.as_posix(),
-                    "tags": [],
-                    "correspondences": [],
-                    "line_polylines": [],
-                    "contact_points": [],
-                }
-            )
+            entry: dict[str, object] = {
+                "frame_index": actual_index,
+                "timestamp_ms": round(actual_index * 1000.0 / fps, 3),
+                "image_path": relative_path.as_posix(),
+                "tags": [],
+                "correspondences": [],
+                "line_polylines": [],
+                "contact_points": [],
+            }
+            if actual_index != index:
+                entry["requested_frame_index"] = index
+            frame_entries.append(entry)
     finally:
         capture.release()
 
