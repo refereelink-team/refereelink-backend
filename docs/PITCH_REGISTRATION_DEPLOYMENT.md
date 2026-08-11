@@ -91,6 +91,18 @@ uv run python tools/benchmark_pitch_registration_long_run.py \
 
 未传入 `--camera-rig-profile-path` 时，V2 只能依赖通用单应性重定位，报告会明确写入 `physical_pan_constraint_active=false`。这种运行可用于兼容性和吞吐测试，不能作为固定云台生产几何验收；后者必须加载由真实多 pan 锚帧生成并通过门禁的 rig profile。
 
+长跑完成后使用显式门槛检查报告。例如仅做无 rig 的稳定性检查：
+
+```bash
+uv run python tools/check_pitch_registration_soak.py \
+  docs/pitch-registration-long-run.json \
+  --baseline-fps 41.24 \
+  --maximum-fps-drop-percent 10 \
+  --maximum-p95-latency-ms 35
+```
+
+真实固定云台生产验收还必须增加 `--require-physical-pan`。短于 30 分钟、缺少 RSS 斜率/显存、静默丢失物理约束或超过性能预算都会返回非零退出码。
+
 ## 4. 验收门槛
 
 在选定生产模型前，至少满足：
