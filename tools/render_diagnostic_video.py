@@ -69,6 +69,11 @@ def _render_panel(frame: np.ndarray, state: FrameState, panel_width: int) -> np.
     status = state.homography_status.value.upper()
     status_color = {
         "FRESH": (80, 220, 120),
+        "RELOCALIZED": (80, 220, 120),
+        "CORRECTED": (80, 220, 120),
+        "TRACKED": (0, 215, 255),
+        "PREDICTED": (0, 140, 255),
+        "LOST": (80, 80, 230),
         "REUSED": (0, 215, 255),
         "STALE": (0, 140, 255),
         "UNAVAILABLE": (80, 80, 230),
@@ -211,9 +216,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--pitch-model-path", default=PITCH_DETECTION_MODEL_PATH)
     parser.add_argument("--ball-model-path", default=BALL_DETECTION_MODEL_PATH)
     parser.add_argument("--camera-calibration-path", default=CAMERA_CALIBRATION_PATH)
+    parser.add_argument("--camera-rig-profile-path")
     parser.add_argument("--pitch-detection-interval", type=int, default=5)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--disable-undistortion", action="store_true")
+    parser.add_argument("--disable-ball", action="store_true")
     return parser.parse_args()
 
 
@@ -252,11 +259,13 @@ def main() -> int:
         player_model_path=args.player_model_path,
         pitch_model_path=args.pitch_model_path,
         camera_calibration_path=args.camera_calibration_path,
+        camera_rig_profile_path=args.camera_rig_profile_path,
+        enable_field_registration_v2=True,
         enable_undistortion=not args.disable_undistortion,
         pitch_detection_interval=args.pitch_detection_interval,
         imgsz=args.imgsz,
         ball_model_path=args.ball_model_path,
-        enable_ball=True,
+        enable_ball=not args.disable_ball,
         enable_foul_detection=False,
         frame_sink=frame_sink,
     )
@@ -284,6 +293,9 @@ def main() -> int:
         "render_fps": round(sink.frames_written / max(elapsed, 0.001), 2),
         "metrics": metrics,
         "cuda_available": bool(__import__("torch").cuda.is_available()),
+        "field_registration_v2": True,
+        "camera_rig_profile": args.camera_rig_profile_path,
+        "ball_enabled": not args.disable_ball,
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     LOGGER.info("Rendered %d/%d frames to %s", sink.frames_written, source_frames, output_path)
