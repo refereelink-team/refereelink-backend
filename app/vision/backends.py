@@ -197,7 +197,12 @@ class UltralyticsBackend:
         iou: float | None = None,
     ) -> Any:
         """Run one inference using the shared detector call signature."""
-        kwargs = {"imgsz": imgsz, "half": half, "verbose": False}
+        kwargs: dict[str, object] = {"imgsz": imgsz, "verbose": False}
+        if half:
+            # Ultralytics >=8.4 uses one precision argument for inference and
+            # export. Keeping ``half`` here would emit one deprecation warning
+            # per video frame and can grow long-run logs by many megabytes.
+            kwargs["quantize"] = 16
         if conf is not None:
             kwargs["conf"] = conf
         if iou is not None:
@@ -205,9 +210,12 @@ class UltralyticsBackend:
         try:
             return self._model(frame, **kwargs)
         except TypeError as exc:
-            # Keep injected lightweight/fake models compatible when they do
-            # not expose Ultralytics' optional ``verbose`` keyword.
-            if not any(name in str(exc) for name in ("verbose", "conf", "iou")):
+            # Keep old Ultralytics releases and injected lightweight/fake
+            # models compatible with the legacy shared ``half`` contract.
+            if not any(
+                name in str(exc)
+                for name in ("verbose", "conf", "iou", "quantize", "half")
+            ):
                 raise
             fallback = {"imgsz": imgsz, "half": half}
             try:

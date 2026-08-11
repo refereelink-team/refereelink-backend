@@ -15,6 +15,23 @@ class _FakeUltralyticsModel:
         return {"boxes": np.array([[1, 2, 3, 4]], dtype=np.float32)}
 
 
+class _QuantizeUltralyticsModel:
+    def __init__(self) -> None:
+        self.quantize: object = "not-called"
+
+    def __call__(
+        self,
+        frame: np.ndarray,
+        *,
+        imgsz: int,
+        verbose: bool,
+        quantize: int | None = None,
+    ) -> dict[str, object]:
+        del frame, imgsz, verbose
+        self.quantize = quantize
+        return {"boxes": np.array([[1, 2, 3, 4]], dtype=np.float32)}
+
+
 def test_callable_backend_forwards_the_shared_predict_arguments() -> None:
     frame = np.zeros((32, 48, 3), dtype=np.uint8)
     calls: list[tuple[np.ndarray, int, bool]] = []
@@ -71,6 +88,22 @@ def test_ultralytics_backend_uses_the_shared_predict_arguments(tmp_path) -> None
 
     assert "boxes" in result
     assert fake_model.calls == [(frame, 960, False)]
+
+
+@pytest.mark.parametrize(("half", "expected"), [(False, None), (True, 16)])
+def test_ultralytics_backend_translates_precision_without_legacy_warning(
+    tmp_path,
+    half: bool,
+    expected: int | None,
+) -> None:
+    model_path = tmp_path / "detector.pt"
+    model_path.touch()
+    fake_model = _QuantizeUltralyticsModel()
+    backend = UltralyticsBackend(model_path, model=fake_model)
+
+    backend.predict(np.zeros((24, 24, 3), dtype=np.uint8), half=half)
+
+    assert fake_model.quantize == expected
 
 
 def test_ultralytics_backend_reports_missing_model_clearly(tmp_path) -> None:
