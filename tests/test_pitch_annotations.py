@@ -82,6 +82,23 @@ def test_annotation_validator_fits_manual_correspondences(tmp_path) -> None:
     assert report.frames[0].reprojection_median_px == pytest.approx(0.0, abs=1e-4)
 
 
+def test_annotation_validator_allows_geometry_only_rig_anchors(tmp_path) -> None:
+    payload = _payload(tmp_path)
+    payload["frames"][0]["contact_points"] = []
+
+    rejected = validate_annotation_payload(payload, root=tmp_path)
+    accepted = validate_annotation_payload(
+        payload,
+        root=tmp_path,
+        require_contact_points=False,
+    )
+
+    assert not rejected.valid
+    assert rejected.issues == ("no_contact_points",)
+    assert accepted.valid
+    assert accepted.contact_count == 0
+
+
 def test_annotation_validator_rejects_unknown_landmark(tmp_path) -> None:
     payload = _payload(tmp_path)
     payload["frames"][0]["correspondences"][0]["label"] = "not_a_pitch_point"
@@ -122,6 +139,7 @@ def test_annotation_pack_extracts_uniform_frames_and_ui(tmp_path) -> None:
     assert payload["split"] == "validation"
     assert payload["image_size"] == [160, 90]
     assert payload["source"]["reported_frame_count"] == 20
+    assert payload["source"]["path_at_creation"] is None
     assert len(payload["frames"]) == 5
     assert [frame["frame_index"] for frame in payload["frames"]] == [0, 5, 10, 14, 19]
     assert all((output_path / frame["image_path"]).is_file() for frame in payload["frames"])
@@ -130,6 +148,7 @@ def test_annotation_pack_extracts_uniform_frames_and_ui(tmp_path) -> None:
         payload,
         root=output_path,
         require_annotated_frames=False,
+        require_contact_points=False,
     )
     assert empty_report.valid
 

@@ -142,7 +142,10 @@ def validate_annotation_payload(
     payload: Mapping[str, Any],
     root: str | Path | None = None,
     require_annotated_frames: bool = True,
+    require_contact_points: bool | None = None,
 ) -> AnnotationValidationReport:
+    if require_contact_points is None:
+        require_contact_points = require_annotated_frames
     if int(payload.get("version", 0)) != ANNOTATION_FORMAT_VERSION:
         raise AnnotationFormatError("unsupported annotation format version")
     image_size_raw = payload.get("image_size")
@@ -225,7 +228,7 @@ def validate_annotation_payload(
         )
     if require_annotated_frames and annotated_frames == 0:
         global_issues.append("no_annotated_frames")
-    if require_annotated_frames and total_contacts == 0:
+    if require_contact_points and total_contacts == 0:
         global_issues.append("no_contact_points")
     if any(frame.issues for frame in frame_reports):
         global_issues.append("frame_validation_failed")

@@ -177,6 +177,7 @@ __pycache__/
 *.py[cod]
 
 # Local workspace scratch dirs (not part of the project)
+/task_data/
 calibration/
 /assets/calibration/team/
 core/

@@ -132,6 +132,7 @@ def create_annotation_pack(
     split: str = "calibration",
     dimensions: PitchDimensions | None = None,
     overwrite: bool = False,
+    record_source_path: bool = False,
 ) -> Path:
     source_path = Path(source).expanduser().resolve()
     if not source_path.is_file():
@@ -199,7 +200,7 @@ def create_annotation_pack(
         "split": split,
         "source": {
             "name": source_path.name,
-            "path_at_creation": str(source_path),
+            "path_at_creation": str(source_path) if record_source_path else None,
             "fps": fps,
             "frame_count": total_frames,
             "reported_frame_count": reported_frames,
@@ -263,6 +264,11 @@ def main() -> None:
     parser.add_argument("--pitch-length-m", type=float, default=105.0)
     parser.add_argument("--pitch-width-m", type=float, default=68.0)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--record-source-path",
+        action="store_true",
+        help="include the absolute local video path in the manifest",
+    )
     arguments = parser.parse_args()
     dimensions = PitchDimensions(
         length_m=arguments.pitch_length_m,
@@ -277,6 +283,7 @@ def main() -> None:
         split=arguments.split,
         dimensions=dimensions,
         overwrite=arguments.overwrite,
+        record_source_path=arguments.record_source_path,
     )
     print(f"Created annotation pack: {manifest}")
 

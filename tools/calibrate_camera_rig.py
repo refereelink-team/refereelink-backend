@@ -26,7 +26,12 @@ def _anchors_from_manifest(
     balance: float,
 ) -> tuple[list[PanAnchor], LensCalibration, tuple[float, float]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    validate_annotation_payload(payload, root=path.parent, require_annotated_frames=False)
+    validate_annotation_payload(
+        payload,
+        root=path.parent,
+        require_annotated_frames=False,
+        require_contact_points=False,
+    )
     image_size = tuple(int(value) for value in payload["image_size"])
     pitch_model = PitchModel(pitch_dimensions_from_payload(payload))
     undistorter = LensUndistorter(lens, balance=balance)
