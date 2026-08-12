@@ -1,0 +1,71 @@
+{
+  "format_version": 1,
+  "assets": [
+    {
+      "id": "legacy-football-pitch-detection",
+      "kind": "model",
+      "source_url": "https://huggingface.co/martinjolif/yolo-football-pitch-detection",
+      "version": "unverified-local-checkpoint",
+      "license": "UNVERIFIED",
+      "data_use": "E0 compatibility baseline only",
+      "training_data": "Roboflow football pitch keypoint data; exact revision must be audited",
+      "allowed_in_runtime": false,
+      "notes": "The existing local checkpoint remains usable for research regression, but must not be distributed until its exact source, revision, and license are recorded."
+    },
+    {
+      "id": "pnlcalib",
+      "kind": "teacher_model",
+      "source_url": "https://github.com/mguti97/PnLCalib",
+      "version": "pin-required-before-benchmark",
+      "license": "GPL-2.0-only",
+      "data_use": "Primary accuracy teacher and offline pseudo-label generator",
+      "training_data": "SoccerNet-Calibration, with optional WC14/TS-WorldCup fine-tuning",
+      "allowed_in_runtime": false,
+      "notes": "Run in an isolated research environment and exchange only versioned cache files with the main project."
+    },
+    {
+      "id": "tvcalib",
+      "kind": "teacher_model",
+      "source_url": "https://github.com/MM4SPA/tvcalib",
+      "version": "pin-required-before-benchmark",
+      "license": "MIT",
+      "data_use": "Secondary teacher and camera-geometry baseline",
+      "training_data": "SoccerNet-Calibration semantic pitch markings",
+      "allowed_in_runtime": false,
+      "notes": "Runtime admission remains false until the checkpoint license and dependency port are independently verified."
+    },
+    {
+      "id": "soccernet-calibration-v3",
+      "kind": "dataset",
+      "source_url": "https://www.soccer-net.org/tasks/camera-calibration",
+      "version": "calibration-2023",
+      "license": "LicenseRef-SoccerNet-Research-Only",
+      "data_use": "Supervised training, validation, and research evaluation",
+      "training_data": "20,028 annotated broadcast images from 500 matches",
+      "allowed_in_runtime": false,
+      "notes": "Research/coursework only. Raw frames, annotations, and derived checkpoints are not commercial release assets."
+    },
+    {
+      "id": "wc14",
+      "kind": "dataset",
+      "source_url": "https://github.com/MM4SPA/tvcalib",
+      "version": "world-cup-2014-release",
+      "license": "UNVERIFIED",
+      "data_use": "External homography evaluation only until license audit completes",
+      "training_data": "World Cup 2014 broadcast frames and homographies",
+      "allowed_in_runtime": false,
+      "notes": "Do not train or redistribute before recording the original dataset terms."
+    },
+    {
+      "id": "ts-worldcup",
+      "kind": "dataset",
+      "source_url": "https://github.com/ericsujw/KpSFR",
+      "version": "ts-worldcup-release",
+      "license": "UNVERIFIED",
+      "data_use": "Temporal camera-registration evaluation only until license audit completes",
+      "training_data": "Broadcast soccer video sequences and field registration labels",
+      "allowed_in_runtime": false,
+      "notes": "Do not train or redistribute before recording the original dataset terms."
+    }
+  ]
+}

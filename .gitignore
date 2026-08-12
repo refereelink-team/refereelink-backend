@@ -178,6 +178,10 @@ __pycache__/
 
 # Local workspace scratch dirs (not part of the project)
 /task_data/
+/data/
+/external/
+/outputs/
+/teacher-cache/
 calibration/
 /assets/calibration/team/
 core/
