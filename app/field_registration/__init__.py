@@ -6,12 +6,24 @@ and deployment backends testable without loading model weights.
 """
 
 from app.field_registration.camera_model import CameraRigProfile
+from app.field_registration.broadcast_camera import (
+    BroadcastCameraEstimator,
+    BroadcastCameraParameters,
+    BroadcastCameraStateFilter,
+)
 from app.field_registration.initializer import (
     HomographyInitialization,
     HomographyInitializer,
     HomographyInitializerConfig,
 )
 from app.field_registration.lens import LensCalibration, LensModel, LensUndistorter
+from app.field_registration.offline import (
+    BidirectionalCameraSmoother,
+    OfflineCameraObservation,
+    OfflineSmoothingResult,
+    load_offline_smoothing_result,
+    save_offline_smoothing_result,
+)
 from app.field_registration.pitch_model import PitchDimensions, PitchModel, VenueProfile
 from app.field_registration.projection import PitchProjector
 from app.field_registration.rig_calibration import (
@@ -33,6 +45,9 @@ from app.field_registration.types import (
 
 __all__ = [
     "CameraRigProfile",
+    "BroadcastCameraEstimator",
+    "BroadcastCameraParameters",
+    "BroadcastCameraStateFilter",
     "CameraState",
     "CameraTrackingStatus",
     "FieldRegistrationFrame",
@@ -44,6 +59,11 @@ __all__ = [
     "LensCalibration",
     "LensModel",
     "LensUndistorter",
+    "BidirectionalCameraSmoother",
+    "OfflineCameraObservation",
+    "OfflineSmoothingResult",
+    "load_offline_smoothing_result",
+    "save_offline_smoothing_result",
     "LineObservation",
     "MeasurementTier",
     "PitchCoordinate",

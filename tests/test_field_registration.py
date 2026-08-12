@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from app.field_registration.camera_model import CameraRigProfile
+from app.field_registration.broadcast_camera import BroadcastCameraParameters
 from app.field_registration.contact_point import GroundContactPointSelector
 from app.field_registration.decode import decode_heatmap_peak, sample_pitch_segment
 from app.field_registration.geometry import transform_points
@@ -428,6 +429,57 @@ def test_broadcast_core_updates_homography_with_flow_without_rig() -> None:
     expected_image = transform_points(samples, expected)
     actual_image = transform_points(samples, second.camera_state.pitch_to_image)
     assert np.median(np.linalg.norm(actual_image - expected_image, axis=1)) < 1.0
+
+
+def test_broadcast_core_exposes_physical_camera_and_predicts_transform() -> None:
+    pitch_model = PitchModel()
+    camera = BroadcastCameraParameters(
+        np.asarray([-18.0, 30.0, 24.0]),
+        0.05,
+        0.31,
+        -0.02,
+        float(np.log(1120.0)),
+        (1280, 720),
+    )
+    pitch_points = pitch_model.grid(16, 11)
+    image_points = transform_points(pitch_points, camera.pitch_to_image_homography())
+    visible = (
+        (image_points[:, 0] > 0)
+        & (image_points[:, 0] < 1280)
+        & (image_points[:, 1] > 0)
+        & (image_points[:, 1] < 720)
+    )
+    observations = tuple(
+        PointObservation(str(index), tuple(image), tuple(pitch), 0.98)
+        for index, (image, pitch) in enumerate(
+            zip(image_points[visible], pitch_points[visible])
+        )
+    )
+    core = FieldRegistrationCore(
+        pitch_model,
+        StaticPerceptionBackend([PitchPerceptionOutput(points=observations)]),
+        config=FieldRegistrationConfig(
+            fps=25.0,
+            normal_semantic_interval=100,
+            stable_semantic_interval=100,
+            registration_mode=RegistrationMode.BROADCAST,
+        ),
+    )
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    first = core.process(frame, 0)
+    second = core.process(frame, 1)
+
+    assert first.camera_state.camera_model == "broadcast_tripod_pan_tilt_zoom"
+    assert first.camera_state.focal_px == pytest.approx(1120.0, rel=3e-3)
+    assert first.camera_state.camera_center_xyz_m == pytest.approx(
+        camera.camera_center_xyz_m, abs=0.15
+    )
+    assert first.camera_state.camera_parameter_covariance.shape == (7, 7)
+    assert second.camera_state.status is CameraTrackingStatus.PREDICTED
+    assert second.camera_state.camera_model == "broadcast_tripod_pan_tilt_zoom"
+    assert second.camera_state.pitch_to_image is not None
+    assert second.camera_state.measurement_tier is MeasurementTier.PREVIEW
 
 
 def test_broadcast_hard_cut_never_reuses_previous_homography() -> None:

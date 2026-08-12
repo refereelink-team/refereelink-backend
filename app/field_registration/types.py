@@ -113,6 +113,10 @@ class CameraState:
     roll_rad: float = float("nan")
     flow_inliers: int = 0
     projection_uncertainty: Optional[float] = None
+    camera_center_xyz_m: Optional[np.ndarray] = None
+    tilt_velocity_rad_s: float = 0.0
+    zoom_velocity_log_s: float = 0.0
+    camera_parameter_covariance: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
         covariance = np.asarray(self.covariance, dtype=np.float64)
@@ -137,6 +141,20 @@ class CameraState:
             or self.projection_uncertainty < 0.0
         ):
             raise ValueError("projection_uncertainty must be finite and non-negative")
+        if self.camera_center_xyz_m is not None:
+            center = np.asarray(self.camera_center_xyz_m, dtype=np.float64)
+            if center.shape != (3,) or not np.all(np.isfinite(center)):
+                raise ValueError("camera_center_xyz_m must be a finite xyz vector")
+            object.__setattr__(self, "camera_center_xyz_m", center)
+        if self.camera_parameter_covariance is not None:
+            parameters = np.asarray(
+                self.camera_parameter_covariance, dtype=np.float64
+            )
+            if parameters.shape != (7, 7) or not np.all(np.isfinite(parameters)):
+                raise ValueError(
+                    "camera_parameter_covariance must be a finite 7x7 matrix"
+                )
+            object.__setattr__(self, "camera_parameter_covariance", parameters)
         for name in ("image_to_pitch", "pitch_to_image"):
             value = getattr(self, name)
             if value is not None:

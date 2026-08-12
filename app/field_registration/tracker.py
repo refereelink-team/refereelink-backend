@@ -7,6 +7,11 @@ from typing import Optional
 
 import numpy as np
 
+from app.field_registration.broadcast_camera import (
+    BroadcastCameraEstimator,
+    BroadcastCameraParameters,
+    BroadcastCameraStateFilter,
+)
 from app.field_registration.camera_model import CameraRigProfile
 from app.field_registration.full_homography_refiner import (
     FullHomographyPointLineRefiner,
@@ -59,6 +64,8 @@ class FieldRegistrationCore:
         pan_filter: Optional[PanExtendedKalmanFilter] = None,
         full_homography_refiner: Optional[FullHomographyPointLineRefiner] = None,
         shot_detector: Optional[ShotBoundaryDetector] = None,
+        broadcast_camera_estimator: Optional[BroadcastCameraEstimator] = None,
+        broadcast_camera_filter: Optional[BroadcastCameraStateFilter] = None,
     ) -> None:
         self.pitch_model = pitch_model
         self.perception_backend = perception_backend
@@ -84,6 +91,12 @@ class FieldRegistrationCore:
             full_homography_refiner or FullHomographyPointLineRefiner()
         )
         self.shot_detector = shot_detector or ShotBoundaryDetector()
+        self.broadcast_camera_estimator = (
+            broadcast_camera_estimator or BroadcastCameraEstimator(pitch_model)
+        )
+        self.broadcast_camera_filter = (
+            broadcast_camera_filter or BroadcastCameraStateFilter()
+        )
         self.pan_refiner = (
             PanOnlyPointLineRefiner(rig_profile)
             if self.registration_mode is RegistrationMode.RIG_PAN
@@ -97,6 +110,7 @@ class FieldRegistrationCore:
         self._prediction_age = 0
         self._last_frame_index: Optional[int] = None
         self._shot_id = 0
+        self._shot_camera_center: Optional[np.ndarray] = None
         self.semantic_inference_count = 0
         self.flow_update_count = 0
         self.prediction_count = 0
@@ -121,6 +135,10 @@ class FieldRegistrationCore:
         self._last_semantic_frame = None
         self._prediction_age = 0
         self.pan_filter = PanExtendedKalmanFilter(self.pan_filter.config)
+        self.broadcast_camera_filter = BroadcastCameraStateFilter(
+            self.broadcast_camera_filter.config
+        )
+        self._shot_camera_center = None
 
     def _semantic_interval(self) -> int:
         state = self._last_state
@@ -241,6 +259,7 @@ class FieldRegistrationCore:
     def _broadcast_state_from_initialization(
         self,
         initialization: object,
+        image_size: tuple[int, int],
         status: CameraTrackingStatus,
         confidence: float,
         semantic_age: int,
@@ -263,11 +282,44 @@ class FieldRegistrationCore:
         uncertainty = initialization.p95_reprojection_error_px
         if p95_error is not None:
             uncertainty = max(float(uncertainty or 0.0), float(p95_error))
+        physical = self._update_broadcast_camera(
+            pitch_to_image,
+            image_size,
+            float(uncertainty or 2.0),
+        )
+        camera_model = "broadcast_planar_homography"
+        pan_rad = float("nan")
+        pan_velocity = 0.0
+        tilt_rad = float("nan")
+        roll_rad = float("nan")
+        focal_px = None
+        center = None
+        parameter_covariance = None
+        tilt_velocity = 0.0
+        zoom_velocity = 0.0
+        covariance = np.diag([1e6, 1e6])
+        if physical is not None:
+            pitch_to_image = physical.pitch_to_image_homography()
+            image_to_pitch = physical.image_to_pitch_homography()
+            camera_model = "broadcast_tripod_pan_tilt_zoom"
+            pan_rad = physical.pan_rad
+            tilt_rad = physical.tilt_rad
+            roll_rad = physical.roll_rad
+            focal_px = physical.focal_px
+            center = physical.camera_center_xyz_m.copy()
+            filter_state = self.broadcast_camera_filter.state
+            filter_covariance = self.broadcast_camera_filter.covariance
+            pan_velocity = float(filter_state[4])
+            tilt_velocity = float(filter_state[5])
+            zoom_velocity = float(filter_state[6])
+            covariance = filter_covariance[np.ix_([0, 4], [0, 4])]
+            parameter_covariance = filter_covariance.copy()
+            uncertainty = max(float(uncertainty or 0.0), physical.fit_p95_error_px)
         return CameraState(
             status=status,
-            pan_rad=float("nan"),
-            pan_velocity_rad_s=0.0,
-            covariance=np.diag([1e6, 1e6]),
+            pan_rad=pan_rad,
+            pan_velocity_rad_s=pan_velocity,
+            covariance=covariance,
             image_to_pitch=image_to_pitch,
             pitch_to_image=pitch_to_image,
             point_inliers=int(point_inliers),
@@ -280,11 +332,137 @@ class FieldRegistrationCore:
             registration_mode=self.registration_mode,
             measurement_tier=measurement_tier,
             shot_id=self._shot_id,
-            camera_model="broadcast_planar_homography",
+            camera_model=camera_model,
+            focal_px=focal_px,
+            tilt_rad=tilt_rad,
+            roll_rad=roll_rad,
             flow_inliers=flow_inliers,
             projection_uncertainty=(
                 float(uncertainty) if uncertainty is not None else None
             ),
+            camera_center_xyz_m=center,
+            tilt_velocity_rad_s=tilt_velocity,
+            zoom_velocity_log_s=zoom_velocity,
+            camera_parameter_covariance=parameter_covariance,
+        )
+
+    def _update_broadcast_camera(
+        self,
+        pitch_to_image: np.ndarray,
+        image_size: tuple[int, int],
+        reprojection_error_px: float,
+    ) -> Optional[BroadcastCameraParameters]:
+        """Factor a trusted H into one shot-local tripod camera observation."""
+
+        try:
+            if self._shot_camera_center is None:
+                measured = self.broadcast_camera_estimator.decompose(
+                    pitch_to_image, image_size
+                )
+                if (
+                    measured.fit_p95_error_px
+                    > self.broadcast_camera_estimator.config.maximum_physical_fit_p95_px
+                ):
+                    return None
+                self._shot_camera_center = measured.camera_center_xyz_m.copy()
+                self.broadcast_camera_filter.reset(measured.observation_vector)
+            else:
+                initial = (
+                    self.broadcast_camera_filter.parameters(
+                        self._shot_camera_center, image_size
+                    )
+                    if self.broadcast_camera_filter.initialized
+                    else None
+                )
+                measured = self.broadcast_camera_estimator.fit_with_fixed_center(
+                    pitch_to_image,
+                    image_size,
+                    self._shot_camera_center,
+                    initial,
+                )
+                if (
+                    measured.fit_p95_error_px
+                    > self.broadcast_camera_estimator.config.maximum_physical_fit_p95_px
+                ):
+                    return None
+                normalized_error = max(
+                    reprojection_error_px / max(image_size),
+                    5e-5,
+                )
+                variances = np.asarray(
+                    [
+                        normalized_error**2,
+                        normalized_error**2,
+                        normalized_error**2,
+                        (2.0 * normalized_error) ** 2,
+                    ],
+                    dtype=np.float64,
+                )
+                if not self.broadcast_camera_filter.update(
+                    measured.observation_vector, variances
+                ):
+                    return None
+            filtered = self.broadcast_camera_filter.parameters(
+                self._shot_camera_center,
+                image_size,
+            )
+            fitted = self.broadcast_camera_estimator.with_fit_error(
+                filtered, pitch_to_image
+            )
+            if (
+                fitted.fit_p95_error_px
+                > self.broadcast_camera_estimator.config.maximum_physical_fit_p95_px
+            ):
+                # Preserve the projective measurement for this frame instead
+                # of turning filter lag into a false SAFE physical matrix.
+                return None
+            return fitted
+        except (ValueError, np.linalg.LinAlgError, FloatingPointError):
+            return None
+
+    def _broadcast_prediction_state(
+        self,
+        confidence: float,
+        semantic_age: int,
+    ) -> Optional[CameraState]:
+        if (
+            self._shot_camera_center is None
+            or not self.broadcast_camera_filter.initialized
+            or self._previous_frame is None
+        ):
+            return None
+        image_size = (self._previous_frame.shape[1], self._previous_frame.shape[0])
+        try:
+            parameters = self.broadcast_camera_filter.parameters(
+                self._shot_camera_center, image_size
+            )
+            pitch_to_image = parameters.pitch_to_image_homography()
+            image_to_pitch = parameters.image_to_pitch_homography()
+        except (ValueError, np.linalg.LinAlgError):
+            return None
+        filter_state = self.broadcast_camera_filter.state
+        filter_covariance = self.broadcast_camera_filter.covariance
+        return CameraState(
+            status=CameraTrackingStatus.PREDICTED,
+            pan_rad=parameters.pan_rad,
+            pan_velocity_rad_s=float(filter_state[4]),
+            covariance=filter_covariance[np.ix_([0, 4], [0, 4])],
+            image_to_pitch=image_to_pitch,
+            pitch_to_image=pitch_to_image,
+            confidence=confidence,
+            age_since_semantic_update=semantic_age,
+            registration_mode=self.registration_mode,
+            measurement_tier=MeasurementTier.PREVIEW,
+            shot_id=self._shot_id,
+            camera_model="broadcast_tripod_pan_tilt_zoom",
+            focal_px=parameters.focal_px,
+            tilt_rad=parameters.tilt_rad,
+            roll_rad=parameters.roll_rad,
+            projection_uncertainty=float(np.trace(filter_covariance[:4, :4])),
+            camera_center_xyz_m=parameters.camera_center_xyz_m,
+            tilt_velocity_rad_s=float(filter_state[5]),
+            zoom_velocity_log_s=float(filter_state[6]),
+            camera_parameter_covariance=filter_covariance.copy(),
         )
 
     def _semantic_state(
@@ -363,6 +541,7 @@ class FieldRegistrationCore:
                 confidence = max(confidence, candidate.confidence)
         return self._broadcast_state_from_initialization(
             initialization,
+            image_size,
             status,
             confidence,
             0,
@@ -429,6 +608,7 @@ class FieldRegistrationCore:
         self.flow_update_count += 1
         return self._broadcast_state_from_initialization(
             initialization,
+            image_size,
             CameraTrackingStatus.TRACKED,
             confidence,
             semantic_age,
@@ -461,6 +641,11 @@ class FieldRegistrationCore:
 
         if self.registration_mode is RegistrationMode.RIG_PAN:
             self.pan_filter.predict(1.0 / self.config.fps)
+        elif (
+            self.registration_mode is RegistrationMode.BROADCAST
+            and self.broadcast_camera_filter.initialized
+        ):
+            self.broadcast_camera_filter.predict(1.0 / self.config.fps)
         flow, flow_observations = self._flow_result(frame)
         state: Optional[CameraState] = None
         output = PitchPerceptionOutput()
@@ -548,7 +733,14 @@ class FieldRegistrationCore:
                         MeasurementTier.PREVIEW,
                     )
                 else:
-                    state = CameraState(
+                    semantic_age = (
+                        frame_index - self._last_semantic_frame
+                        if self._last_semantic_frame is not None
+                        else self._prediction_age
+                    )
+                    state = self._broadcast_prediction_state(
+                        confidence, semantic_age
+                    ) or CameraState(
                         status=CameraTrackingStatus.PREDICTED,
                         pan_rad=self._last_state.pan_rad,
                         pan_velocity_rad_s=0.0,
@@ -556,11 +748,7 @@ class FieldRegistrationCore:
                         image_to_pitch=self._last_state.image_to_pitch,
                         pitch_to_image=self._last_state.pitch_to_image,
                         confidence=confidence,
-                        age_since_semantic_update=(
-                            frame_index - self._last_semantic_frame
-                            if self._last_semantic_frame is not None
-                            else self._prediction_age
-                        ),
+                        age_since_semantic_update=semantic_age,
                         registration_mode=self.registration_mode,
                         measurement_tier=MeasurementTier.PREVIEW,
                         shot_id=self._shot_id,
