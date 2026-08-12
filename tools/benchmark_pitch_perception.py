@@ -14,6 +14,8 @@ import torch
 from app.field_registration.models import build_pitch_perception_model
 from app.field_registration.perception import PitchPerceptionVocabulary
 from app.field_registration.pitch_model import PitchModel
+from experiments.field_registration.research_assets import sha256_file
+from tools.export_pitch_perception import load_trained_model
 
 
 @torch.inference_mode()
@@ -26,16 +28,33 @@ def benchmark_model(
     warmup_iterations: int,
     measured_iterations: int,
     use_fp16: bool,
+    checkpoint: Path | None = None,
 ) -> dict[str, object]:
     device = torch.device(device_name)
     vocabulary = PitchPerceptionVocabulary.from_pitch_model(PitchModel())
     try:
-        model = build_pitch_perception_model(
-            architecture,
-            vocabulary.semantic_class_count,
-            len(vocabulary.landmark_labels),
-            pretrained=False,
-        ).eval().to(device)
+        if checkpoint is None:
+            model = build_pitch_perception_model(
+                architecture,
+                vocabulary.semantic_class_count,
+                len(vocabulary.landmark_labels),
+                pretrained=False,
+            ).eval().to(device)
+            weights = "random_latency_only"
+            checkpoint_validation = None
+        else:
+            model, payload = load_trained_model(checkpoint, device)
+            checkpoint_architecture = str(payload["architecture"])
+            if checkpoint_architecture != architecture:
+                raise ValueError(
+                    f"checkpoint architecture {checkpoint_architecture!r} does not "
+                    f"match requested architecture {architecture!r}"
+                )
+            weights = {
+                "checkpoint": str(checkpoint),
+                "sha256": sha256_file(checkpoint),
+            }
+            checkpoint_validation = payload.get("validation")
     except ValueError as error:
         return {
             "architecture": architecture,
@@ -89,7 +108,8 @@ def benchmark_model(
             else None
         ),
         "output_shapes": [list(output.shape) for output in outputs],
-        "weights": "random_latency_only",
+        "weights": weights,
+        "checkpoint_validation": checkpoint_validation,
         "accuracy_valid": False,
     }
 
@@ -113,8 +133,11 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--fp32", action="store_true")
+    parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
+    if arguments.checkpoint is not None and len(arguments.architectures) != 1:
+        parser.error("--checkpoint requires exactly one architecture")
     rows = [
         benchmark_model(
             architecture,
@@ -124,6 +147,7 @@ def main() -> None:
             warmup_iterations=arguments.warmup,
             measured_iterations=arguments.iterations,
             use_fp16=not arguments.fp32,
+            checkpoint=arguments.checkpoint,
         )
         for architecture in arguments.architectures
     ]

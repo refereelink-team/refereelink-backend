@@ -22,7 +22,11 @@ from app.field_registration.geometry import transform_points
 from app.field_registration.perception import PitchPerceptionVocabulary
 from app.field_registration.pitch_model import PitchModel
 from experiments.field_registration.dataset import PitchRegistrationDataset
-from experiments.field_registration.teacher_cache import load_teacher_frame
+from experiments.field_registration.augmentation import (
+    PitchTrainingAugmenter,
+    morph_semantic_classes,
+)
+from experiments.field_registration.teacher_cache import TeacherFrame, load_teacher_frame
 
 
 SOCCERNET_RAW_LABELS: tuple[str, ...] = (
@@ -385,6 +389,97 @@ def teacher_landmarks(
     }
 
 
+def rasterize_teacher_targets(
+    teacher: TeacherFrame,
+    vocabulary: PitchPerceptionVocabulary,
+    pitch_model: PitchModel,
+    source_to_input: np.ndarray,
+    input_size: tuple[int, int],
+    output_stride: int,
+) -> dict[str, torch.Tensor]:
+    """Convert sparse teacher geometry into calibrated soft distillation maps."""
+
+    input_width, input_height = input_size
+    semantic = np.zeros(
+        (vocabulary.semantic_class_count, input_height, input_width),
+        dtype=np.float32,
+    )
+    semantic_index = {
+        label: index
+        for index, label in enumerate(vocabulary.semantic_labels, start=1)
+    }
+    for observation in teacher.lines:
+        class_index = semantic_index.get(observation.label)
+        if class_index is None:
+            continue
+        transformed = transform_points(observation.image_points, source_to_input)
+        transformed = transformed[np.all(np.isfinite(transformed), axis=1)]
+        if transformed.shape[0] < 2:
+            continue
+        mask = np.zeros((input_height, input_width), dtype=np.uint8)
+        cv2.polylines(
+            mask,
+            [np.rint(transformed).astype(np.int32).reshape(-1, 1, 2)],
+            isClosed=observation.label == "centre_circle",
+            color=255,
+            thickness=5,
+            lineType=cv2.LINE_AA,
+        )
+        softened = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (0, 0), 1.2)
+        semantic[class_index] = np.maximum(
+            semantic[class_index],
+            softened * observation.confidence,
+        )
+    foreground = np.max(semantic[1:], axis=0)
+    semantic[0] = np.clip(1.0 - foreground, 0.0, 1.0)
+    semantic /= np.sum(semantic, axis=0, keepdims=True).clip(min=1e-6)
+    semantic_mask = (foreground >= 0.02).astype(np.float32)
+
+    output_width = input_width // output_stride
+    output_height = input_height // output_stride
+    landmark_count = len(vocabulary.landmark_labels)
+    heatmaps = np.zeros((landmark_count, output_height, output_width), dtype=np.float32)
+    visibility = np.zeros(landmark_count, dtype=np.float32)
+    point_map = {
+        observation.label: (np.asarray(observation.image_xy), observation.confidence)
+        for observation in teacher.points
+        if observation.label in vocabulary.landmark_labels
+    }
+    if teacher.image_to_pitch is not None and teacher.confidence >= 0.65:
+        pitch_to_image = np.linalg.inv(teacher.image_to_pitch)
+        known = pitch_model.landmarks | pitch_model.point_landmarks
+        projected = transform_points(np.asarray(list(known.values())), pitch_to_image)
+        for label, point in zip(known, projected):
+            if np.all(np.isfinite(point)):
+                point_map.setdefault(label, (point, teacher.confidence))
+    for landmark_index, label in enumerate(vocabulary.landmark_labels):
+        item = point_map.get(label)
+        if item is None:
+            continue
+        point, confidence = item
+        transformed = transform_points(
+            np.asarray([point], dtype=np.float64), source_to_input
+        )[0]
+        output_xy = transformed / output_stride
+        if not (
+            np.all(np.isfinite(output_xy))
+            and 0.0 <= output_xy[0] < output_width
+            and 0.0 <= output_xy[1] < output_height
+        ):
+            continue
+        PitchRegistrationDataset._draw_gaussian(
+            heatmaps[landmark_index], tuple(output_xy), sigma=1.5
+        )
+        heatmaps[landmark_index] *= float(confidence)
+        visibility[landmark_index] = float(confidence)
+    return {
+        "teacher_semantic_probabilities": torch.from_numpy(semantic),
+        "teacher_semantic_mask": torch.from_numpy(semantic_mask),
+        "teacher_landmark_heatmaps": torch.from_numpy(heatmaps),
+        "teacher_landmark_visibility": torch.from_numpy(visibility),
+    }
+
+
 def assert_sequence_disjoint(indices: Sequence[SoccerNetIndex]) -> None:
     owners: dict[str, str] = {}
     for index in indices:
@@ -408,6 +503,7 @@ class SoccerNetCalibrationDataset(Dataset[dict[str, torch.Tensor]]):
         output_stride: int = 4,
         line_width_px: int = 3,
         teacher_cache_root: str | Path | None = None,
+        augmenter: PitchTrainingAugmenter | None = None,
     ) -> None:
         self.index = SoccerNetIndex.load(index_path)
         if self.index.split != expected_split:
@@ -424,6 +520,7 @@ class SoccerNetCalibrationDataset(Dataset[dict[str, torch.Tensor]]):
         self.teacher_cache_root = (
             Path(teacher_cache_root) if teacher_cache_root is not None else None
         )
+        self.augmenter = augmenter
         self.pitch_model = PitchModel()
         self.vocabulary = PitchPerceptionVocabulary.from_pitch_model(self.pitch_model)
 
@@ -451,15 +548,34 @@ class SoccerNetCalibrationDataset(Dataset[dict[str, torch.Tensor]]):
         polylines = deployment_polylines(raw)
         landmarks = derive_visible_landmarks(polylines, frame.image_size, self.pitch_model)
         teacher_path = self._teacher_path(frame)
+        teacher = load_teacher_frame(teacher_path) if teacher_path is not None else None
         if teacher_path is not None:
             landmarks.update(
                 teacher_landmarks(teacher_path, self.pitch_model, frame.image_size)
             )
 
+        morphology = 0
+        source_to_augmented = np.eye(3, dtype=np.float64)
+        if self.augmenter is not None:
+            augmented = self.augmenter(image)
+            image = augmented.image
+            transform = augmented.source_to_augmented
+            source_to_augmented = transform
+            polylines = {
+                label: transform_points(points, transform)
+                for label, points in polylines.items()
+            }
+            landmarks = {
+                label: transform_points(np.asarray([point]), transform)[0]
+                for label, point in landmarks.items()
+            }
+            morphology = augmented.line_morphology
+
         input_width, input_height = self.input_size
         scale_xy = np.asarray(
             [input_width / source_width, input_height / source_height], dtype=np.float64
         )
+        source_to_input = np.diag((scale_xy[0], scale_xy[1], 1.0)) @ source_to_augmented
         semantic_target = np.zeros((input_height, input_width), dtype=np.int32)
         for class_index, label in enumerate(self.vocabulary.semantic_labels, start=1):
             points = polylines.get(label)
@@ -474,6 +590,7 @@ class SoccerNetCalibrationDataset(Dataset[dict[str, torch.Tensor]]):
                 thickness=self.line_width_px,
                 lineType=cv2.LINE_8,
             )
+        semantic_target = morph_semantic_classes(semantic_target, morphology)
 
         output_width = input_width // self.output_stride
         output_height = input_height // self.output_stride
@@ -508,7 +625,7 @@ class SoccerNetCalibrationDataset(Dataset[dict[str, torch.Tensor]]):
         image_tensor = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
         mean = torch.tensor((0.485, 0.456, 0.406)).view(3, 1, 1)
         std = torch.tensor((0.229, 0.224, 0.225)).view(3, 1, 1)
-        return {
+        sample = {
             "image": (image_tensor - mean) / std,
             "semantic_target": torch.from_numpy(semantic_target).long(),
             "landmark_heatmaps": torch.from_numpy(heatmaps),
@@ -519,3 +636,15 @@ class SoccerNetCalibrationDataset(Dataset[dict[str, torch.Tensor]]):
             "landmark_visibility": torch.from_numpy(visibility),
             "frame_index": torch.tensor(frame.frame_index, dtype=torch.int64),
         }
+        if teacher is not None:
+            sample.update(
+                rasterize_teacher_targets(
+                    teacher,
+                    self.vocabulary,
+                    self.pitch_model,
+                    source_to_input,
+                    self.input_size,
+                    self.output_stride,
+                )
+            )
+        return sample

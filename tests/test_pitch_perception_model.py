@@ -4,6 +4,7 @@ import json
 
 import cv2
 import numpy as np
+import pytest
 import torch
 
 from app.field_registration.models import MobileNetV3PitchPerception
@@ -11,7 +12,17 @@ from app.field_registration.perception import PitchPerceptionVocabulary
 from app.field_registration.pitch_model import PitchModel
 from app.field_registration.torch_perception import TorchPitchPerceptionBackend
 from experiments.field_registration.dataset import PitchRegistrationDataset
-from experiments.field_registration.losses import dual_head_loss
+from experiments.field_registration.augmentation import (
+    PitchAugmentationConfig,
+    PitchTrainingAugmenter,
+    morph_semantic_classes,
+)
+from experiments.field_registration.losses import dual_head_loss, heatmap_focal_loss
+from experiments.field_registration.soccernet import rasterize_teacher_targets
+from experiments.field_registration.teacher_cache import TeacherFrame
+from experiments.field_registration.teacher_dataset import TeacherDistillationDataset
+from tools.create_pitch_training_smoke_fixture import create_fixture
+from app.field_registration.types import LineObservation, PointObservation
 
 
 def test_pitch_perception_vocabulary_is_stable_and_semantic() -> None:
@@ -99,6 +110,146 @@ def test_manifest_dataset_generates_line_and_landmark_targets(tmp_path) -> None:
     assert sample["landmark_heatmaps"].shape == (33, 16, 32)
     assert float(sample["landmark_heatmaps"].max()) == 1.0
     assert int(sample["offset_mask"].sum()) > 0
+    assert 0 < int(sample["landmark_visibility"].sum()) <= 33
+
+
+def test_invisible_landmark_channels_do_not_contribute_focal_loss() -> None:
+    targets = torch.zeros(1, 2, 8, 8)
+    targets[0, 0, 3, 4] = 1.0
+    visibility = torch.tensor([[1.0, 0.0]])
+    first = torch.zeros_like(targets)
+    second = first.clone()
+    second[:, 1] = 50.0
+
+    first_loss = heatmap_focal_loss(first, targets, visibility)
+    second_loss = heatmap_focal_loss(second, targets, visibility)
+
+    assert second_loss == pytest.approx(float(first_loss), abs=1e-7)
+
+
+def test_geometry_augmentation_transform_matches_visible_marker() -> None:
+    image = np.zeros((120, 200, 3), dtype=np.uint8)
+    marker = np.asarray([120.0, 70.0])
+    cv2.circle(image, tuple(marker.astype(int)), 5, (255, 255, 255), -1)
+    augmenter = PitchTrainingAugmenter(
+        PitchAugmentationConfig(
+            brightness_range=(1.0, 1.0),
+            gamma_range=(1.0, 1.0),
+            shadow_probability=0.0,
+            blur_probability=0.0,
+            jpeg_probability=0.0,
+            occlusion_probability=0.0,
+        ),
+        seed=13,
+    )
+
+    result = augmenter(image)
+    transformed = cv2.perspectiveTransform(
+        marker.reshape(1, 1, 2), result.source_to_augmented
+    ).reshape(2)
+    grayscale = cv2.cvtColor(result.image, cv2.COLOR_BGR2GRAY)
+    marker_pixels = np.column_stack(np.nonzero(grayscale >= 200))[:, ::-1]
+    observed_centre = np.mean(marker_pixels, axis=0)
+
+    assert observed_centre == pytest.approx(tuple(transformed), abs=1.5)
+
+
+def test_semantic_morphology_preserves_class_identity() -> None:
+    target = np.zeros((20, 20), dtype=np.int32)
+    target[5:15, 4] = 1
+    target[5:15, 15] = 2
+
+    dilated = morph_semantic_classes(target, 1)
+
+    assert set(np.unique(dilated)) == {0, 1, 2}
+    assert np.count_nonzero(dilated == 1) > np.count_nonzero(target == 1)
+
+
+def test_teacher_targets_and_distillation_loss_are_finite() -> None:
+    pitch_model = PitchModel()
+    vocabulary = PitchPerceptionVocabulary.from_pitch_model(pitch_model)
+    halfway_pitch = pitch_model.semantic_elements()["halfway_line"]
+    halfway_image = halfway_pitch * np.asarray([2.0, 2.0]) + np.asarray([20.0, 10.0])
+    teacher = TeacherFrame(
+        teacher_id="synthetic",
+        teacher_version="1",
+        source_id="frame",
+        frame_index=0,
+        image_size=(256, 160),
+        confidence=0.9,
+        points=(
+            PointObservation(
+                "centre_spot",
+                (125.0, 78.0),
+                pitch_model.point_landmarks["centre_spot"],
+                confidence=0.9,
+            ),
+        ),
+        lines=(
+            LineObservation(
+                "halfway_line",
+                halfway_image,
+                halfway_pitch,
+                confidence=0.9,
+            ),
+        ),
+    )
+    teacher_targets = rasterize_teacher_targets(
+        teacher,
+        vocabulary,
+        pitch_model,
+        np.eye(3),
+        (256, 160),
+        4,
+    )
+    outputs = (
+        torch.zeros(1, 21, 160, 256),
+        torch.zeros(1, 33, 40, 64),
+        torch.zeros(1, 66, 40, 64),
+    )
+    batch = {
+        "semantic_target": torch.zeros(1, 160, 256, dtype=torch.long),
+        "landmark_heatmaps": torch.zeros(1, 33, 40, 64),
+        "landmark_offsets": torch.zeros(1, 66, 40, 64),
+        "offset_mask": torch.zeros(1, 33, 40, 64),
+        "landmark_visibility": torch.zeros(1, 33),
+    }
+    batch.update({key: value.unsqueeze(0) for key, value in teacher_targets.items()})
+
+    loss, components = dual_head_loss(
+        outputs,
+        batch,
+        semantic_weight=0.0,
+        semantic_dice_weight=0.0,
+        heatmap_weight=0.0,
+        offset_weight=0.0,
+        semantic_distillation_weight=1.0,
+        landmark_distillation_weight=1.0,
+    )
+
+    assert torch.isfinite(loss)
+    assert components["semantic_distillation"] > 0.0
+    assert components["landmark_distillation"] > 0.0
+
+
+def test_three_phase_smoke_fixture_loads_all_datasets(tmp_path) -> None:
+    paths = create_fixture(tmp_path)
+
+    supervised = PitchRegistrationDataset(
+        [paths["train_manifest"]], expected_split="train", input_size=(128, 64)
+    )
+    distillation = TeacherDistillationDataset(
+        paths["distillation_index"],
+        expected_split="distillation",
+        input_size=(128, 64),
+    )
+    domain = TeacherDistillationDataset(
+        paths["domain_index"], expected_split="domain", input_size=(128, 64)
+    )
+
+    assert len(supervised) == 2
+    assert distillation[0]["teacher_semantic_mask"].sum() > 0
+    assert domain[0]["teacher_landmark_visibility"].sum() > 0
 
 
 def test_torch_backend_decodes_semantic_line_and_subpixel_offset() -> None:

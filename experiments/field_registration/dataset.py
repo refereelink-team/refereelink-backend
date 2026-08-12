@@ -20,6 +20,10 @@ from app.field_registration.annotations import (
 from app.field_registration.geometry import transform_points
 from app.field_registration.perception import PitchPerceptionVocabulary
 from app.field_registration.pitch_model import PitchModel
+from experiments.field_registration.augmentation import (
+    PitchTrainingAugmenter,
+    morph_semantic_classes,
+)
 
 
 class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
@@ -34,6 +38,7 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
         output_stride: int = 4,
         line_width_px: int = 3,
         photometric_transform: Callable[[np.ndarray], np.ndarray] | None = None,
+        augmenter: PitchTrainingAugmenter | None = None,
     ) -> None:
         width, height = input_size
         if width % 32 or height % 32:
@@ -44,6 +49,7 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
         self.output_stride = int(output_stride)
         self.line_width_px = int(line_width_px)
         self.photometric_transform = photometric_transform
+        self.augmenter = augmenter
         self.samples: list[tuple[Path, dict, PitchModel, np.ndarray]] = []
         self.vocabulary: PitchPerceptionVocabulary | None = None
         source_names: set[str] = set()
@@ -122,6 +128,12 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
         input_width, input_height = self.input_size
         if self.photometric_transform is not None:
             image = self.photometric_transform(image)
+        morphology = 0
+        if self.augmenter is not None:
+            augmented = self.augmenter(image)
+            image = augmented.image
+            pitch_to_image = augmented.source_to_augmented @ pitch_to_image
+            morphology = augmented.line_morphology
         resized = cv2.resize(image, self.input_size, interpolation=cv2.INTER_LINEAR)
         scale = np.array(
             [
@@ -151,6 +163,7 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
                     thickness=max(1, self.line_width_px),
                     lineType=cv2.LINE_8,
                 )
+        semantic_target = morph_semantic_classes(semantic_target, morphology)
 
         output_width = input_width // self.output_stride
         output_height = input_height // self.output_stride
@@ -192,5 +205,10 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
                 landmark_count * 2, output_height, output_width
             ),
             "offset_mask": torch.from_numpy(offset_mask),
+            "landmark_visibility": torch.from_numpy(
+                (offset_mask.reshape(landmark_count, -1).max(axis=1) > 0).astype(
+                    np.float32
+                )
+            ),
             "frame_index": torch.tensor(int(frame["frame_index"]), dtype=torch.int64),
         }
