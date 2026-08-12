@@ -10,6 +10,7 @@ from app.field_registration.camera_model import CameraRigProfile
 from app.field_registration.contact_point import GroundContactPointSelector
 from app.field_registration.decode import decode_heatmap_peak, sample_pitch_segment
 from app.field_registration.geometry import transform_points
+from app.field_registration.full_homography_refiner import FullHomographyPointLineRefiner
 from app.field_registration.initializer import HomographyInitializer
 from app.field_registration.lens import LensCalibration, LensCalibrationError, LensModel, LensUndistorter
 from app.field_registration.metrics import evaluate_registration, template_jitter_px
@@ -20,12 +21,15 @@ from app.field_registration.pitch_model import PitchDimensions, PitchModel, Venu
 from app.field_registration.point_line_refiner import PanOnlyPointLineRefiner
 from app.field_registration.projection import PitchProjector
 from app.field_registration.rig_calibration import PanAnchor, calibrate_fixed_pan_rig
+from app.field_registration.shot import ShotBoundaryDetector
 from app.field_registration.tracker import FieldRegistrationConfig, FieldRegistrationCore
 from app.field_registration.types import (
     CameraState,
     CameraTrackingStatus,
     LineObservation,
+    MeasurementTier,
     PointObservation,
+    RegistrationMode,
 )
 
 
@@ -355,6 +359,170 @@ def test_field_registration_core_relocalizes_then_expires_prediction() -> None:
     assert third.camera_state.status is CameraTrackingStatus.PREDICTED
     assert fourth.camera_state.status is CameraTrackingStatus.LOST
     assert fourth.camera_state.image_to_pitch is None
+
+
+def _broadcast_fixture() -> tuple[np.ndarray, tuple[PointObservation, ...], np.ndarray]:
+    pitch_model = PitchModel()
+    pitch_to_image = np.array(
+        [[5.2, 0.35, 42.0], [0.15, 4.0, 44.0], [0.0008, 0.0012, 1.0]],
+        dtype=np.float64,
+    )
+    pitch_points = pitch_model.grid(10, 8)
+    image_points = transform_points(pitch_points, pitch_to_image)
+    visible = (
+        (image_points[:, 0] > 8)
+        & (image_points[:, 0] < 632)
+        & (image_points[:, 1] > 8)
+        & (image_points[:, 1] < 352)
+    )
+    observations = tuple(
+        PointObservation(str(index), tuple(image), tuple(pitch), 0.98)
+        for index, (image, pitch) in enumerate(
+            zip(image_points[visible], pitch_points[visible])
+        )
+    )
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    frame[:] = (40, 105, 35)
+    for point in image_points[visible].astype(np.int32):
+        cv2.drawMarker(
+            frame,
+            tuple(point),
+            (240, 240, 240),
+            cv2.MARKER_CROSS,
+            8,
+            2,
+        )
+    rng = np.random.default_rng(8)
+    for point in rng.integers((45, 48), (590, 330), size=(180, 2)):
+        cv2.circle(frame, tuple(point), 2, (65, 145, 50), -1)
+    return frame, observations, pitch_to_image
+
+
+def test_broadcast_core_updates_homography_with_flow_without_rig() -> None:
+    first_frame, observations, pitch_to_image = _broadcast_fixture()
+    translation = np.array(
+        [[1.0, 0.0, 5.0], [0.0, 1.0, 3.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    second_frame = cv2.warpPerspective(first_frame, translation, (640, 360))
+    core = FieldRegistrationCore(
+        PitchModel(),
+        StaticPerceptionBackend([PitchPerceptionOutput(points=observations)]),
+        config=FieldRegistrationConfig(
+            fps=25.0,
+            normal_semantic_interval=100,
+            stable_semantic_interval=100,
+            registration_mode=RegistrationMode.BROADCAST,
+        ),
+    )
+
+    first = core.process(first_frame, 0)
+    second = core.process(second_frame, 1)
+
+    assert first.camera_state.status is CameraTrackingStatus.RELOCALIZED
+    assert second.camera_state.status is CameraTrackingStatus.TRACKED
+    assert second.camera_state.measurement_tier is MeasurementTier.SAFE
+    assert second.camera_state.flow_inliers >= core.config.minimum_flow_tracks
+    expected = translation @ pitch_to_image
+    samples = PitchModel().grid(7, 5)
+    expected_image = transform_points(samples, expected)
+    actual_image = transform_points(samples, second.camera_state.pitch_to_image)
+    assert np.median(np.linalg.norm(actual_image - expected_image, axis=1)) < 1.0
+
+
+def test_broadcast_hard_cut_never_reuses_previous_homography() -> None:
+    first_frame, observations, _ = _broadcast_fixture()
+    cut_frame = np.zeros_like(first_frame)
+    cut_frame[:] = (20, 20, 220)
+    core = FieldRegistrationCore(
+        PitchModel(),
+        StaticPerceptionBackend(
+            [PitchPerceptionOutput(points=observations), PitchPerceptionOutput()]
+        ),
+        config=FieldRegistrationConfig(
+            normal_semantic_interval=100,
+            stable_semantic_interval=100,
+            registration_mode=RegistrationMode.BROADCAST,
+        ),
+    )
+
+    first = core.process(first_frame, 0)
+    second = core.process(cut_frame, 1)
+
+    assert first.camera_state.image_to_pitch is not None
+    assert second.camera_state.status is CameraTrackingStatus.LOST
+    assert second.camera_state.measurement_tier is MeasurementTier.UNAVAILABLE
+    assert second.camera_state.image_to_pitch is None
+    assert second.camera_state.shot_id == 1
+    assert second.diagnostics["shot_cut"] == 1
+
+
+def test_full_homography_point_line_refiner_reduces_reprojection_error() -> None:
+    rig = _rig()
+    truth = rig.pitch_to_image_homography(0.09)
+    pitch_points = PitchModel().grid(8, 6)
+    image_points = transform_points(pitch_points, truth)
+    visible = (
+        (image_points[:, 0] > 0)
+        & (image_points[:, 0] < 1280)
+        & (image_points[:, 1] > 0)
+        & (image_points[:, 1] < 720)
+    )
+    points = tuple(
+        PointObservation(str(index), tuple(image), tuple(pitch), 0.95)
+        for index, (image, pitch) in enumerate(
+            zip(image_points[visible], pitch_points[visible])
+        )
+    )
+    line_pitch = sample_pitch_segment((52.5, 0.0), (52.5, 68.0), 80)
+    lines = (
+        LineObservation(
+            "halfway_line",
+            transform_points(line_pitch, truth),
+            line_pitch,
+            0.95,
+        ),
+    )
+    perturbation = np.array(
+        [[1.0, 0.0, 7.0], [0.0, 1.0, -5.0], [0.0, 0.0, 1.0]]
+    )
+    initial = perturbation @ truth
+    before = np.median(
+        np.linalg.norm(transform_points(pitch_points[visible], initial) - image_points[visible], axis=1)
+    )
+
+    result = FullHomographyPointLineRefiner().refine(
+        initial,
+        points,
+        lines,
+        (1280, 720),
+    )
+
+    assert result.success, result.rejection_reason
+    after = np.median(
+        np.linalg.norm(
+            transform_points(pitch_points[visible], result.pitch_to_image)
+            - image_points[visible],
+            axis=1,
+        )
+    )
+    assert after < before * 0.2
+
+
+def test_shot_detector_ignores_small_motion_and_detects_hard_cut() -> None:
+    first_frame, _, _ = _broadcast_fixture()
+    moved = cv2.warpAffine(
+        first_frame,
+        np.float32([[1.0, 0.0, 2.0], [0.0, 1.0, 1.0]]),
+        (640, 360),
+    )
+    cut = np.zeros_like(first_frame)
+    cut[:] = (180, 30, 30)
+    detector = ShotBoundaryDetector()
+
+    assert not detector.update(first_frame).is_cut
+    assert not detector.update(moved).is_cut
+    assert detector.update(cut).is_cut
 
 
 def test_multi_anchor_rig_calibration_recovers_fixed_camera_and_relative_pan() -> None:

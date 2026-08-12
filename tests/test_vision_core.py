@@ -11,7 +11,12 @@ from app.geometry.pitch_projection import PitchProjectionResult
 from app.field_registration.perception import PitchPerceptionOutput, StaticPerceptionBackend
 from app.field_registration.pitch_model import PitchDimensions, PitchModel
 from app.field_registration.tracker import FieldRegistrationCore
-from app.field_registration.types import CameraState, CameraTrackingStatus, PointObservation
+from app.field_registration.types import (
+    CameraState,
+    CameraTrackingStatus,
+    PointObservation,
+    RegistrationMode,
+)
 from app.vision.core import VisionCore
 
 
@@ -211,6 +216,32 @@ def test_camera_motion_does_not_reuse_old_homography_when_refresh_fails() -> Non
     assert moved.projection.homography_status == "unavailable"
     assert projection_engine.invalidations == 1
     assert np.isnan(moved.field_xy).all()
+
+
+def test_field_registration_mode_preserves_legacy_flag_mapping() -> None:
+    legacy = VisionCore(
+        undistorter=_IdentityUndistorter(),
+        tracker=_Tracker(),
+        enable_field_registration_v2=False,
+    )
+    broadcast = VisionCore(
+        undistorter=_IdentityUndistorter(),
+        tracker=_Tracker(),
+        enable_field_registration_v2=True,
+    )
+    explicit_legacy = VisionCore(
+        undistorter=_IdentityUndistorter(),
+        tracker=_Tracker(),
+        enable_field_registration_v2=True,
+        field_registration_mode="legacy",
+    )
+
+    assert legacy.field_registration_mode is RegistrationMode.LEGACY
+    assert not legacy.enable_field_registration_v2
+    assert broadcast.field_registration_mode is RegistrationMode.BROADCAST
+    assert broadcast.enable_field_registration_v2
+    assert explicit_legacy.field_registration_mode is RegistrationMode.LEGACY
+    assert not explicit_legacy.enable_field_registration_v2
 
 
 def test_v2_field_registration_integrates_without_changing_legacy_projection_units() -> None:

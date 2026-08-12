@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -39,6 +39,9 @@ class PipelineStartPayload(BaseModel):
     camera_calibration_path: Optional[str] = None
     camera_rig_profile_path: Optional[str] = None
     enable_field_registration_v2: Optional[bool] = None
+    field_registration_mode: Optional[
+        Literal["legacy", "broadcast", "rig_pan"]
+    ] = None
     enable_undistortion: Optional[bool] = None
     calibration_alpha: Optional[float] = None
     pitch_detection_interval: Optional[int] = None
@@ -93,6 +96,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.camera_calibration_path,
             payload.camera_rig_profile_path,
             payload.enable_field_registration_v2,
+            payload.field_registration_mode,
             payload.enable_undistortion,
             payload.calibration_alpha,
             payload.pitch_detection_interval,
@@ -135,6 +139,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.camera_calibration_path is None
         and payload.camera_rig_profile_path is None
         and payload.enable_field_registration_v2 is None
+        and payload.field_registration_mode is None
         and payload.enable_undistortion is None
         and payload.calibration_alpha is None
         and payload.pitch_detection_interval is None
@@ -212,6 +217,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.enable_field_registration_v2
                     if payload.enable_field_registration_v2 is not None
                     else store.config.enable_field_registration_v2
+                ),
+                field_registration_mode=(
+                    payload.field_registration_mode
+                    if payload.field_registration_mode is not None
+                    else store.config.field_registration_mode
                 ),
                 enable_undistortion=(
                     payload.enable_undistortion
@@ -343,6 +353,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.enable_field_registration_v2
                     if payload.enable_field_registration_v2 is not None
                     else store.config.enable_field_registration_v2
+                ),
+                "field_registration_mode": (
+                    payload.field_registration_mode
+                    if payload.field_registration_mode is not None
+                    else store.config.field_registration_mode
                 ),
                 "enable_undistortion": (
                     payload.enable_undistortion

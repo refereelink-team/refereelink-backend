@@ -8,6 +8,9 @@ from typing import Optional
 import numpy as np
 
 from app.field_registration.camera_model import CameraRigProfile
+from app.field_registration.full_homography_refiner import (
+    FullHomographyPointLineRefiner,
+)
 from app.field_registration.geometry import transform_points
 from app.field_registration.initializer import HomographyInitializer
 from app.field_registration.optical_flow import MaskedSparseOpticalFlow, OpticalFlowResult
@@ -15,11 +18,14 @@ from app.field_registration.pan_filter import PanExtendedKalmanFilter
 from app.field_registration.perception import PitchPerceptionBackend, PitchPerceptionOutput
 from app.field_registration.pitch_model import PitchModel
 from app.field_registration.point_line_refiner import PanOnlyPointLineRefiner
+from app.field_registration.shot import ShotBoundaryDetector
 from app.field_registration.types import (
     CameraState,
     CameraTrackingStatus,
     FieldRegistrationFrame,
+    MeasurementTier,
     PointObservation,
+    RegistrationMode,
 )
 
 
@@ -33,6 +39,10 @@ class FieldRegistrationConfig:
     measurement_confidence_threshold: float = 0.55
     max_prediction_frames: int = 6
     minimum_flow_tracks: int = 12
+    fast_semantic_interval: int = 3
+    safe_flow_without_semantic_seconds: float = 0.5
+    preview_flow_without_semantic_seconds: float = 1.0
+    registration_mode: RegistrationMode | str | None = None
 
 
 class FieldRegistrationCore:
@@ -47,6 +57,8 @@ class FieldRegistrationCore:
         initializer: Optional[HomographyInitializer] = None,
         optical_flow: Optional[MaskedSparseOpticalFlow] = None,
         pan_filter: Optional[PanExtendedKalmanFilter] = None,
+        full_homography_refiner: Optional[FullHomographyPointLineRefiner] = None,
+        shot_detector: Optional[ShotBoundaryDetector] = None,
     ) -> None:
         self.pitch_model = pitch_model
         self.perception_backend = perception_backend
@@ -54,11 +66,29 @@ class FieldRegistrationCore:
         self.config = config or FieldRegistrationConfig()
         if self.config.fps <= 0:
             raise ValueError("registration fps must be positive")
+        configured_mode = self.config.registration_mode
+        if configured_mode is None:
+            self.registration_mode = (
+                RegistrationMode.RIG_PAN
+                if rig_profile is not None
+                else RegistrationMode.BROADCAST
+            )
+        else:
+            self.registration_mode = RegistrationMode(configured_mode)
+        if self.registration_mode is RegistrationMode.RIG_PAN and rig_profile is None:
+            raise ValueError("rig_pan registration requires a camera rig profile")
         self.initializer = initializer or HomographyInitializer()
         self.optical_flow = optical_flow or MaskedSparseOpticalFlow()
         self.pan_filter = pan_filter or PanExtendedKalmanFilter()
+        self.full_homography_refiner = (
+            full_homography_refiner or FullHomographyPointLineRefiner()
+        )
+        self.shot_detector = shot_detector or ShotBoundaryDetector()
         self.pan_refiner = (
-            PanOnlyPointLineRefiner(rig_profile) if rig_profile is not None else None
+            PanOnlyPointLineRefiner(rig_profile)
+            if self.registration_mode is RegistrationMode.RIG_PAN
+            and rig_profile is not None
+            else None
         )
         self._previous_frame: Optional[np.ndarray] = None
         self._previous_dynamic_boxes: Optional[np.ndarray] = None
@@ -66,23 +96,30 @@ class FieldRegistrationCore:
         self._last_semantic_frame: Optional[int] = None
         self._prediction_age = 0
         self._last_frame_index: Optional[int] = None
+        self._shot_id = 0
         self.semantic_inference_count = 0
         self.flow_update_count = 0
         self.prediction_count = 0
         self.lost_count = 0
         self.relocalization_count = 0
+        self.shot_cut_count = 0
 
     @property
     def state(self) -> Optional[CameraState]:
         return self._last_state
 
     def reset(self) -> None:
+        self._reset_tracking_state()
+        self._last_frame_index = None
+        self._shot_id = 0
+        self.shot_detector.reset()
+
+    def _reset_tracking_state(self) -> None:
         self._previous_frame = None
         self._previous_dynamic_boxes = None
         self._last_state = None
         self._last_semantic_frame = None
         self._prediction_age = 0
-        self._last_frame_index = None
         self.pan_filter = PanExtendedKalmanFilter(self.pan_filter.config)
 
     def _semantic_interval(self) -> int:
@@ -96,7 +133,7 @@ class FieldRegistrationCore:
             state.confidence < self.config.low_confidence_threshold
             or abs(state.pan_velocity_rad_s) >= self.config.fast_pan_velocity_rad_s
         ):
-            return 1
+            return max(self.config.fast_semantic_interval, 1)
         if state.confidence >= 0.80 and abs(state.pan_velocity_rad_s) < 0.05:
             return self.config.stable_semantic_interval
         return self.config.normal_semantic_interval
@@ -123,7 +160,11 @@ class FieldRegistrationCore:
         projected = transform_points(corners, state.pitch_to_image)
         if not np.all(np.isfinite(projected)):
             return None
-        return projected
+        # A valid projective camera may place invisible field corners far
+        # outside the image. Bound polygon coordinates before OpenCV converts
+        # them to int32 so extreme partial views cannot overflow fillPoly.
+        maximum = 1_000_000.0
+        return np.clip(projected, -maximum, maximum)
 
     def _flow_result(
         self,
@@ -133,9 +174,7 @@ class FieldRegistrationCore:
             np.empty((0, 2)), np.empty((0, 2)), np.empty(0), 0.0
         )
         if (
-            self.rig_profile is None
-            or self.pan_refiner is None
-            or self._previous_frame is None
+            self._previous_frame is None
             or self._last_state is None
             or self._last_state.image_to_pitch is None
         ):
@@ -172,6 +211,8 @@ class FieldRegistrationCore:
         mean_error_px: Optional[float],
         p95_error_px: Optional[float],
         semantic_age: int,
+        measurement_tier: MeasurementTier = MeasurementTier.SAFE,
+        flow_inliers: int = 0,
     ) -> CameraState:
         assert self.rig_profile is not None
         pan = self.pan_filter.pan_rad
@@ -188,6 +229,62 @@ class FieldRegistrationCore:
             p95_segment_error_px=p95_error_px,
             confidence=float(np.clip(confidence, 0.0, 1.0)),
             age_since_semantic_update=semantic_age,
+            registration_mode=self.registration_mode,
+            measurement_tier=measurement_tier,
+            shot_id=self._shot_id,
+            camera_model="fixed_rig_pan",
+            focal_px=float(self.rig_profile.camera_matrix[0, 0]),
+            flow_inliers=flow_inliers,
+            projection_uncertainty=float(np.trace(self.pan_filter.covariance)),
+        )
+
+    def _broadcast_state_from_initialization(
+        self,
+        initialization: object,
+        status: CameraTrackingStatus,
+        confidence: float,
+        semantic_age: int,
+        measurement_tier: MeasurementTier,
+        flow_inliers: int = 0,
+        line_result: object | None = None,
+    ) -> CameraState:
+        image_to_pitch = getattr(line_result, "image_to_pitch", None)
+        pitch_to_image = getattr(line_result, "pitch_to_image", None)
+        if image_to_pitch is None:
+            image_to_pitch = initialization.image_to_pitch
+        if pitch_to_image is None:
+            pitch_to_image = initialization.pitch_to_image
+        mean_error = getattr(line_result, "mean_line_error_px", None)
+        p95_error = getattr(line_result, "p95_line_error_px", None)
+        point_inliers = getattr(line_result, "point_inliers", None)
+        if point_inliers is None:
+            point_inliers = len(initialization.inlier_indices)
+        visible_segments = int(getattr(line_result, "visible_segment_count", 0) or 0)
+        uncertainty = initialization.p95_reprojection_error_px
+        if p95_error is not None:
+            uncertainty = max(float(uncertainty or 0.0), float(p95_error))
+        return CameraState(
+            status=status,
+            pan_rad=float("nan"),
+            pan_velocity_rad_s=0.0,
+            covariance=np.diag([1e6, 1e6]),
+            image_to_pitch=image_to_pitch,
+            pitch_to_image=pitch_to_image,
+            point_inliers=int(point_inliers),
+            visible_segment_count=visible_segments,
+            spatial_coverage=initialization.image_coverage,
+            mean_segment_error_px=mean_error,
+            p95_segment_error_px=p95_error,
+            confidence=float(np.clip(confidence, 0.0, 1.0)),
+            age_since_semantic_update=semantic_age,
+            registration_mode=self.registration_mode,
+            measurement_tier=measurement_tier,
+            shot_id=self._shot_id,
+            camera_model="broadcast_planar_homography",
+            flow_inliers=flow_inliers,
+            projection_uncertainty=(
+                float(uncertainty) if uncertainty is not None else None
+            ),
         )
 
     def _semantic_state(
@@ -195,7 +292,7 @@ class FieldRegistrationCore:
         output: PitchPerceptionOutput,
         image_size: tuple[int, int],
     ) -> Optional[CameraState]:
-        if self.rig_profile is not None and self.pan_refiner is not None:
+        if self.registration_mode is RegistrationMode.RIG_PAN and self.pan_refiner is not None:
             global_search = self._last_state is None or self._last_state.status is CameraTrackingStatus.LOST
             initial_pan = None if global_search else self.pan_filter.pan_rad
             result = self.pan_refiner.refine(
@@ -253,17 +350,90 @@ class FieldRegistrationCore:
                 1.0,
             )
         )
-        return CameraState(
-            status=status,
-            pan_rad=float("nan"),
-            pan_velocity_rad_s=0.0,
-            covariance=np.diag([1e6, 1e6]),
-            image_to_pitch=initialization.image_to_pitch,
-            pitch_to_image=initialization.pitch_to_image,
-            point_inliers=len(initialization.inlier_indices),
-            spatial_coverage=initialization.image_coverage,
-            confidence=confidence,
-            age_since_semantic_update=0,
+        line_result = None
+        if output.lines and initialization.pitch_to_image is not None:
+            candidate = self.full_homography_refiner.refine(
+                initialization.pitch_to_image,
+                output.points,
+                output.lines,
+                image_size,
+            )
+            if candidate.success:
+                line_result = candidate
+                confidence = max(confidence, candidate.confidence)
+        return self._broadcast_state_from_initialization(
+            initialization,
+            status,
+            confidence,
+            0,
+            MeasurementTier.SAFE,
+            line_result=line_result,
+        )
+
+    def _broadcast_flow_state(
+        self,
+        flow: OpticalFlowResult,
+        observations: tuple[PointObservation, ...],
+        image_size: tuple[int, int],
+        frame_index: int,
+    ) -> Optional[CameraState]:
+        if len(observations) < self.config.minimum_flow_tracks:
+            return None
+        initialization = self.initializer.estimate(
+            observations,
+            image_size=image_size,
+            pitch_size_m=(
+                self.pitch_model.dimensions.length_m,
+                self.pitch_model.dimensions.width_m,
+            ),
+        )
+        if not initialization.success:
+            return None
+        semantic_age = (
+            frame_index - self._last_semantic_frame
+            if self._last_semantic_frame is not None
+            else frame_index + 1
+        )
+        safe_limit = max(
+            int(round(self.config.safe_flow_without_semantic_seconds * self.config.fps)),
+            1,
+        )
+        preview_limit = max(
+            int(round(self.config.preview_flow_without_semantic_seconds * self.config.fps)),
+            safe_limit,
+        )
+        if semantic_age > preview_limit:
+            return None
+        tier = (
+            MeasurementTier.SAFE
+            if semantic_age <= safe_limit
+            else MeasurementTier.PREVIEW
+        )
+        previous_confidence = self._last_state.confidence if self._last_state else 0.5
+        geometric_confidence = float(
+            np.clip(
+                0.35
+                + 0.35 * initialization.image_coverage
+                + 0.30
+                * min(
+                    len(initialization.inlier_indices) / max(len(observations), 1),
+                    1.0,
+                ),
+                0.0,
+                1.0,
+            )
+        )
+        confidence = min(previous_confidence * 0.997, geometric_confidence)
+        if tier is MeasurementTier.PREVIEW:
+            confidence *= 0.85
+        self.flow_update_count += 1
+        return self._broadcast_state_from_initialization(
+            initialization,
+            CameraTrackingStatus.TRACKED,
+            confidence,
+            semantic_age,
+            tier,
+            flow_inliers=len(initialization.inlier_indices),
         )
 
     def process(
@@ -283,7 +453,13 @@ class FieldRegistrationCore:
             if candidate.size:
                 dynamic_boxes = candidate.reshape(-1, 4)
 
-        if self.rig_profile is not None:
+        shot = self.shot_detector.update(frame)
+        if shot.is_cut:
+            self._shot_id += 1
+            self.shot_cut_count += 1
+            self._reset_tracking_state()
+
+        if self.registration_mode is RegistrationMode.RIG_PAN:
             self.pan_filter.predict(1.0 / self.config.fps)
         flow, flow_observations = self._flow_result(frame)
         state: Optional[CameraState] = None
@@ -295,7 +471,11 @@ class FieldRegistrationCore:
             self.semantic_inference_count += 1
             self._last_semantic_frame = frame_index
             state = self._semantic_state(output, (width, height))
-            refresh_reason = "scheduled" if self._last_state is not None else "initialization"
+            refresh_reason = (
+                "hard_cut"
+                if shot.is_cut
+                else "scheduled" if self._last_state is not None else "initialization"
+            )
 
         if (
             state is None
@@ -334,6 +514,17 @@ class FieldRegistrationCore:
                     )
                     self.flow_update_count += 1
 
+        if (
+            state is None
+            and self.registration_mode is RegistrationMode.BROADCAST
+        ):
+            state = self._broadcast_flow_state(
+                flow,
+                flow_observations,
+                (width, height),
+                frame_index,
+            )
+
         if state is None:
             self._prediction_age += 1
             if (
@@ -342,7 +533,7 @@ class FieldRegistrationCore:
                 and self._prediction_age <= self.config.max_prediction_frames
             ):
                 confidence = self._last_state.confidence * (0.82**self._prediction_age)
-                if self.rig_profile is not None:
+                if self.registration_mode is RegistrationMode.RIG_PAN:
                     state = self._state_from_pan(
                         CameraTrackingStatus.PREDICTED,
                         confidence,
@@ -354,6 +545,7 @@ class FieldRegistrationCore:
                             if self._last_semantic_frame is not None
                             else self._prediction_age
                         ),
+                        MeasurementTier.PREVIEW,
                     )
                 else:
                     state = CameraState(
@@ -364,25 +556,51 @@ class FieldRegistrationCore:
                         image_to_pitch=self._last_state.image_to_pitch,
                         pitch_to_image=self._last_state.pitch_to_image,
                         confidence=confidence,
-                        age_since_semantic_update=self._prediction_age,
+                        age_since_semantic_update=(
+                            frame_index - self._last_semantic_frame
+                            if self._last_semantic_frame is not None
+                            else self._prediction_age
+                        ),
+                        registration_mode=self.registration_mode,
+                        measurement_tier=MeasurementTier.PREVIEW,
+                        shot_id=self._shot_id,
+                        camera_model="broadcast_planar_homography",
+                        projection_uncertainty=float(
+                            (self._last_state.projection_uncertainty or 1.0)
+                            * (1.5**self._prediction_age)
+                        ),
                     )
                 self.prediction_count += 1
             else:
                 state = CameraState(
                     status=CameraTrackingStatus.LOST,
-                    pan_rad=self.pan_filter.pan_rad if self.rig_profile is not None else float("nan"),
+                    pan_rad=(
+                        self.pan_filter.pan_rad
+                        if self.registration_mode is RegistrationMode.RIG_PAN
+                        else float("nan")
+                    ),
                     pan_velocity_rad_s=(
-                        self.pan_filter.velocity_rad_s if self.rig_profile is not None else 0.0
+                        self.pan_filter.velocity_rad_s
+                        if self.registration_mode is RegistrationMode.RIG_PAN
+                        else 0.0
                     ),
                     covariance=(
                         self.pan_filter.covariance.copy()
-                        if self.rig_profile is not None
+                        if self.registration_mode is RegistrationMode.RIG_PAN
                         else np.diag([1e6, 1e6])
                     ),
                     image_to_pitch=None,
                     pitch_to_image=None,
                     confidence=0.0,
                     age_since_semantic_update=self._prediction_age,
+                    registration_mode=self.registration_mode,
+                    measurement_tier=MeasurementTier.UNAVAILABLE,
+                    shot_id=self._shot_id,
+                    camera_model=(
+                        "fixed_rig_pan"
+                        if self.registration_mode is RegistrationMode.RIG_PAN
+                        else "broadcast_planar_homography"
+                    ),
                 )
                 self.lost_count += 1
         else:
@@ -404,5 +622,13 @@ class FieldRegistrationCore:
                 "semantic_interval": self._semantic_interval(),
                 "semantic_inference_count": self.semantic_inference_count,
                 "semantic_inference_time_ms": output.inference_time_ms,
+                "registration_mode": self.registration_mode.value,
+                "measurement_tier": state.measurement_tier.value,
+                "shot_id": self._shot_id,
+                "shot_cut": int(shot.is_cut),
+                "shot_cut_score": shot.score,
+                "shot_histogram_distance": shot.histogram_distance,
+                "field_view": shot.field_view.value,
+                "green_ratio": shot.green_ratio,
             },
         )

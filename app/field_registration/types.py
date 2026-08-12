@@ -18,6 +18,27 @@ class CameraTrackingStatus(str, Enum):
     LOST = "lost"
 
 
+class RegistrationMode(str, Enum):
+    """Runtime camera model used by field registration."""
+
+    LEGACY = "legacy"
+    BROADCAST = "broadcast"
+    RIG_PAN = "rig_pan"
+
+
+class MeasurementTier(str, Enum):
+    """How downstream consumers may use the current projection.
+
+    ``SAFE`` coordinates may feed measurement and event logic. ``PREVIEW`` is
+    deliberately restricted to visualization/debugging, while ``UNAVAILABLE``
+    carries no usable transform.
+    """
+
+    SAFE = "safe"
+    PREVIEW = "preview"
+    UNAVAILABLE = "unavailable"
+
+
 @dataclass(frozen=True)
 class PointObservation:
     """A semantic correspondence between an image point and the pitch plane."""
@@ -83,6 +104,15 @@ class CameraState:
     p95_segment_error_px: Optional[float] = None
     confidence: float = 0.0
     age_since_semantic_update: int = 0
+    registration_mode: RegistrationMode = RegistrationMode.BROADCAST
+    measurement_tier: MeasurementTier = MeasurementTier.SAFE
+    shot_id: int = 0
+    camera_model: str = "planar_homography"
+    focal_px: Optional[float] = None
+    tilt_rad: float = float("nan")
+    roll_rad: float = float("nan")
+    flow_inliers: int = 0
+    projection_uncertainty: Optional[float] = None
 
     def __post_init__(self) -> None:
         covariance = np.asarray(self.covariance, dtype=np.float64)
@@ -94,6 +124,19 @@ class CameraState:
             raise ValueError("spatial_coverage must be between 0 and 1")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("camera-state confidence must be between 0 and 1")
+        if self.shot_id < 0:
+            raise ValueError("shot_id cannot be negative")
+        if self.flow_inliers < 0:
+            raise ValueError("flow_inliers cannot be negative")
+        if self.focal_px is not None and (
+            not np.isfinite(self.focal_px) or self.focal_px <= 0.0
+        ):
+            raise ValueError("focal_px must be finite and positive")
+        if self.projection_uncertainty is not None and (
+            not np.isfinite(self.projection_uncertainty)
+            or self.projection_uncertainty < 0.0
+        ):
+            raise ValueError("projection_uncertainty must be finite and non-negative")
         for name in ("image_to_pitch", "pitch_to_image"):
             value = getattr(self, name)
             if value is not None:
@@ -112,6 +155,7 @@ class CameraState:
                 CameraTrackingStatus.CORRECTED,
                 CameraTrackingStatus.TRACKED,
             }
+            and self.measurement_tier is MeasurementTier.SAFE
             and self.image_to_pitch is not None
             and self.confidence > 0.0
         )

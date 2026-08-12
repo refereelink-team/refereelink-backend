@@ -202,6 +202,7 @@ class InferencePipeline:
         camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
         camera_rig_profile_path: Optional[str] = None,
         enable_field_registration_v2: bool = False,
+        field_registration_mode: Optional[str] = None,
         enable_undistortion: bool = True,
         calibration_alpha: float = 0.0,
         pitch_detection_interval: int = 5,
@@ -244,6 +245,7 @@ class InferencePipeline:
         self._camera_calibration_path = camera_calibration_path
         self._camera_rig_profile_path = camera_rig_profile_path
         self._enable_field_registration_v2 = bool(enable_field_registration_v2)
+        self._field_registration_mode = field_registration_mode
         self._enable_undistortion = enable_undistortion
         self._calibration_alpha = calibration_alpha
         self._pitch_detection_interval = pitch_detection_interval
@@ -371,6 +373,7 @@ class InferencePipeline:
             camera_calibration_path=self._camera_calibration_path,
             camera_rig_profile_path=self._camera_rig_profile_path,
             enable_field_registration_v2=self._enable_field_registration_v2,
+            field_registration_mode=self._field_registration_mode,
             enable_undistortion=self._enable_undistortion,
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,
@@ -620,6 +623,7 @@ class InferencePipeline:
                     ),
                     field_coordinate_usable=bool(
                         has_field_xy
+                        and projection.measurement_usable
                         and pitch_coordinate is not None
                         and pitch_coordinate.xy_m is not None
                         and pitch_coordinate.camera_status
@@ -729,6 +733,42 @@ class InferencePipeline:
                 else None
             ),
             camera_measurement_usable=projection.measurement_usable,
+            registration_mode=(
+                camera_state.registration_mode.value
+                if camera_state is not None
+                else "legacy"
+            ),
+            measurement_tier=(
+                camera_state.measurement_tier.value
+                if camera_state is not None
+                else "unavailable"
+            ),
+            shot_id=(camera_state.shot_id if camera_state is not None else 0),
+            camera_model=(
+                camera_state.camera_model if camera_state is not None else "legacy"
+            ),
+            focal_px=(camera_state.focal_px if camera_state is not None else None),
+            semantic_age=(
+                camera_state.age_since_semantic_update
+                if camera_state is not None
+                else 0
+            ),
+            flow_inliers=(camera_state.flow_inliers if camera_state is not None else 0),
+            mean_reprojection_error=(
+                camera_state.mean_segment_error_px
+                if camera_state is not None
+                else None
+            ),
+            p95_reprojection_error=(
+                camera_state.p95_segment_error_px
+                if camera_state is not None
+                else None
+            ),
+            projection_uncertainty=(
+                camera_state.projection_uncertainty
+                if camera_state is not None
+                else None
+            ),
             players=player_states,
             ball=ball_state,
             possession_track_id=self._find_possession_track_id(player_states, ball_state),
@@ -1063,6 +1103,43 @@ class InferencePipeline:
                 and np.isfinite(camera_state.pan_velocity_rad_s)
                 else None
             ),
+            registration_mode=(
+                camera_state.registration_mode.value
+                if camera_state is not None
+                else "legacy"
+            ),
+            measurement_tier=(
+                camera_state.measurement_tier.value
+                if camera_state is not None
+                else "unavailable"
+            ),
+            shot_id=(camera_state.shot_id if camera_state is not None else 0),
+            camera_model=(
+                camera_state.camera_model if camera_state is not None else "legacy"
+            ),
+            focal_px=(camera_state.focal_px if camera_state is not None else None),
+            semantic_age=(
+                camera_state.age_since_semantic_update
+                if camera_state is not None
+                else 0
+            ),
+            flow_inliers=(camera_state.flow_inliers if camera_state is not None else 0),
+            mean_reprojection_error=(
+                camera_state.mean_segment_error_px
+                if camera_state is not None
+                else None
+            ),
+            p95_reprojection_error=(
+                camera_state.p95_segment_error_px
+                if camera_state is not None
+                else None
+            ),
+            projection_uncertainty=(
+                camera_state.projection_uncertainty
+                if camera_state is not None
+                else None
+            ),
+            field_shot_cut_count=(field_core.shot_cut_count if field_core else 0),
             field_flow_update_count=(field_core.flow_update_count if field_core else 0),
             field_prediction_count=(field_core.prediction_count if field_core else 0),
             field_lost_count=(field_core.lost_count if field_core else 0),

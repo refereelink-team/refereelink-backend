@@ -39,7 +39,12 @@ from app.field_registration.tracker import (
     FieldRegistrationConfig,
     FieldRegistrationCore,
 )
-from app.field_registration.types import CameraState, CameraTrackingStatus, PitchCoordinate
+from app.field_registration.types import (
+    CameraState,
+    CameraTrackingStatus,
+    PitchCoordinate,
+    RegistrationMode,
+)
 from app.vision.entities import TrackEntityManager
 
 
@@ -120,6 +125,7 @@ class VisionCore:
         entity_manager: Optional[TrackEntityManager] = None,
         enable_field_registration_v2: bool = False,
         camera_rig_profile_path: Optional[str] = None,
+        field_registration_mode: Optional[str] = None,
         field_registration_core: Optional[FieldRegistrationCore] = None,
     ) -> None:
         self.device = device
@@ -142,11 +148,26 @@ class VisionCore:
         self.enable_pitch = enable_pitch
         self.person_only = person_only
         self.inference_backend = inference_backend
-        self.enable_field_registration_v2 = bool(
-            enable_field_registration_v2 or field_registration_core is not None
-        )
         self.camera_rig_profile_path = camera_rig_profile_path
         self._field_registration_core = field_registration_core
+        if field_registration_mode is not None:
+            self.field_registration_mode = RegistrationMode(field_registration_mode)
+            self.enable_field_registration_v2 = (
+                self.field_registration_mode is not RegistrationMode.LEGACY
+            )
+        elif field_registration_core is not None:
+            self.field_registration_mode = field_registration_core.registration_mode
+            self.enable_field_registration_v2 = True
+        elif enable_field_registration_v2:
+            self.field_registration_mode = (
+                RegistrationMode.RIG_PAN
+                if camera_rig_profile_path
+                else RegistrationMode.BROADCAST
+            )
+            self.enable_field_registration_v2 = True
+        else:
+            self.field_registration_mode = RegistrationMode.LEGACY
+            self.enable_field_registration_v2 = False
         self._last_camera_state: Optional[CameraState] = None
         self._pitch_projector: Optional[PitchProjector] = None
         self._contact_point_selector = GroundContactPointSelector()
@@ -334,6 +355,7 @@ class VisionCore:
                 fps=self.fps,
                 normal_semantic_interval=self.pitch_detection_interval,
                 stable_semantic_interval=max(self.pitch_detection_interval * 2, 1),
+                registration_mode=self.field_registration_mode,
             ),
         )
 
@@ -522,7 +544,7 @@ class VisionCore:
         field_xy = np.full((len(detections), 2), np.nan, dtype=np.float32)
         state = self._last_camera_state
         core = self._field_registration_core
-        if state is None or core is None or not projection.measurement_usable:
+        if state is None or core is None or state.image_to_pitch is None:
             status = state.status if state is not None else CameraTrackingStatus.LOST
             return field_xy, tuple(
                 PitchCoordinate(None, None, "none", status) for _ in range(len(detections))

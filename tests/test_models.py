@@ -113,6 +113,11 @@ def test_pipeline_config_serialization():
     assert data["enable_foul_detection"] is True
 
 
+def test_pipeline_config_accepts_explicit_registration_mode() -> None:
+    config = PipelineConfig(field_registration_mode="broadcast")
+    assert config.field_registration_mode == "broadcast"
+
+
 def test_pipeline_command_serialization():
     c = PipelineCommand(command="start", params={"foo": "bar"})
     data = c.model_dump()

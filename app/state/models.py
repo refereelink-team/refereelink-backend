@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -110,6 +110,16 @@ class FrameState(BaseModel):
     camera_confidence: float = 0.0
     camera_pan_rad: Optional[float] = None
     camera_measurement_usable: bool = False
+    registration_mode: Literal["legacy", "broadcast", "rig_pan"] = "legacy"
+    measurement_tier: Literal["safe", "preview", "unavailable"] = "unavailable"
+    shot_id: int = 0
+    camera_model: str = "legacy"
+    focal_px: Optional[float] = None
+    semantic_age: int = 0
+    flow_inliers: int = 0
+    mean_reprojection_error: Optional[float] = None
+    p95_reprojection_error: Optional[float] = None
+    projection_uncertainty: Optional[float] = None
     players: list[PlayerState] = Field(default_factory=list)
     ball: Optional[BallState] = None
     possession_track_id: Optional[int] = None
@@ -138,6 +148,17 @@ class MetricsSnapshot(BaseModel):
     camera_tracking_confidence: float = 0.0
     camera_pan_rad: Optional[float] = None
     camera_pan_velocity_rad_s: Optional[float] = None
+    registration_mode: str = "legacy"
+    measurement_tier: str = "unavailable"
+    shot_id: int = 0
+    camera_model: str = "legacy"
+    focal_px: Optional[float] = None
+    semantic_age: int = 0
+    flow_inliers: int = 0
+    mean_reprojection_error: Optional[float] = None
+    p95_reprojection_error: Optional[float] = None
+    projection_uncertainty: Optional[float] = None
+    field_shot_cut_count: int = 0
     field_flow_update_count: int = 0
     field_prediction_count: int = 0
     field_lost_count: int = 0
@@ -197,6 +218,9 @@ class PipelineConfig(BaseModel):
     camera_calibration_path: str = "assets/calibration/camera.npz"
     camera_rig_profile_path: Optional[str] = None
     enable_field_registration_v2: bool = False
+    field_registration_mode: Optional[
+        Literal["legacy", "broadcast", "rig_pan"]
+    ] = None
     enable_undistortion: bool = True
     calibration_alpha: float = Field(0.0, ge=0.0, le=1.0)
     pitch_detection_interval: int = Field(5, ge=1)

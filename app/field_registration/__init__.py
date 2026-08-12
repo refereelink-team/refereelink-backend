@@ -25,8 +25,10 @@ from app.field_registration.types import (
     CameraTrackingStatus,
     FieldRegistrationFrame,
     LineObservation,
+    MeasurementTier,
     PitchCoordinate,
     PointObservation,
+    RegistrationMode,
 )
 
 __all__ = [
@@ -43,6 +45,7 @@ __all__ = [
     "LensModel",
     "LensUndistorter",
     "LineObservation",
+    "MeasurementTier",
     "PitchCoordinate",
     "PitchDimensions",
     "PitchModel",
@@ -50,6 +53,7 @@ __all__ = [
     "PanAnchor",
     "RigCalibrationResult",
     "PointObservation",
+    "RegistrationMode",
     "VenueProfile",
     "calibrate_fixed_pan_rig",
 ]
