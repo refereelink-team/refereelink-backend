@@ -13,6 +13,7 @@ from app.state.models import (
     PlayerState,
     SourceStatus,
 )
+from app.server.api.pipeline import PipelineStartPayload
 
 
 def test_player_state_serialization():
@@ -114,8 +115,22 @@ def test_pipeline_config_serialization():
 
 
 def test_pipeline_config_accepts_explicit_registration_mode() -> None:
-    config = PipelineConfig(field_registration_mode="broadcast")
+    config = PipelineConfig(
+        field_registration_mode="broadcast",
+        pitch_perception_checkpoint_path="runs/pitch/student.pt",
+    )
     assert config.field_registration_mode == "broadcast"
+    assert config.pitch_perception_checkpoint_path == "runs/pitch/student.pt"
+
+
+def test_pipeline_start_payload_accepts_pitch_student_configuration() -> None:
+    payload = PipelineStartPayload(
+        field_registration_mode="broadcast",
+        pitch_perception_checkpoint_path="runs/pitch/student.pt",
+    )
+
+    assert payload.field_registration_mode == "broadcast"
+    assert payload.pitch_perception_checkpoint_path == "runs/pitch/student.pt"
 
 
 def test_pipeline_command_serialization():

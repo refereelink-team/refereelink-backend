@@ -64,6 +64,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     camera_calibration_path: 'assets/calibration/camera.npz',
     camera_rig_profile_path: null,
     enable_field_registration_v2: false,
+    field_registration_mode: null,
+    pitch_perception_checkpoint_path: null,
     enable_undistortion: true,
     calibration_alpha: 0,
     pitch_detection_interval: 5,

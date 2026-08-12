@@ -25,10 +25,12 @@ from app.geometry.camera import (
     build_undistorter,
 )
 from app.geometry.pitch_projection import (
+    PitchPointReference,
     PitchKeypointObservation,
     PitchProjectionEngine,
     PitchProjectionResult,
     ProjectedPitchKeypoint,
+    build_pitch_point_references,
 )
 from app.field_registration.camera_model import CameraRigProfile
 from app.field_registration.contact_point import GroundContactPointSelector
@@ -39,6 +41,7 @@ from app.field_registration.tracker import (
     FieldRegistrationConfig,
     FieldRegistrationCore,
 )
+from app.field_registration.torch_perception import TorchPitchPerceptionBackend
 from app.field_registration.types import (
     CameraState,
     CameraTrackingStatus,
@@ -49,7 +52,11 @@ from app.vision.entities import TrackEntityManager
 
 
 def _empty_detections() -> sv.Detections:
-    return sv.Detections(xyxy=np.empty((0, 4), dtype=np.float32))
+    return sv.Detections(
+        xyxy=np.empty((0, 4), dtype=np.float32),
+        confidence=np.empty(0, dtype=np.float32),
+        class_id=np.empty(0, dtype=np.int64),
+    )
 
 
 class TrackLifecycleState(str, Enum):
@@ -126,6 +133,7 @@ class VisionCore:
         enable_field_registration_v2: bool = False,
         camera_rig_profile_path: Optional[str] = None,
         field_registration_mode: Optional[str] = None,
+        pitch_perception_checkpoint_path: Optional[str] = None,
         field_registration_core: Optional[FieldRegistrationCore] = None,
     ) -> None:
         self.device = device
@@ -149,6 +157,7 @@ class VisionCore:
         self.person_only = person_only
         self.inference_backend = inference_backend
         self.camera_rig_profile_path = camera_rig_profile_path
+        self.pitch_perception_checkpoint_path = pitch_perception_checkpoint_path
         self._field_registration_core = field_registration_core
         if field_registration_mode is not None:
             self.field_registration_mode = RegistrationMode(field_registration_mode)
@@ -168,6 +177,11 @@ class VisionCore:
         else:
             self.field_registration_mode = RegistrationMode.LEGACY
             self.enable_field_registration_v2 = False
+        if self.pitch_perception_checkpoint_path and not self.enable_field_registration_v2:
+            raise ValueError(
+                "pitch_perception_checkpoint_path requires broadcast or rig_pan "
+                "field registration"
+            )
         self._last_camera_state: Optional[CameraState] = None
         self._pitch_projector: Optional[PitchProjector] = None
         self._contact_point_selector = GroundContactPointSelector()
@@ -185,10 +199,26 @@ class VisionCore:
                 minimum_consecutive_frames=max(int(track_minimum_consecutive_frames), 1),
             )
         )
+        if self.enable_field_registration_v2:
+            if field_registration_core is not None:
+                v2_dimensions = field_registration_core.pitch_model.dimensions
+            elif camera_rig_profile_path:
+                profile = CameraRigProfile.load(camera_rig_profile_path)
+                v2_dimensions = PitchDimensions(
+                    length_m=profile.pitch_length_m,
+                    width_m=profile.pitch_width_m,
+                )
+            else:
+                v2_dimensions = PitchDimensions()
+            v2_config = self._legacy_config_from_dimensions(v2_dimensions)
+        else:
+            v2_config = None
         self._projection_engine = (
             projection_engine
             if projection_engine is not None
-            else PitchProjectionEngine(config=SoccerPitchConfiguration(), fps=self.fps)
+            else PitchProjectionEngine(
+                config=v2_config or SoccerPitchConfiguration(), fps=self.fps
+            )
         )
         self._last_pitch_detection_frame: Optional[int] = None
         self._use_fp16 = device.startswith("cuda") and torch.cuda.is_available()
@@ -248,7 +278,11 @@ class VisionCore:
                 backend=backend,
                 device=self.device,
             )
-        if self.enable_pitch and self._pitch_model is None:
+        if (
+            self.enable_pitch
+            and self._pitch_model is None
+            and self.pitch_perception_checkpoint_path is None
+        ):
             backend = None if self.inference_backend == "auto" else self.inference_backend
             self._pitch_model = UltralyticsBackend(
                 self.pitch_model_path,
@@ -316,39 +350,62 @@ class VisionCore:
             >= self.pitch_detection_interval
         )
 
-    def _build_field_registration_core(self) -> FieldRegistrationCore:
-        pitch_config = self._projection_engine.config
-        dimensions = PitchDimensions(
-            length_m=pitch_config.length / 100.0,
-            width_m=pitch_config.width / 100.0,
-            penalty_area_depth_m=pitch_config.penalty_box_length / 100.0,
-            penalty_area_width_m=pitch_config.penalty_box_width / 100.0,
-            goal_area_depth_m=pitch_config.goal_box_length / 100.0,
-            goal_area_width_m=pitch_config.goal_box_width / 100.0,
-            centre_circle_radius_m=pitch_config.centre_circle_radius / 100.0,
-            penalty_spot_distance_m=pitch_config.penalty_spot_distance / 100.0,
+    @staticmethod
+    def _legacy_config_from_dimensions(
+        dimensions: PitchDimensions,
+    ) -> SoccerPitchConfiguration:
+        """Expose a V2 metric pitch through legacy centimetre consumers."""
+
+        return SoccerPitchConfiguration(
+            length=int(round(dimensions.length_m * 100.0)),
+            width=int(round(dimensions.width_m * 100.0)),
+            penalty_box_length=int(
+                round(dimensions.penalty_area_depth_m * 100.0)
+            ),
+            penalty_box_width=int(
+                round(dimensions.penalty_area_width_m * 100.0)
+            ),
+            goal_box_length=int(round(dimensions.goal_area_depth_m * 100.0)),
+            goal_box_width=int(round(dimensions.goal_area_width_m * 100.0)),
+            centre_circle_radius=int(
+                round(dimensions.centre_circle_radius_m * 100.0)
+            ),
+            penalty_spot_distance=int(
+                round(dimensions.penalty_spot_distance_m * 100.0)
+            ),
         )
+
+    def _build_field_registration_core(self) -> FieldRegistrationCore:
         rig_profile = (
             CameraRigProfile.load(self.camera_rig_profile_path)
             if self.camera_rig_profile_path
             else None
         )
-        if rig_profile is not None and (
-            not np.isclose(rig_profile.pitch_length_m, dimensions.length_m, atol=0.01)
-            or not np.isclose(rig_profile.pitch_width_m, dimensions.width_m, atol=0.01)
-        ):
-            raise ValueError(
-                "camera rig pitch dimensions do not match the configured pitch: "
-                f"rig={rig_profile.pitch_length_m}x{rig_profile.pitch_width_m}m, "
-                f"config={dimensions.length_m}x{dimensions.width_m}m"
+        dimensions = (
+            PitchDimensions(
+                length_m=rig_profile.pitch_length_m,
+                width_m=rig_profile.pitch_width_m,
             )
-        backend = LegacyKeypointPerceptionBackend(
-            predictor=self._predict_pitch,
-            references=self._projection_engine.references,
-            minimum_confidence=self._projection_engine.min_keypoint_confidence,
+            if rig_profile is not None
+            else PitchDimensions()
         )
+        pitch_model = PitchModel(dimensions)
+        if self.pitch_perception_checkpoint_path:
+            backend = TorchPitchPerceptionBackend.from_checkpoint(
+                self.pitch_perception_checkpoint_path,
+                pitch_model,
+                device=self.device,
+                use_fp16=self._use_fp16,
+            )
+        else:
+            metric_config = self._legacy_config_from_dimensions(dimensions)
+            backend = LegacyKeypointPerceptionBackend(
+                predictor=self._predict_pitch,
+                references=build_pitch_point_references(metric_config),
+                minimum_confidence=self._projection_engine.min_keypoint_confidence,
+            )
         return FieldRegistrationCore(
-            pitch_model=PitchModel(dimensions),
+            pitch_model=pitch_model,
             perception_backend=backend,
             rig_profile=rig_profile,
             config=FieldRegistrationConfig(
@@ -358,6 +415,34 @@ class VisionCore:
                 registration_mode=self.field_registration_mode,
             ),
         )
+
+    def _v2_point_references(self) -> dict[str, PitchPointReference]:
+        core = self._field_registration_core
+        if core is None:
+            return {}
+        colors = self._projection_engine.config.colors
+        references = {
+            label: PitchPointReference(
+                index=index,
+                label=label,
+                world_xy=(float(world_xy[0]) * 100.0, float(world_xy[1]) * 100.0),
+                color=colors[index % len(colors)],
+            )
+            for index, (label, world_xy) in enumerate(
+                core.pitch_model.landmarks.items()
+            )
+        }
+        for label, world_xy in core.pitch_model.point_landmarks.items():
+            references.setdefault(
+                label,
+                PitchPointReference(
+                    index=len(references),
+                    label=label,
+                    world_xy=(float(world_xy[0]) * 100.0, float(world_xy[1]) * 100.0),
+                    color="#FFD700",
+                ),
+            )
+        return references
 
     def _projection_for_frame_v2(
         self,
@@ -390,8 +475,9 @@ class VisionCore:
             homography_cm = np.diag([100.0, 100.0, 1.0]) @ state.image_to_pitch
         tracking_observations = []
         projected_keypoints = []
+        semantic_references = self._v2_point_references()
         for observation in registration.point_observations:
-            reference = self._projection_engine.reference_by_label.get(observation.label)
+            reference = semantic_references.get(observation.label)
             if reference is None:
                 continue
             tracking_observations.append(

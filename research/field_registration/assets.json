@@ -16,23 +16,23 @@
       "id": "pnlcalib",
       "kind": "teacher_model",
       "source_url": "https://github.com/mguti97/PnLCalib",
-      "version": "pin-required-before-benchmark",
+      "version": "8c87391d6f4ea40c5e4d65e61529916c7a49ce62",
       "license": "GPL-2.0-only",
       "data_use": "Primary accuracy teacher and offline pseudo-label generator",
       "training_data": "SoccerNet-Calibration, with optional WC14/TS-WorldCup fine-tuning",
       "allowed_in_runtime": false,
-      "notes": "Run in an isolated research environment and exchange only versioned cache files with the main project."
+      "notes": "Pinned on 2026-08-13. Run in an isolated research environment and exchange only versioned cache files with the main project. Official v1.0.0 weight SHA-256 values: SV_kp=7ea78fa76aaf94976a8eca428d6e3c59697a93430cba1a4603e20284b61f5113, SV_lines=d72f4ed71734a2e3df9fa084f666e9b8adaef21bf69bac8952d6d3f970ff7455. The weights remain external research assets."
     },
     {
       "id": "tvcalib",
       "kind": "teacher_model",
       "source_url": "https://github.com/MM4SPA/tvcalib",
-      "version": "pin-required-before-benchmark",
+      "version": "1222c5230af2742395d74918ed6f34eb2b9bf7f9",
       "license": "MIT",
       "data_use": "Secondary teacher and camera-geometry baseline",
       "training_data": "SoccerNet-Calibration semantic pitch markings",
       "allowed_in_runtime": false,
-      "notes": "Runtime admission remains false until the checkpoint license and dependency port are independently verified."
+      "notes": "Pinned on 2026-08-13. Public train_59.pt SHA-256: ec551dc181692e1758c953e9bffde718664cebd19f39b674918f7a4588ca9066. The segmentation checkpoint is executed only in an isolated environment; the upstream reference environment is Python 3.9, PyTorch 1.11 and CUDA 11.3."
     },
     {
       "id": "soccernet-calibration-v3",

@@ -105,7 +105,10 @@ class CameraState:
     confidence: float = 0.0
     age_since_semantic_update: int = 0
     registration_mode: RegistrationMode = RegistrationMode.BROADCAST
-    measurement_tier: MeasurementTier = MeasurementTier.SAFE
+    # Fail closed. Producers that have completed all geometric safety checks
+    # must opt in to SAFE explicitly; constructing a state alone must never
+    # authorize metric/event consumers.
+    measurement_tier: MeasurementTier = MeasurementTier.UNAVAILABLE
     shot_id: int = 0
     camera_model: str = "planar_homography"
     focal_px: Optional[float] = None

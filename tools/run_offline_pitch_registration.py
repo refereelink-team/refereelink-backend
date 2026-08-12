@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Run forward/backward broadcast registration and render a debug MP4.
 
-The command reads a local video twice. It uses the existing Ultralytics pitch
-checkpoint through the V2 perception adapter until a real dual-head student
-checkpoint is available. The saved JSON explicitly records this limitation.
+The command reads a local video twice. Pass ``--pitch-perception-checkpoint``
+to run the dual-head student; omitting it intentionally selects the legacy
+Ultralytics keypoint adapter as an E0/debug baseline. The saved JSON records
+the selected perception backend.
 """
+
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -18,6 +21,13 @@ import cv2
 import numpy as np
 import torch
 
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
+
 from app.constants.paths import PITCH_DETECTION_MODEL_PATH
 from app.field_registration.offline import (
     BidirectionalCameraSmoother,
@@ -25,31 +35,33 @@ from app.field_registration.offline import (
     OfflineSmoothingConfig,
     save_offline_smoothing_result,
 )
-from app.field_registration.perception import LegacyKeypointPerceptionBackend
+from app.field_registration.perception import (
+    LegacyKeypointPerceptionBackend,
+    PitchPerceptionBackend,
+)
 from app.field_registration.pitch_model import PitchDimensions, PitchModel
 from app.field_registration.tracker import FieldRegistrationConfig, FieldRegistrationCore
+from app.field_registration.torch_perception import TorchPitchPerceptionBackend
 from app.field_registration.types import CameraState, MeasurementTier, RegistrationMode
-from app.geometry.pitch_projection import PitchProjectionEngine
+from app.geometry.pitch_projection import build_pitch_point_references
 from app.config.pitch import SoccerPitchConfiguration
 from app.vision.backends import UltralyticsBackend
 
 
 def _pitch_model_and_references() -> tuple[PitchModel, tuple[object, ...]]:
-    engine = PitchProjectionEngine(SoccerPitchConfiguration(), fps=25.0)
-    config = engine.config
-    model = PitchModel(
-        PitchDimensions(
-            length_m=config.length / 100.0,
-            width_m=config.width / 100.0,
-            penalty_area_depth_m=config.penalty_box_length / 100.0,
-            penalty_area_width_m=config.penalty_box_width / 100.0,
-            goal_area_depth_m=config.goal_box_length / 100.0,
-            goal_area_width_m=config.goal_box_width / 100.0,
-            centre_circle_radius_m=config.centre_circle_radius / 100.0,
-            penalty_spot_distance_m=config.penalty_spot_distance / 100.0,
-        )
+    model = PitchModel(PitchDimensions())
+    dimensions = model.dimensions
+    metric_config = SoccerPitchConfiguration(
+        length=int(round(dimensions.length_m * 100.0)),
+        width=int(round(dimensions.width_m * 100.0)),
+        penalty_box_length=int(round(dimensions.penalty_area_depth_m * 100.0)),
+        penalty_box_width=int(round(dimensions.penalty_area_width_m * 100.0)),
+        goal_box_length=int(round(dimensions.goal_area_depth_m * 100.0)),
+        goal_box_width=int(round(dimensions.goal_area_width_m * 100.0)),
+        centre_circle_radius=int(round(dimensions.centre_circle_radius_m * 100.0)),
+        penalty_spot_distance=int(round(dimensions.penalty_spot_distance_m * 100.0)),
     )
-    return model, tuple(engine.references)
+    return model, tuple(build_pitch_point_references(metric_config))
 
 
 class LegacyPitchPredictor:
@@ -70,18 +82,12 @@ class LegacyPitchPredictor:
 
 
 def _core(
-    predictor: LegacyPitchPredictor,
+    backend: PitchPerceptionBackend,
     pitch_model: PitchModel,
-    references: tuple[object, ...],
     *,
     fps: float,
     semantic_interval: int,
 ) -> FieldRegistrationCore:
-    backend = LegacyKeypointPerceptionBackend(
-        predictor=predictor,
-        references=references,
-        minimum_confidence=0.35,
-    )
     return FieldRegistrationCore(
         pitch_model,
         backend,
@@ -152,57 +158,96 @@ def _shot_ranges(observations: list[OfflineCameraObservation]) -> list[tuple[int
     return ranges
 
 
-def _read_frame(capture: cv2.VideoCapture, index: int) -> np.ndarray:
-    capture.set(cv2.CAP_PROP_POS_FRAMES, index)
-    ok, frame = capture.read()
-    if not ok or frame is None:
-        raise RuntimeError(f"could not read source frame {index}")
-    return frame
+def _read_frame_block(source: Path, start: int, end: int) -> list[np.ndarray]:
+    """Decode one half-open frame range sequentially.
+
+    Seeking every frame is unreliable for long-GOP MP4 files.  A block seek
+    normally lands at the preceding keyframe and OpenCV decodes to ``start``.
+    If that backend path fails, a sequential decode from frame zero is slower
+    but deterministic and only retains the requested block in memory.
+    """
+
+    if start < 0 or end <= start:
+        raise ValueError("frame block must satisfy 0 <= start < end")
+
+    def decode(*, seek: bool) -> list[np.ndarray]:
+        capture = cv2.VideoCapture(str(source))
+        if not capture.isOpened():
+            raise FileNotFoundError(source)
+        if seek:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, start)
+            index = start
+        else:
+            index = 0
+        frames: list[np.ndarray] = []
+        while index < end:
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                capture.release()
+                return []
+            if index >= start:
+                frames.append(frame)
+            index += 1
+        capture.release()
+        return frames
+
+    expected = end - start
+    frames = decode(seek=True)
+    if len(frames) != expected:
+        frames = decode(seek=False)
+    if len(frames) != expected:
+        raise RuntimeError(f"could not decode source frame block [{start}, {end})")
+    return frames
 
 
 def _backward_pass(
     source: Path,
     forward: list[OfflineCameraObservation],
-    predictor: LegacyPitchPredictor,
+    backend: PitchPerceptionBackend,
     pitch_model: PitchModel,
-    references: tuple[object, ...],
     *,
     fps: float,
     semantic_interval: int,
+    chunk_frames: int = 240,
 ) -> list[OfflineCameraObservation]:
-    capture = cv2.VideoCapture(str(source))
+    if chunk_frames <= 0:
+        raise ValueError("backward chunk size must be positive")
     output: list[OfflineCameraObservation] = []
     for start, end, shot_id in _shot_ranges(forward):
         core = _core(
-            predictor,
+            backend,
             pitch_model,
-            references,
             fps=fps,
             semantic_interval=semantic_interval,
         )
         reverse_index = 0
-        for source_index in range(end - 1, start - 1, -1):
-            frame = _read_frame(capture, source_index)
-            result = core.process(frame, reverse_index)
-            state = result.camera_state
-            if state.shot_id != 0:
-                # A detector-triggered false cut inside an already segmented
-                # forward Shot cannot be allowed to merge across boundaries.
-                core.reset()
-                result = core.process(frame, 0)
+        chunk_end = end
+        while chunk_end > start:
+            chunk_start = max(start, chunk_end - chunk_frames)
+            frames = _read_frame_block(source, chunk_start, chunk_end)
+            for offset in range(len(frames) - 1, -1, -1):
+                source_index = chunk_start + offset
+                frame = frames[offset]
+                result = core.process(frame, reverse_index)
                 state = result.camera_state
-                reverse_index = 0
-            state = CameraState(**{**state.__dict__, "shot_id": shot_id})
-            output.append(
-                OfflineCameraObservation(
-                    source_index,
-                    shot_id,
-                    (frame.shape[1], frame.shape[0]),
-                    state,
+                if state.shot_id != 0:
+                    # A detector-triggered false cut inside an already segmented
+                    # forward Shot cannot be allowed to merge across boundaries.
+                    core.reset()
+                    result = core.process(frame, 0)
+                    state = result.camera_state
+                    reverse_index = 0
+                state = CameraState(**{**state.__dict__, "shot_id": shot_id})
+                output.append(
+                    OfflineCameraObservation(
+                        source_index,
+                        shot_id,
+                        (frame.shape[1], frame.shape[0]),
+                        state,
+                    )
                 )
-            )
-            reverse_index += 1
-    capture.release()
+                reverse_index += 1
+            chunk_end = chunk_start
     return output
 
 
@@ -288,9 +333,11 @@ def main() -> None:
     parser.add_argument("--output-registration", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--pitch-model-path", default=PITCH_DETECTION_MODEL_PATH)
+    parser.add_argument("--pitch-perception-checkpoint", type=Path)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--semantic-interval", type=int, default=5)
+    parser.add_argument("--backward-chunk-frames", type=int, default=240)
     parser.add_argument("--max-frames", type=int)
     arguments = parser.parse_args()
     source = arguments.source.resolve()
@@ -299,15 +346,29 @@ def main() -> None:
     output_video.parent.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     width, height, fps, source_frames = _video_metadata(source)
-    predictor = LegacyPitchPredictor(
-        arguments.pitch_model_path, arguments.device, arguments.imgsz
-    )
     pitch_model, references = _pitch_model_and_references()
+    if arguments.pitch_perception_checkpoint is not None:
+        backend: PitchPerceptionBackend = TorchPitchPerceptionBackend.from_checkpoint(
+            arguments.pitch_perception_checkpoint,
+            pitch_model,
+            device=arguments.device,
+            use_fp16=arguments.device.startswith("cuda"),
+        )
+        perception_name = "mobilenet_v3_dual_head"
+    else:
+        predictor = LegacyPitchPredictor(
+            arguments.pitch_model_path, arguments.device, arguments.imgsz
+        )
+        backend = LegacyKeypointPerceptionBackend(
+            predictor=predictor,
+            references=references,
+            minimum_confidence=0.35,
+        )
+        perception_name = "legacy_32_keypoint_adapter"
     started = time.perf_counter()
     forward_core = _core(
-        predictor,
+        backend,
         pitch_model,
-        references,
         fps=fps,
         semantic_interval=arguments.semantic_interval,
     )
@@ -317,11 +378,11 @@ def main() -> None:
     backward = _backward_pass(
         source,
         forward,
-        predictor,
+        backend,
         pitch_model,
-        references,
         fps=fps,
         semantic_interval=arguments.semantic_interval,
+        chunk_frames=arguments.backward_chunk_frames,
     )
     result = BidirectionalCameraSmoother(
         config=OfflineSmoothingConfig(fps=fps)
@@ -352,7 +413,7 @@ def main() -> None:
         "output_video": str(output_video),
         "registration_json": str(json_path),
         "registration_npz": str(npz_path),
-        "perception_backend": "legacy_32_keypoint_adapter",
+        "perception_backend": perception_name,
         "accuracy_valid": False,
         "notes": [
             "The MP4 is a projection-stability diagnostic, not accuracy ground truth.",

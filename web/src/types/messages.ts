@@ -255,6 +255,8 @@ export interface PipelineConfig {
   camera_calibration_path: string;
   camera_rig_profile_path: string | null;
   enable_field_registration_v2: boolean;
+  field_registration_mode: 'legacy' | 'broadcast' | 'rig_pan' | null;
+  pitch_perception_checkpoint_path: string | null;
   enable_undistortion: boolean;
   calibration_alpha: number;
   pitch_detection_interval: number;

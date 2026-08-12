@@ -221,6 +221,7 @@ class PipelineConfig(BaseModel):
     field_registration_mode: Optional[
         Literal["legacy", "broadcast", "rig_pan"]
     ] = None
+    pitch_perception_checkpoint_path: Optional[str] = None
     enable_undistortion: bool = True
     calibration_alpha: float = Field(0.0, ge=0.0, le=1.0)
     pitch_detection_interval: int = Field(5, ge=1)

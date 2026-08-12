@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Extract leakage-safe video frames for pitch-registration annotation."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -11,6 +13,13 @@ import shutil
 
 import cv2
 import numpy as np
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from app.field_registration.annotations import ANNOTATION_FORMAT_VERSION, VALID_SPLITS
 from app.field_registration.pitch_model import PitchDimensions, PitchModel

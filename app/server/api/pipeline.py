@@ -42,6 +42,7 @@ class PipelineStartPayload(BaseModel):
     field_registration_mode: Optional[
         Literal["legacy", "broadcast", "rig_pan"]
     ] = None
+    pitch_perception_checkpoint_path: Optional[str] = None
     enable_undistortion: Optional[bool] = None
     calibration_alpha: Optional[float] = None
     pitch_detection_interval: Optional[int] = None
@@ -97,6 +98,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.camera_rig_profile_path,
             payload.enable_field_registration_v2,
             payload.field_registration_mode,
+            payload.pitch_perception_checkpoint_path,
             payload.enable_undistortion,
             payload.calibration_alpha,
             payload.pitch_detection_interval,
@@ -140,6 +142,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
         and payload.camera_rig_profile_path is None
         and payload.enable_field_registration_v2 is None
         and payload.field_registration_mode is None
+        and payload.pitch_perception_checkpoint_path is None
         and payload.enable_undistortion is None
         and payload.calibration_alpha is None
         and payload.pitch_detection_interval is None
@@ -222,6 +225,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.field_registration_mode
                     if payload.field_registration_mode is not None
                     else store.config.field_registration_mode
+                ),
+                pitch_perception_checkpoint_path=(
+                    payload.pitch_perception_checkpoint_path
+                    if payload.pitch_perception_checkpoint_path is not None
+                    else store.config.pitch_perception_checkpoint_path
                 ),
                 enable_undistortion=(
                     payload.enable_undistortion
@@ -358,6 +366,11 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                     payload.field_registration_mode
                     if payload.field_registration_mode is not None
                     else store.config.field_registration_mode
+                ),
+                "pitch_perception_checkpoint_path": (
+                    payload.pitch_perception_checkpoint_path
+                    if payload.pitch_perception_checkpoint_path is not None
+                    else store.config.pitch_perception_checkpoint_path
                 ),
                 "enable_undistortion": (
                     payload.enable_undistortion

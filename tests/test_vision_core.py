@@ -10,7 +10,7 @@ from app.geometry.camera import CameraMotionEstimator
 from app.geometry.pitch_projection import PitchProjectionResult
 from app.field_registration.perception import PitchPerceptionOutput, StaticPerceptionBackend
 from app.field_registration.pitch_model import PitchDimensions, PitchModel
-from app.field_registration.tracker import FieldRegistrationCore
+from app.field_registration.tracker import FieldRegistrationConfig, FieldRegistrationCore
 from app.field_registration.types import (
     CameraState,
     CameraTrackingStatus,
@@ -146,6 +146,20 @@ def test_empty_detections_are_safe():
     assert result.field_xy.shape == (0, 2)
 
 
+def test_disabled_player_path_keeps_bytetrack_empty_contract() -> None:
+    core = VisionCore(
+        enable_player=False,
+        enable_pitch=False,
+        undistorter=_IdentityUndistorter(),
+    )
+
+    result = core.process(np.zeros((32, 32, 3), dtype=np.uint8), 1)
+
+    assert len(result.detections) == 0
+    assert result.detections.confidence is not None
+    assert result.detections.class_id is not None
+
+
 def test_camera_motion_forces_pitch_refresh_before_interval() -> None:
     base = np.zeros((240, 320, 3), dtype=np.uint8)
     base[:] = (0, 96, 0)
@@ -244,6 +258,40 @@ def test_field_registration_mode_preserves_legacy_flag_mapping() -> None:
     assert not explicit_legacy.enable_field_registration_v2
 
 
+def test_student_checkpoint_requires_v2_registration() -> None:
+    with pytest.raises(ValueError, match="requires broadcast or rig_pan"):
+        VisionCore(
+            undistorter=_IdentityUndistorter(),
+            tracker=_Tracker(),
+            pitch_perception_checkpoint_path="student.pt",
+        )
+
+
+def test_default_v2_geometry_uses_metric_105_by_68_pitch() -> None:
+    core = VisionCore(
+        undistorter=_IdentityUndistorter(),
+        tracker=_Tracker(),
+        pitch_model=object(),
+        enable_field_registration_v2=True,
+    )
+
+    registration = core._build_field_registration_core()
+    core._field_registration_core = registration
+
+    assert registration.pitch_model.dimensions.length_m == 105.0
+    assert registration.pitch_model.dimensions.width_m == 68.0
+    assert core.projection_engine.config.length == 10500
+    assert core.projection_engine.config.width == 6800
+    legacy_backend = registration.perception_backend
+    world_xy = [reference.world_xy for reference in legacy_backend.references]
+    assert max(point[0] for point in world_xy) == 10500.0
+    assert max(point[1] for point in world_xy) == 6800.0
+    semantic_references = core._v2_point_references()
+    assert semantic_references["left_top_corner"].world_xy == (0.0, 0.0)
+    assert semantic_references["right_bottom_corner"].world_xy == (10500.0, 6800.0)
+    assert semantic_references["centre_spot"].world_xy == (5250.0, 3400.0)
+
+
 def test_v2_field_registration_integrates_without_changing_legacy_projection_units() -> None:
     pitch_model = PitchModel(PitchDimensions(length_m=120.0, width_m=70.0))
     pitch_points = pitch_model.grid(6, 5)
@@ -255,6 +303,10 @@ def test_v2_field_registration_integrates_without_changing_legacy_projection_uni
     registration_core = FieldRegistrationCore(
         pitch_model,
         StaticPerceptionBackend([PitchPerceptionOutput(points=observations)]),
+        config=FieldRegistrationConfig(
+            require_physical_camera_for_safe=False,
+            allow_point_only_safe=True,
+        ),
     )
     detections = sv.Detections(
         xyxy=np.array([[480.0, 200.0, 520.0, 300.0]], dtype=np.float32),
@@ -268,6 +320,9 @@ def test_v2_field_registration_integrates_without_changing_legacy_projection_uni
         field_registration_core=registration_core,
     )
     core._predict_player = lambda frame: detections
+
+    assert core.projection_engine.config.length == 12000
+    assert core.projection_engine.config.width == 7000
 
     result = core.process(np.zeros((720, 1280, 3), dtype=np.uint8), 1)
 

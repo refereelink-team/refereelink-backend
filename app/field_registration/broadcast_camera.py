@@ -93,6 +93,13 @@ class BroadcastCameraParameters:
         )
         if not np.all(np.isfinite(values)):
             raise ValueError("broadcast camera parameters must be finite")
+        width = float(self.image_size[0])
+        minimum_log_focal = float(np.log(max(0.1 * width, 1.0)))
+        maximum_log_focal = float(np.log(max(20.0 * width, 2.0)))
+        if not minimum_log_focal <= self.log_focal_px <= maximum_log_focal:
+            raise ValueError("broadcast focal length is outside physical bounds")
+        if abs(self.tilt_rad) >= np.pi / 2.0 - 1e-4:
+            raise ValueError("broadcast tilt must keep the optical axis off world-up")
         if self.focal_px <= 0.0:
             raise ValueError("focal length must be positive")
         object.__setattr__(self, "camera_center_xyz_m", center)

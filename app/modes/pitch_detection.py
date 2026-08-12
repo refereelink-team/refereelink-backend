@@ -8,7 +8,7 @@ from app.constants.paths import (
     PITCH_DETECTION_MODEL_PATH,
 )
 from app.geometry.pitch_projection import PitchProjectionEngine
-from app.runtime import CONFIG, annotate_pitch_observations
+from app.runtime import annotate_pitch_observations
 from app.vision.core import VisionCore
 
 
@@ -26,6 +26,10 @@ def run_pitch_detection(
     device: str,
     pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
     camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    camera_rig_profile_path: Optional[str] = None,
+    enable_field_registration_v2: bool = False,
+    field_registration_mode: Optional[str] = None,
+    pitch_perception_checkpoint_path: Optional[str] = None,
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
@@ -47,6 +51,10 @@ def run_pitch_detection(
         fps=video_info.fps,
         pitch_model_path=pitch_model_path,
         camera_calibration_path=camera_calibration_path,
+        camera_rig_profile_path=camera_rig_profile_path,
+        enable_field_registration_v2=enable_field_registration_v2,
+        field_registration_mode=field_registration_mode,
+        pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
         enable_undistortion=enable_undistortion,
         calibration_alpha=calibration_alpha,
         pitch_detection_interval=pitch_detection_interval,

@@ -52,6 +52,7 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
         self.augmenter = augmenter
         self.samples: list[tuple[Path, dict, PitchModel, np.ndarray]] = []
         self.vocabulary: PitchPerceptionVocabulary | None = None
+        self.pitch_model: PitchModel | None = None
         source_names: set[str] = set()
 
         for manifest_value in manifests:
@@ -79,8 +80,11 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
             vocabulary = PitchPerceptionVocabulary.from_pitch_model(pitch_model)
             if self.vocabulary is None:
                 self.vocabulary = vocabulary
+                self.pitch_model = pitch_model
             elif vocabulary != self.vocabulary:
                 raise ValueError("all manifests must share one pitch vocabulary")
+            elif pitch_model.dimensions != self.pitch_model.dimensions:
+                raise ValueError("all manifests must share the same pitch dimensions")
             for frame in payload["frames"]:
                 image_points, pitch_points = correspondence_arrays(frame, pitch_model)
                 image_to_pitch, _ = fit_annotation_homography(
@@ -92,7 +96,7 @@ class PitchRegistrationDataset(Dataset[dict[str, torch.Tensor]]):
                 self.samples.append(
                     (image_path, frame, pitch_model, np.linalg.inv(image_to_pitch))
                 )
-        if self.vocabulary is None or not self.samples:
+        if self.vocabulary is None or self.pitch_model is None or not self.samples:
             raise ValueError("no geometrically valid annotated frames were found")
 
     def __len__(self) -> int:

@@ -395,15 +395,15 @@ class BidirectionalCameraSmoother:
                     else CameraTrackingStatus.PREDICTED
                 )
                 tier = MeasurementTier.SAFE if direct_safe else MeasurementTier.PREVIEW
-                parameters = BroadcastCameraParameters(
-                    center,
-                    wrap_angle(float(vector[0])),
-                    float(vector[1]),
-                    wrap_angle(float(vector[2])),
-                    float(vector[3]),
-                    item.image_size,
-                )
                 try:
+                    parameters = BroadcastCameraParameters(
+                        center,
+                        wrap_angle(float(vector[0])),
+                        float(vector[1]),
+                        wrap_angle(float(vector[2])),
+                        float(vector[3]),
+                        item.image_size,
+                    )
                     pitch_to_image = parameters.pitch_to_image_homography()
                     image_to_pitch = parameters.image_to_pitch_homography()
                 except (ValueError, np.linalg.LinAlgError):

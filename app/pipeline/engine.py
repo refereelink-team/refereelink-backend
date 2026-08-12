@@ -203,6 +203,7 @@ class InferencePipeline:
         camera_rig_profile_path: Optional[str] = None,
         enable_field_registration_v2: bool = False,
         field_registration_mode: Optional[str] = None,
+        pitch_perception_checkpoint_path: Optional[str] = None,
         enable_undistortion: bool = True,
         calibration_alpha: float = 0.0,
         pitch_detection_interval: int = 5,
@@ -246,6 +247,7 @@ class InferencePipeline:
         self._camera_rig_profile_path = camera_rig_profile_path
         self._enable_field_registration_v2 = bool(enable_field_registration_v2)
         self._field_registration_mode = field_registration_mode
+        self._pitch_perception_checkpoint_path = pitch_perception_checkpoint_path
         self._enable_undistortion = enable_undistortion
         self._calibration_alpha = calibration_alpha
         self._pitch_detection_interval = pitch_detection_interval
@@ -374,6 +376,7 @@ class InferencePipeline:
             camera_rig_profile_path=self._camera_rig_profile_path,
             enable_field_registration_v2=self._enable_field_registration_v2,
             field_registration_mode=self._field_registration_mode,
+            pitch_perception_checkpoint_path=self._pitch_perception_checkpoint_path,
             enable_undistortion=self._enable_undistortion,
             calibration_alpha=self._calibration_alpha,
             pitch_detection_interval=self._pitch_detection_interval,

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
 from typing import Tuple
 
 import cv2
@@ -19,7 +22,103 @@ from app.field_registration.pitch_model import PitchModel
 from app.field_registration.types import LineObservation, PointObservation
 
 
+def load_pitch_perception_checkpoint(
+    checkpoint_path: str | Path,
+    device: torch.device,
+) -> tuple[torch.nn.Module, dict[str, Any]]:
+    """Load a versioned dual-head checkpoint without accepting partial weights."""
+
+    payload = torch.load(
+        Path(checkpoint_path), map_location="cpu", weights_only=True
+    )
+    if not isinstance(payload, dict) or payload.get("format_version") != 1:
+        raise ValueError("unsupported pitch-perception checkpoint format")
+    required = {
+        "architecture",
+        "input_size",
+        "semantic_labels",
+        "landmark_labels",
+        "state_dict",
+        "validation",
+    }
+    missing = sorted(required - payload.keys())
+    if missing:
+        raise ValueError(
+            f"checkpoint is incomplete: missing {', '.join(missing)}"
+        )
+    input_size = payload["input_size"]
+    if not isinstance(input_size, (list, tuple)) or len(input_size) != 2:
+        raise ValueError("checkpoint input_size must be [width, height]")
+    if min(int(value) for value in input_size) <= 0:
+        raise ValueError("checkpoint input_size must be positive")
+
+    from app.field_registration.models import build_pitch_perception_model
+
+    model = build_pitch_perception_model(
+        str(payload["architecture"]),
+        len(payload["semantic_labels"]) + 1,
+        len(payload["landmark_labels"]),
+        pretrained=False,
+    )
+    model.load_state_dict(payload["state_dict"], strict=True)
+    return model.eval().to(device), payload
+
+
 class TorchPitchPerceptionBackend:
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint_path: str | Path,
+        pitch_model: PitchModel,
+        *,
+        device: str = "cpu",
+        use_fp16: bool = True,
+        point_threshold: float = 0.35,
+        line_threshold: float = 0.45,
+    ) -> "TorchPitchPerceptionBackend":
+        torch_device = torch.device(device)
+        model, payload = load_pitch_perception_checkpoint(
+            checkpoint_path, torch_device
+        )
+        expected = PitchPerceptionVocabulary.from_pitch_model(pitch_model)
+        if tuple(payload["semantic_labels"]) != expected.semantic_labels:
+            raise ValueError(
+                "checkpoint semantic vocabulary does not match the pitch model"
+            )
+        if tuple(payload["landmark_labels"]) != expected.landmark_labels:
+            raise ValueError(
+                "checkpoint landmark vocabulary does not match the pitch model"
+            )
+        stored_dimensions = payload.get("pitch_dimensions_m")
+        expected_dimensions = asdict(pitch_model.dimensions)
+        if stored_dimensions is not None:
+            try:
+                dimensions_match = all(
+                    np.isclose(
+                        float(stored_dimensions[name]),
+                        float(expected_value),
+                        atol=1e-3,
+                    )
+                    for name, expected_value in expected_dimensions.items()
+                )
+            except (KeyError, TypeError, ValueError):
+                dimensions_match = False
+            if not dimensions_match:
+                raise ValueError(
+                    "checkpoint pitch dimensions do not match the runtime pitch model"
+                )
+        input_size = tuple(int(value) for value in payload["input_size"])
+        return cls(
+            model,
+            pitch_model,
+            device=device,
+            input_size=input_size,
+            use_fp16=use_fp16,
+            point_threshold=point_threshold,
+            line_threshold=line_threshold,
+            model_name=str(payload["architecture"]),
+        )
+
     def __init__(
         self,
         model: torch.nn.Module,

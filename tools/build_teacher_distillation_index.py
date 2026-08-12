@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """Build an index containing only accepted teacher-consensus frames."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from experiments.field_registration.teacher_cache import load_teacher_frame
 

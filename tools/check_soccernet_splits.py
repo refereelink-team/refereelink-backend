@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """Fail when any SoccerNet sequence appears in more than one data split."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from experiments.field_registration.soccernet import (
     SoccerNetIndex,

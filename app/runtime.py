@@ -273,9 +273,11 @@ def render_radar(
     projection: PitchProjectionResult,
     color_lookup: np.ndarray,
     foul_location: Optional[np.ndarray] = None,
+    config: Optional[SoccerPitchConfiguration] = None,
 ) -> np.ndarray:
-    radar = draw_pitch(config=CONFIG)
-    radar = draw_reference_pitch_keypoints(radar, labels=CONFIG.labels)
+    pitch_config = config or CONFIG
+    radar = draw_pitch(config=pitch_config)
+    radar = draw_reference_pitch_keypoints(radar, labels=pitch_config.labels)
 
     if projection.homography_status == 'fresh':
         radar = draw_detected_pitch_keypoints_on_pitch(
@@ -317,27 +319,27 @@ def render_radar(
         ).reshape(-1, 2)
         pitch_mask = (
             (transformed_xy[:, 0] >= 0)
-            & (transformed_xy[:, 0] <= CONFIG.length)
+            & (transformed_xy[:, 0] <= pitch_config.length)
             & (transformed_xy[:, 1] >= 0)
-            & (transformed_xy[:, 1] <= CONFIG.width)
+            & (transformed_xy[:, 1] <= pitch_config.width)
         )
         transformed_xy = transformed_xy[pitch_mask]
         color_lookup = color_lookup[pitch_mask]
 
     radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 0],
+        config=pitch_config, xy=transformed_xy[color_lookup == 0],
         face_color=sv.Color.from_hex(COLORS[0]), radius=20, pitch=radar)
     radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 1],
+        config=pitch_config, xy=transformed_xy[color_lookup == 1],
         face_color=sv.Color.from_hex(COLORS[1]), radius=20, pitch=radar)
     radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 2],
+        config=pitch_config, xy=transformed_xy[color_lookup == 2],
         face_color=sv.Color.from_hex(COLORS[2]), radius=20, pitch=radar)
     radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 3],
+        config=pitch_config, xy=transformed_xy[color_lookup == 3],
         face_color=sv.Color.from_hex(COLORS[3]), radius=20, pitch=radar)
     radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 4],
+        config=pitch_config, xy=transformed_xy[color_lookup == 4],
         face_color=sv.Color.from_hex(COLORS[4]), radius=20, pitch=radar)
 
     # Draw foul location marker on the radar.

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
+from pathlib import Path
 
 import cv2
 import numpy as np
 import pytest
 import torch
 
-from app.field_registration.models import MobileNetV3PitchPerception
+from app.field_registration.models import (
+    MobileNetV3PitchPerception,
+    build_pitch_perception_model,
+)
 from app.field_registration.perception import PitchPerceptionVocabulary
 from app.field_registration.pitch_model import PitchModel
 from app.field_registration.torch_perception import TorchPitchPerceptionBackend
@@ -111,6 +116,21 @@ def test_manifest_dataset_generates_line_and_landmark_targets(tmp_path) -> None:
     assert float(sample["landmark_heatmaps"].max()) == 1.0
     assert int(sample["offset_mask"].sum()) > 0
     assert 0 < int(sample["landmark_visibility"].sum()) <= 33
+
+
+def test_manifest_dataset_rejects_mixed_pitch_dimensions(tmp_path) -> None:
+    paths = create_fixture(tmp_path)
+    first = Path(paths["train_manifest"])
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    payload["source"]["name"] = "different-pitch-sequence"
+    payload["pitch_dimensions_m"]["length"] = 110.0
+    second = tmp_path / "different-pitch.json"
+    second.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="same pitch dimensions"):
+        PitchRegistrationDataset(
+            [first, second], expected_split="train", input_size=(128, 64)
+        )
 
 
 def test_invisible_landmark_channels_do_not_contribute_focal_loss() -> None:
@@ -281,3 +301,67 @@ def test_torch_backend_decodes_semantic_line_and_subpixel_offset() -> None:
     assert [line.label for line in output.lines] == ["halfway_line"]
     assert [point.label for point in output.points] == ["centre_spot"]
     assert output.points[0].image_xy[0] > 128.0
+
+
+def _checkpoint(path: Path, pitch_model: PitchModel) -> None:
+    vocabulary = PitchPerceptionVocabulary.from_pitch_model(pitch_model)
+    model = build_pitch_perception_model(
+        "mobilenet_v3_dual_head",
+        vocabulary.semantic_class_count,
+        len(vocabulary.landmark_labels),
+        pretrained=False,
+    )
+    torch.save(
+        {
+            "format_version": 1,
+            "architecture": "mobilenet_v3_dual_head",
+            "input_size": [128, 64],
+            "semantic_labels": list(vocabulary.semantic_labels),
+            "landmark_labels": list(vocabulary.landmark_labels),
+            "pitch_dimensions_m": asdict(pitch_model.dimensions),
+            "state_dict": model.state_dict(),
+            "validation": {"accuracy_valid": False},
+        },
+        path,
+    )
+
+
+def test_torch_backend_loads_versioned_checkpoint(tmp_path) -> None:
+    pitch_model = PitchModel()
+    checkpoint = tmp_path / "student.pt"
+    _checkpoint(checkpoint, pitch_model)
+
+    backend = TorchPitchPerceptionBackend.from_checkpoint(
+        checkpoint, pitch_model, device="cpu", use_fp16=False
+    )
+
+    assert backend.input_size == (128, 64)
+    assert backend.model_name == "mobilenet_v3_dual_head"
+
+
+def test_torch_backend_rejects_vocabulary_mismatch(tmp_path) -> None:
+    pitch_model = PitchModel()
+    checkpoint = tmp_path / "student.pt"
+    _checkpoint(checkpoint, pitch_model)
+    payload = torch.load(checkpoint, weights_only=True)
+    payload["semantic_labels"][0] = "wrong-label"
+    torch.save(payload, checkpoint)
+
+    with pytest.raises(ValueError, match="semantic vocabulary"):
+        TorchPitchPerceptionBackend.from_checkpoint(
+            checkpoint, pitch_model, device="cpu"
+        )
+
+
+def test_torch_backend_rejects_pitch_dimension_mismatch(tmp_path) -> None:
+    pitch_model = PitchModel()
+    checkpoint = tmp_path / "student.pt"
+    _checkpoint(checkpoint, pitch_model)
+    payload = torch.load(checkpoint, weights_only=True)
+    payload["pitch_dimensions_m"]["length_m"] = 120.0
+    torch.save(payload, checkpoint)
+
+    with pytest.raises(ValueError, match="pitch dimensions"):
+        TorchPitchPerceptionBackend.from_checkpoint(
+            checkpoint, pitch_model, device="cpu"
+        )

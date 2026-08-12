@@ -54,12 +54,31 @@ uv run python tools/validate_pitch_perception_deployment.py \
 
 ## 3. 长时间 CUDA 联调
 
+训练后的学生模型可以直接接入实时 `VisionCore` 或离线两遍工具：
+
+```bash
+uv run python tools/run_offline_pitch_registration.py \
+  --source test2.mp4 \
+  --pitch-perception-checkpoint runs/pitch/c1-best.pt \
+  --device cuda \
+  --output-video /tmp/test2-field.mp4 \
+  --output-registration /tmp/test2-field \
+  --report /tmp/test2-field-performance.json
+```
+
+广播模式中，只有物理相机拟合和至少两个语义线元素的点线修正同时成功
+时，观测才进入 `SAFE`。点-only 矩阵只能是 `PREVIEW`，且光流不能把
+`PREVIEW` 自动提升为 `SAFE`。
+
 以下命令循环读取本地视频，默认连续运行 30 分钟：
 
 ```bash
 uv run python tools/benchmark_pitch_registration_long_run.py \
   --source test2.mp4 \
   --device cuda \
+  --pitch-perception-checkpoint runs/pitch/c1-best.pt \
+  --model-benchmark-report reports/c1-model-cuda.json \
+  --baseline-fps 41.24 \
   --duration-minutes 30 \
   --output docs/pitch-registration-long-run.json
 ```
@@ -82,6 +101,13 @@ uv run python tools/benchmark_pitch_registration_long_run.py \
 - 接触点坐标可用率与 `sigma_m` 分布；
 - RSS 首尾差和每分钟线性斜率；
 - CUDA 峰值显存。
+
+`--model-benchmark-report` 接收 `benchmark_pitch_perception.py` 的单模型 JSON，
+并将模型 P95 和增量显存合入长跑报告；`--baseline-fps` 记录同一设备、同一
+视频配置下的当前生产基线。缺少任一项时，统一性能门禁会明确失败，而不是
+用完整管线峰值显存代替模型增量或静默跳过 FPS 下降检查。
+工具还会校验模型基准记录的 checkpoint 路径和 SHA-256 与长跑实际加载文件
+完全一致，禁止混用另一个模型的性能证据。
 
 该报告没有真值，因此固定写入 `accuracy_valid=false`。它只能证明性能和稳定性；JaC、线误差、网格米制误差与球员坐标误差必须由独立人工真值报告给出。
 
@@ -112,3 +138,25 @@ uv run python tools/check_pitch_registration_soak.py \
 - 连续 30–60 分钟无崩溃、无持续显存增长；
 - `PREDICTED/LOST` 相机状态不会被越位、犯规定位或距离统计消费；
 - 所有失败报告保留视频时间段、相机状态和误差指标，便于复现。
+
+带人工或公开 held-out 真值的离线结果使用独立门禁：
+
+```bash
+uv run python tools/evaluate_offline_pitch_registration.py \
+  --annotations annotations/test2/manifest.json \
+  --registration /tmp/test2-field \
+  --output reports/E6-accuracy.json
+
+uv run python tools/check_pitch_registration_accuracy.py \
+  reports/E6-accuracy.json
+```
+
+E0–E7 的准确率和性能报告均生成后，再执行：
+
+```bash
+uv run python tools/summarize_pitch_registration_ablation.py \
+  --report-root reports \
+  --output reports/summary.json
+```
+
+缺少 held-out 真值时，工具必须保留 `accuracy_valid=false` 并拒绝选择模型。

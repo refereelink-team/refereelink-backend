@@ -6,6 +6,8 @@ losses, optimisation, checkpoint creation and deployment latency. They must
 never be reported as model-accuracy evidence.
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -14,6 +16,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from app.field_registration.geometry import transform_points
 from app.field_registration.pitch_model import PitchModel

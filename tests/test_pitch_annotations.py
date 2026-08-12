@@ -82,6 +82,23 @@ def test_annotation_validator_fits_manual_correspondences(tmp_path) -> None:
     assert report.frames[0].reprojection_median_px == pytest.approx(0.0, abs=1e-4)
 
 
+def test_annotation_homography_falls_back_for_exact_regular_grid() -> None:
+    pitch_x, pitch_y = np.meshgrid(np.linspace(0.0, 105.0, 6), np.linspace(0.0, 68.0, 5))
+    pitch = np.column_stack((pitch_x.reshape(-1), pitch_y.reshape(-1)))
+    transform = np.asarray(
+        [[5.0, 0.2, 40.0], [0.1, 3.5, 30.0], [0.0005, 0.001, 1.0]],
+        dtype=np.float64,
+    )
+    image = cv2.perspectiveTransform(
+        pitch.reshape(-1, 1, 2), transform
+    ).reshape(-1, 2)
+
+    image_to_pitch, residual = fit_annotation_homography(image, pitch)
+
+    assert image_to_pitch is not None
+    assert residual == pytest.approx(0.0, abs=1e-4)
+
+
 def test_annotation_validator_allows_geometry_only_rig_anchors(tmp_path) -> None:
     payload = _payload(tmp_path)
     payload["frames"][0]["contact_points"] = []

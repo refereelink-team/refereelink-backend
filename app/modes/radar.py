@@ -12,7 +12,6 @@ from app.constants.paths import (
 )
 from app.geometry.pitch_projection import PitchProjectionResult
 from app.runtime import (
-    CONFIG,
     ELLIPSE_ANNOTATOR,
     ELLIPSE_LABEL_ANNOTATOR,
     annotate_pitch_observations,
@@ -158,6 +157,10 @@ def iter_radar_analysis(
     player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
     pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
     camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    camera_rig_profile_path: Optional[str] = None,
+    enable_field_registration_v2: bool = False,
+    field_registration_mode: Optional[str] = None,
+    pitch_perception_checkpoint_path: Optional[str] = None,
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
@@ -171,6 +174,10 @@ def iter_radar_analysis(
         player_model_path=player_model_path,
         pitch_model_path=pitch_model_path,
         camera_calibration_path=camera_calibration_path,
+        camera_rig_profile_path=camera_rig_profile_path,
+        enable_field_registration_v2=enable_field_registration_v2,
+        field_registration_mode=field_registration_mode,
+        pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
         enable_undistortion=enable_undistortion,
         calibration_alpha=calibration_alpha,
         pitch_detection_interval=pitch_detection_interval,
@@ -224,11 +231,19 @@ def iter_radar_analysis(
                 )
                 if motion_mask is not None:
                     centroid = compute_motion_centroid(motion_mask)
-                    if centroid is not None and projection.homography is not None:
+                    if (
+                        centroid is not None
+                        and projection.homography is not None
+                        and projection.measurement_usable
+                    ):
                         world_point = project_point_to_world(centroid, projection.homography)
                         if world_point is not None:
                             wx, wy = world_point
-                            if 0 <= wx <= CONFIG.length and 0 <= wy <= CONFIG.width:
+                            pitch_config = vision_core.projection_engine.config
+                            if (
+                                0 <= wx <= pitch_config.length
+                                and 0 <= wy <= pitch_config.width
+                            ):
                                 foul_location = world_point
                                 emit_radar_log(
                                     log_callback,
@@ -247,6 +262,7 @@ def iter_radar_analysis(
             projection=projection,
             color_lookup=color_lookup,
             foul_location=foul_location,
+            config=vision_core.projection_engine.config,
         )
         radar_available = projection.available
         if projection.homography_status == 'unavailable':
@@ -284,6 +300,10 @@ def run_radar(
     player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
     pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
     camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    camera_rig_profile_path: Optional[str] = None,
+    enable_field_registration_v2: bool = False,
+    field_registration_mode: Optional[str] = None,
+    pitch_perception_checkpoint_path: Optional[str] = None,
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
@@ -296,6 +316,10 @@ def run_radar(
         player_model_path=player_model_path,
         pitch_model_path=pitch_model_path,
         camera_calibration_path=camera_calibration_path,
+        camera_rig_profile_path=camera_rig_profile_path,
+        enable_field_registration_v2=enable_field_registration_v2,
+        field_registration_mode=field_registration_mode,
+        pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
         enable_undistortion=enable_undistortion,
         calibration_alpha=calibration_alpha,
         pitch_detection_interval=pitch_detection_interval,

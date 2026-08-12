@@ -41,6 +41,8 @@ def main(
     camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
     camera_rig_profile_path: Optional[str] = None,
     enable_field_registration_v2: bool = False,
+    field_registration_mode: Optional[str] = None,
+    pitch_perception_checkpoint_path: Optional[str] = None,
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
@@ -67,6 +69,10 @@ def main(
             player_model_path=player_model_path,
             pitch_model_path=pitch_model_path,
             camera_calibration_path=camera_calibration_path,
+            camera_rig_profile_path=camera_rig_profile_path,
+            enable_field_registration_v2=enable_field_registration_v2,
+            field_registration_mode=field_registration_mode,
+            pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
             enable_undistortion=enable_undistortion,
             calibration_alpha=calibration_alpha,
             pitch_detection_interval=pitch_detection_interval,
@@ -85,6 +91,10 @@ def main(
             player_model_path=player_model_path,
             pitch_model_path=pitch_model_path,
             camera_calibration_path=camera_calibration_path,
+            camera_rig_profile_path=camera_rig_profile_path,
+            enable_field_registration_v2=enable_field_registration_v2,
+            field_registration_mode=field_registration_mode,
+            pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
             enable_undistortion=enable_undistortion,
             calibration_alpha=calibration_alpha,
             pitch_detection_interval=pitch_detection_interval,
@@ -117,6 +127,13 @@ def main(
             sys.argv += ['--camera_rig_profile_path', camera_rig_profile_path]
         if enable_field_registration_v2:
             sys.argv.append('--enable_field_registration_v2')
+        if field_registration_mode:
+            sys.argv += ['--field_registration_mode', field_registration_mode]
+        if pitch_perception_checkpoint_path:
+            sys.argv += [
+                '--pitch_perception_checkpoint_path',
+                pitch_perception_checkpoint_path,
+            ]
         if team_classifier_path:
             sys.argv += ['--team_classifier_path', team_classifier_path]
         if not enable_undistortion:
@@ -136,6 +153,10 @@ def main(
             device=device,
             pitch_model_path=pitch_model_path,
             camera_calibration_path=camera_calibration_path,
+            camera_rig_profile_path=camera_rig_profile_path,
+            enable_field_registration_v2=enable_field_registration_v2,
+            field_registration_mode=field_registration_mode,
+            pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
             enable_undistortion=enable_undistortion,
             calibration_alpha=calibration_alpha,
             pitch_detection_interval=pitch_detection_interval,
@@ -197,6 +218,10 @@ def main(
             player_model_path=player_model_path,
             pitch_model_path=pitch_model_path,
             camera_calibration_path=camera_calibration_path,
+            camera_rig_profile_path=camera_rig_profile_path,
+            enable_field_registration_v2=enable_field_registration_v2,
+            field_registration_mode=field_registration_mode,
+            pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
             enable_undistortion=enable_undistortion,
             calibration_alpha=calibration_alpha,
             pitch_detection_interval=pitch_detection_interval,
@@ -243,6 +268,12 @@ if __name__ == '__main__':
     parser.add_argument('--camera_calibration_path', type=str, default=CAMERA_CALIBRATION_PATH)
     parser.add_argument('--camera_rig_profile_path', type=str, default=None)
     parser.add_argument('--enable_field_registration_v2', action='store_true')
+    parser.add_argument(
+        '--field_registration_mode',
+        choices=('legacy', 'broadcast', 'rig_pan'),
+        default=None,
+    )
+    parser.add_argument('--pitch_perception_checkpoint_path', type=str, default=None)
     parser.add_argument('--disable_undistortion', action='store_false', dest='enable_undistortion')
     parser.set_defaults(enable_undistortion=True)
     parser.add_argument('--calibration_alpha', type=float, default=0.0)
@@ -280,6 +311,8 @@ if __name__ == '__main__':
         camera_calibration_path=args.camera_calibration_path,
         camera_rig_profile_path=args.camera_rig_profile_path,
         enable_field_registration_v2=args.enable_field_registration_v2,
+        field_registration_mode=args.field_registration_mode,
+        pitch_perception_checkpoint_path=args.pitch_perception_checkpoint_path,
         enable_undistortion=args.enable_undistortion,
         calibration_alpha=args.calibration_alpha,
         pitch_detection_interval=args.pitch_detection_interval,

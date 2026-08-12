@@ -20,6 +20,8 @@ minimal input is::
     }
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -28,6 +30,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from app.field_registration.metrics import (
     ErrorSummary,

@@ -5,6 +5,8 @@ This command does not measure model accuracy. It compares framework outputs on
 the same deterministic input and records latency for deployment smoke testing.
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -16,6 +18,13 @@ from typing import Any, Sequence
 
 import numpy as np
 import torch
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from tools.export_pitch_perception import load_trained_model
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 import pytest
 import torch
@@ -10,6 +11,8 @@ from tools.benchmark_pitch_registration_long_run import (
     BoundedReservoir,
     _counter_ratio,
     _memory_slope_mb_per_minute,
+    load_model_benchmark_evidence,
+    validate_model_benchmark_checkpoint,
 )
 from tools.export_pitch_perception import build_trtexec_command, load_trained_model
 
@@ -87,3 +90,51 @@ def test_bounded_reservoir_has_fixed_memory_and_exact_maximum() -> None:
     assert summary["count"] == 100
     assert summary["sample_count"] == 10
     assert summary["maximum"] == 99.0
+
+
+def test_model_benchmark_evidence_loads_single_cuda_result(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "student.pt"
+    checkpoint.write_bytes(b"student")
+    checksum = hashlib.sha256(b"student").hexdigest()
+    path = tmp_path / "model.json"
+    path.write_text(
+        """[{"status":"ok","architecture":"mobilenet_v3_dual_head",\
+"device":"cuda","precision":"fp16","latency_ms":{"p95":6.3},\
+"peak_gpu_memory_mb":48.5,"weights":{"checkpoint":"%s","sha256":"%s"}}]"""
+        % (checkpoint, checksum),
+        encoding="utf-8",
+    )
+
+    evidence = load_model_benchmark_evidence(path)
+
+    assert evidence["latency_ms"] == {"p95": 6.3}
+    assert evidence["gpu_memory_mb"] == 48.5
+    validate_model_benchmark_checkpoint(evidence, checkpoint)
+
+
+def test_model_benchmark_evidence_rejects_ambiguous_results(tmp_path: Path) -> None:
+    path = tmp_path / "model.json"
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exactly one"):
+        load_model_benchmark_evidence(path)
+
+
+def test_model_benchmark_evidence_rejects_different_checkpoint(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "student.pt"
+    checkpoint.write_bytes(b"student")
+    other = tmp_path / "other.pt"
+    other.write_bytes(b"other")
+    evidence = {
+        "weights": {
+            "checkpoint": str(checkpoint),
+            "sha256": hashlib.sha256(b"student").hexdigest(),
+        }
+    }
+
+    with pytest.raises(ValueError, match="does not match"):
+        validate_model_benchmark_checkpoint(evidence, other)
+
+    checkpoint.write_bytes(b"modified")
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_model_benchmark_checkpoint(evidence, checkpoint)

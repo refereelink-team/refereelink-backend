@@ -47,6 +47,9 @@ class FieldRegistrationConfig:
     fast_semantic_interval: int = 3
     safe_flow_without_semantic_seconds: float = 0.5
     preview_flow_without_semantic_seconds: float = 1.0
+    require_physical_camera_for_safe: bool = True
+    minimum_safe_semantic_lines: int = 2
+    allow_point_only_safe: bool = False
     registration_mode: RegistrationMode | str | None = None
 
 
@@ -315,6 +318,18 @@ class FieldRegistrationCore:
             covariance = filter_covariance[np.ix_([0, 4], [0, 4])]
             parameter_covariance = filter_covariance.copy()
             uncertainty = max(float(uncertainty or 0.0), physical.fit_p95_error_px)
+        elif (
+            self.registration_mode is RegistrationMode.BROADCAST
+            and self.config.require_physical_camera_for_safe
+            and measurement_tier is MeasurementTier.SAFE
+        ):
+            # A projective H can satisfy its own point correspondences while
+            # still placing the field lines far from the image evidence (for
+            # example after a systematic landmark-ID error).  Do not expose
+            # such a planar-only estimate to metric/high-risk consumers.  It
+            # remains available as PREVIEW for diagnostics and can recover to
+            # SAFE as soon as the shot-local physical camera fit succeeds.
+            measurement_tier = MeasurementTier.PREVIEW
         return CameraState(
             status=status,
             pan_rad=pan_rad,
@@ -539,13 +554,24 @@ class FieldRegistrationCore:
             if candidate.success:
                 line_result = candidate
                 confidence = max(confidence, candidate.confidence)
+        safe_line_evidence = (
+            line_result is not None
+            and line_result.success
+            and line_result.visible_segment_count
+            >= self.config.minimum_safe_semantic_lines
+        )
+        measurement_tier = (
+            MeasurementTier.SAFE
+            if safe_line_evidence or self.config.allow_point_only_safe
+            else MeasurementTier.PREVIEW
+        )
         return self._broadcast_state_from_initialization(
             initialization,
             image_size,
             status,
             confidence,
             0,
-            MeasurementTier.SAFE,
+            measurement_tier,
             line_result=line_result,
         )
 
@@ -583,9 +609,13 @@ class FieldRegistrationCore:
         )
         if semantic_age > preview_limit:
             return None
+        inherited_safe = (
+            self._last_state is not None
+            and self._last_state.measurement_tier is MeasurementTier.SAFE
+        )
         tier = (
             MeasurementTier.SAFE
-            if semantic_age <= safe_limit
+            if semantic_age <= safe_limit and inherited_safe
             else MeasurementTier.PREVIEW
         )
         previous_confidence = self._last_state.confidence if self._last_state else 0.5

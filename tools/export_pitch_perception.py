@@ -6,6 +6,8 @@ performed through NVIDIA ``trtexec`` and fails with an actionable capability
 report when the SDK is not installed.
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -14,11 +16,18 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Any
-
 import torch
 
-from app.field_registration.models import build_pitch_perception_model
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
+
+from app.field_registration.torch_perception import (
+    load_pitch_perception_checkpoint as load_trained_model,
+)
 
 
 def deployment_capabilities() -> dict[str, object]:
@@ -29,37 +38,6 @@ def deployment_capabilities() -> dict[str, object]:
         "trtexec": shutil.which("trtexec"),
         "cuda": torch.cuda.is_available(),
     }
-
-
-def load_trained_model(
-    checkpoint_path: Path,
-    device: torch.device,
-) -> tuple[torch.nn.Module, dict[str, Any]]:
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    if not isinstance(payload, dict) or payload.get("format_version") != 1:
-        raise ValueError("unsupported pitch-perception checkpoint format")
-    required = {
-        "architecture",
-        "input_size",
-        "semantic_labels",
-        "landmark_labels",
-        "state_dict",
-        "validation",
-    }
-    missing = sorted(required - payload.keys())
-    if missing:
-        raise ValueError(f"checkpoint is incomplete: missing {', '.join(missing)}")
-    input_size = payload["input_size"]
-    if not isinstance(input_size, (list, tuple)) or len(input_size) != 2:
-        raise ValueError("checkpoint input_size must be [width, height]")
-    model = build_pitch_perception_model(
-        payload["architecture"],
-        len(payload["semantic_labels"]) + 1,
-        len(payload["landmark_labels"]),
-        pretrained=False,
-    )
-    model.load_state_dict(payload["state_dict"], strict=True)
-    return model.eval().to(device), payload
 
 
 def build_trtexec_command(

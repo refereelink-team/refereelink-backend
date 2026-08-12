@@ -73,7 +73,23 @@ def _camera_state(rig: CameraRigProfile, pan_rad: float = 0.0) -> CameraState:
         image_to_pitch=rig.image_to_pitch_homography(pan_rad),
         pitch_to_image=rig.pitch_to_image_homography(pan_rad),
         confidence=0.95,
+        measurement_tier=MeasurementTier.SAFE,
     )
+
+
+def test_camera_state_defaults_to_unavailable_measurement() -> None:
+    state = CameraState(
+        status=CameraTrackingStatus.TRACKED,
+        pan_rad=0.0,
+        pan_velocity_rad_s=0.0,
+        covariance=np.eye(2),
+        image_to_pitch=np.eye(3),
+        pitch_to_image=np.eye(3),
+        confidence=0.9,
+    )
+
+    assert state.measurement_tier is MeasurementTier.UNAVAILABLE
+    assert not state.usable_for_measurement
 
 
 def test_venue_profile_round_trip_uses_metric_dimensions(tmp_path) -> None:
@@ -414,6 +430,7 @@ def test_broadcast_core_updates_homography_with_flow_without_rig() -> None:
             normal_semantic_interval=100,
             stable_semantic_interval=100,
             registration_mode=RegistrationMode.BROADCAST,
+            allow_point_only_safe=True,
         ),
     )
 
@@ -421,8 +438,10 @@ def test_broadcast_core_updates_homography_with_flow_without_rig() -> None:
     second = core.process(second_frame, 1)
 
     assert first.camera_state.status is CameraTrackingStatus.RELOCALIZED
+    assert first.camera_state.measurement_tier is MeasurementTier.PREVIEW
+    assert first.camera_state.camera_model == "broadcast_planar_homography"
     assert second.camera_state.status is CameraTrackingStatus.TRACKED
-    assert second.camera_state.measurement_tier is MeasurementTier.SAFE
+    assert second.camera_state.measurement_tier is MeasurementTier.PREVIEW
     assert second.camera_state.flow_inliers >= core.config.minimum_flow_tracks
     expected = translation @ pitch_to_image
     samples = PitchModel().grid(7, 5)
@@ -463,6 +482,7 @@ def test_broadcast_core_exposes_physical_camera_and_predicts_transform() -> None
             normal_semantic_interval=100,
             stable_semantic_interval=100,
             registration_mode=RegistrationMode.BROADCAST,
+            allow_point_only_safe=True,
         ),
     )
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -471,6 +491,7 @@ def test_broadcast_core_exposes_physical_camera_and_predicts_transform() -> None
     second = core.process(frame, 1)
 
     assert first.camera_state.camera_model == "broadcast_tripod_pan_tilt_zoom"
+    assert first.camera_state.measurement_tier is MeasurementTier.SAFE
     assert first.camera_state.focal_px == pytest.approx(1120.0, rel=3e-3)
     assert first.camera_state.camera_center_xyz_m == pytest.approx(
         camera.camera_center_xyz_m, abs=0.15
@@ -480,6 +501,32 @@ def test_broadcast_core_exposes_physical_camera_and_predicts_transform() -> None
     assert second.camera_state.camera_model == "broadcast_tripod_pan_tilt_zoom"
     assert second.camera_state.pitch_to_image is not None
     assert second.camera_state.measurement_tier is MeasurementTier.PREVIEW
+
+
+def test_broadcast_point_only_observation_is_preview_by_default() -> None:
+    frame, observations, _ = _broadcast_fixture()
+    moved = cv2.warpPerspective(
+        frame,
+        np.asarray([[1.0, 0.0, 4.0], [0.0, 1.0, 2.0], [0.0, 0.0, 1.0]]),
+        (frame.shape[1], frame.shape[0]),
+    )
+    core = FieldRegistrationCore(
+        PitchModel(),
+        StaticPerceptionBackend([PitchPerceptionOutput(points=observations)]),
+        config=FieldRegistrationConfig(
+            normal_semantic_interval=100,
+            stable_semantic_interval=100,
+            registration_mode=RegistrationMode.BROADCAST,
+        ),
+    )
+
+    semantic = core.process(frame, 0)
+    flow = core.process(moved, 1)
+
+    assert semantic.camera_state.pitch_to_image is not None
+    assert semantic.camera_state.measurement_tier is MeasurementTier.PREVIEW
+    assert flow.camera_state.pitch_to_image is not None
+    assert flow.camera_state.measurement_tier is MeasurementTier.PREVIEW
 
 
 def test_broadcast_hard_cut_never_reuses_previous_homography() -> None:

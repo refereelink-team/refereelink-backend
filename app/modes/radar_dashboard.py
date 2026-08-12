@@ -196,6 +196,10 @@ class RadarDashboardWorker(Thread):
         player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
         pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
         camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+        camera_rig_profile_path: Optional[str] = None,
+        enable_field_registration_v2: bool = False,
+        field_registration_mode: Optional[str] = None,
+        pitch_perception_checkpoint_path: Optional[str] = None,
         enable_undistortion: bool = True,
         calibration_alpha: float = 0.0,
         pitch_detection_interval: int = 5,
@@ -210,6 +214,10 @@ class RadarDashboardWorker(Thread):
         self.player_model_path = player_model_path
         self.pitch_model_path = pitch_model_path
         self.camera_calibration_path = camera_calibration_path
+        self.camera_rig_profile_path = camera_rig_profile_path
+        self.enable_field_registration_v2 = enable_field_registration_v2
+        self.field_registration_mode = field_registration_mode
+        self.pitch_perception_checkpoint_path = pitch_perception_checkpoint_path
         self.enable_undistortion = enable_undistortion
         self.calibration_alpha = calibration_alpha
         self.pitch_detection_interval = pitch_detection_interval
@@ -239,6 +247,10 @@ class RadarDashboardWorker(Thread):
                     player_model_path=self.player_model_path,
                     pitch_model_path=self.pitch_model_path,
                     camera_calibration_path=self.camera_calibration_path,
+                    camera_rig_profile_path=self.camera_rig_profile_path,
+                    enable_field_registration_v2=self.enable_field_registration_v2,
+                    field_registration_mode=self.field_registration_mode,
+                    pitch_perception_checkpoint_path=self.pitch_perception_checkpoint_path,
                     enable_undistortion=self.enable_undistortion,
                     calibration_alpha=self.calibration_alpha,
                     pitch_detection_interval=self.pitch_detection_interval,
@@ -339,6 +351,10 @@ if HAVE_PYSIDE6:
             player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
             pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
             camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+            camera_rig_profile_path: Optional[str] = None,
+            enable_field_registration_v2: bool = False,
+            field_registration_mode: Optional[str] = None,
+            pitch_perception_checkpoint_path: Optional[str] = None,
             enable_undistortion: bool = True,
             calibration_alpha: float = 0.0,
             pitch_detection_interval: int = 5,
@@ -356,6 +372,10 @@ if HAVE_PYSIDE6:
                 player_model_path=player_model_path,
                 pitch_model_path=pitch_model_path,
                 camera_calibration_path=camera_calibration_path,
+                camera_rig_profile_path=camera_rig_profile_path,
+                enable_field_registration_v2=enable_field_registration_v2,
+                field_registration_mode=field_registration_mode,
+                pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
                 enable_undistortion=enable_undistortion,
                 calibration_alpha=calibration_alpha,
                 pitch_detection_interval=pitch_detection_interval,
@@ -452,6 +472,10 @@ def run_radar_dashboard(
     player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
     pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
     camera_calibration_path: Optional[str] = CAMERA_CALIBRATION_PATH,
+    camera_rig_profile_path: Optional[str] = None,
+    enable_field_registration_v2: bool = False,
+    field_registration_mode: Optional[str] = None,
+    pitch_perception_checkpoint_path: Optional[str] = None,
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
     pitch_detection_interval: int = 5,
@@ -476,6 +500,10 @@ def run_radar_dashboard(
         player_model_path=player_model_path,
         pitch_model_path=pitch_model_path,
         camera_calibration_path=camera_calibration_path,
+        camera_rig_profile_path=camera_rig_profile_path,
+        enable_field_registration_v2=enable_field_registration_v2,
+        field_registration_mode=field_registration_mode,
+        pitch_perception_checkpoint_path=pitch_perception_checkpoint_path,
         enable_undistortion=enable_undistortion,
         calibration_alpha=calibration_alpha,
         pitch_detection_interval=pitch_detection_interval,

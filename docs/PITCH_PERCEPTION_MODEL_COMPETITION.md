@@ -65,7 +65,9 @@ uv run python -m experiments.field_registration.train_dual_head \
   --output outputs/pitch-perception/mobilenet-v3-dual-head.pt \
   --device cuda \
   --batch-size 8 \
-  --epochs 30
+  --supervised-epochs 30 \
+  --distillation-epochs 0 \
+  --domain-epochs 0
 ```
 
 损失：

@@ -113,14 +113,26 @@ def fit_annotation_homography(
 
     if image_points.shape != pitch_points_m.shape or image_points.shape[0] < 4:
         return None, None
-    matrix, mask = cv2.findHomography(
-        pitch_points_m.astype(np.float64),
-        image_points.astype(np.float64),
-        method=cv2.USAC_MAGSAC,
-        ransacReprojThreshold=3.0,
-        maxIters=10_000,
-        confidence=0.999,
-    )
+    def fit(method: int) -> tuple[np.ndarray | None, np.ndarray | None]:
+        try:
+            return cv2.findHomography(
+                pitch_points_m.astype(np.float64),
+                image_points.astype(np.float64),
+                method=method,
+                ransacReprojThreshold=3.0,
+                maxIters=10_000,
+                confidence=0.999,
+            )
+        except cv2.error:
+            return None, None
+
+    method = getattr(cv2, "USAC_MAGSAC", cv2.RANSAC)
+    matrix, mask = fit(method)
+    # OpenCV USAC can reject exact/regular planar grids in some builds. Use
+    # the same guarded RANSAC fallback as the runtime initializer; subsequent
+    # residual and coverage checks still decide whether annotation QA passes.
+    if matrix is None and method != cv2.RANSAC:
+        matrix, mask = fit(cv2.RANSAC)
     if matrix is None or not np.all(np.isfinite(matrix)):
         return None, None
     projected = cv2.perspectiveTransform(

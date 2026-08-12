@@ -43,14 +43,15 @@ random network.
 |---|---:|---:|
 | Parameters | 3,253,384 | informational |
 | Input | 512×288, batch 1, FP16 | fixed |
-| Mean latency | 5.86 ms | informational |
-| P95 latency | 7.59 ms | ≤ 8 ms |
-| Maximum latency | 10.19 ms | informational |
-| Throughput | 170.53 FPS | model-only |
+| Mean latency | 3.85 ms | informational |
+| P95 latency | 6.36 ms | ≤ 8 ms |
+| Maximum latency | 6.60 ms | informational |
+| Throughput | 260.07 FPS | model-only |
 | Peak allocated GPU memory | 48.45 MB | ≤ 300 MB |
 
-Run configuration: 30 warm-up iterations followed by 200 measured
-iterations with CUDA synchronization around every sample.
+Run configuration: 20 warm-up iterations followed by 100 measured
+iterations with CUDA synchronization around every sample. These are the final
+2026-08-13 measurements after wiring the checkpoint loader into `VisionCore`.
 
 ## Interpretation
 

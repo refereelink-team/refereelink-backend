@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Measure dual-head pitch-perception latency without substituting other models."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -10,6 +12,13 @@ import time
 
 import numpy as np
 import torch
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from app.field_registration.models import build_pitch_perception_model
 from app.field_registration.perception import PitchPerceptionVocabulary

@@ -12,7 +12,7 @@ The test2 video has no command-line input by design and cannot enter training.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import random
@@ -24,6 +24,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from app.field_registration.models import build_pitch_perception_model
+from app.field_registration.pitch_model import PitchModel
 from experiments.field_registration.augmentation import PitchTrainingAugmenter
 from experiments.field_registration.dataset import PitchRegistrationDataset
 from experiments.field_registration.losses import dual_head_loss
@@ -234,6 +235,18 @@ def _with_epochs(phase: TrainingPhase, epochs: int) -> TrainingPhase:
     )
 
 
+def _pitch_model(dataset: Dataset) -> PitchModel:
+    pitch_model = getattr(dataset, "pitch_model", None)
+    if not isinstance(pitch_model, PitchModel):
+        raise ValueError("training dataset does not expose pitch dimensions")
+    return pitch_model
+
+
+def _require_matching_geometry(reference: Dataset, candidate: Dataset, name: str) -> None:
+    if _pitch_model(candidate).dimensions != _pitch_model(reference).dimensions:
+        raise ValueError(f"{name} pitch dimensions differ from supervised data")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     train_group = parser.add_mutually_exclusive_group(required=True)
@@ -287,6 +300,7 @@ def main() -> None:
     )
     if train_dataset.vocabulary != validation_dataset.vocabulary:  # type: ignore[attr-defined]
         raise ValueError("training and validation vocabularies differ")
+    _require_matching_geometry(train_dataset, validation_dataset, "validation")
     vocabulary = train_dataset.vocabulary  # type: ignore[attr-defined]
     model = build_pitch_perception_model(
         "mobilenet_v3_dual_head",
@@ -343,6 +357,7 @@ def main() -> None:
             continue
         if dataset.vocabulary != vocabulary:  # type: ignore[attr-defined]
             raise ValueError(f"{phase.name} vocabulary differs from supervised data")
+        _require_matching_geometry(train_dataset, dataset, phase.name)
         loader = _loader(
             dataset,
             batch_size=arguments.batch_size,
@@ -382,6 +397,7 @@ def main() -> None:
             "input_size": list(input_size),
             "semantic_labels": list(vocabulary.semantic_labels),
             "landmark_labels": list(vocabulary.landmark_labels),
+            "pitch_dimensions_m": asdict(_pitch_model(train_dataset).dimensions),
             "state_dict": model.state_dict(),
             "validation": validation,
             "training": {

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build a fixed-position horizontal-pan rig profile from annotated anchor frames."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,13 @@ import json
 from pathlib import Path
 
 import numpy as np
+
+try:
+    from tools._bootstrap import ensure_repository_root
+except ModuleNotFoundError:  # Direct ``python tools/...`` execution.
+    from _bootstrap import ensure_repository_root
+
+ensure_repository_root(__file__)
 
 from app.field_registration.annotations import (
     correspondence_arrays,

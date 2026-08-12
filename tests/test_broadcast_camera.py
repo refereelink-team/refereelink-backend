@@ -109,3 +109,26 @@ def test_broadcast_camera_filter_tracks_motion_and_rejects_outlier() -> None:
     assert camera_filter.state[4] > 0.0
     assert camera_filter.state[5] > 0.0
     assert camera_filter.state[6] > 0.0
+
+
+@pytest.mark.parametrize(
+    "tilt,log_focal",
+    [
+        (np.pi / 2.0, np.log(1120.0)),
+        (0.3, 1_000.0),
+        (0.3, -1_000.0),
+    ],
+)
+def test_broadcast_camera_rejects_nonphysical_parameter_ranges(
+    tilt: float,
+    log_focal: float,
+) -> None:
+    with pytest.raises(ValueError):
+        BroadcastCameraParameters(
+            np.asarray([-18.0, 32.0, 24.0]),
+            0.0,
+            tilt,
+            0.0,
+            log_focal,
+            (1280, 720),
+        )

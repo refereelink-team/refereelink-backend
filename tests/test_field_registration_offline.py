@@ -220,3 +220,20 @@ def test_late_shot_center_retrospectively_fits_planar_homographies() -> None:
     assert result.smoothed_frame_count == 2
     assert result.states[0].camera_model.endswith("offline_rts")
     assert result.states[0].focal_px == pytest.approx(physical.focal_px, rel=5e-3)
+
+
+def test_offline_smoother_keeps_original_state_when_rts_leaves_physical_bounds() -> None:
+    center = np.asarray([-18.0, 30.0, 24.0])
+    unstable = CameraState(
+        **{
+            **_state(center, 0.08).__dict__,
+            "zoom_velocity_log_s": 1_000_000.0,
+        }
+    )
+    forward = [_observation(0, 0, unstable), _observation(1, 0, _missing(0))]
+
+    result = BidirectionalCameraSmoother().smooth(forward, [])
+
+    assert result.states[0].pitch_to_image is not None
+    assert result.states[1].measurement_tier is MeasurementTier.UNAVAILABLE
+    assert result.smoothed_frame_count == 1
