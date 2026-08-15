@@ -182,6 +182,7 @@ calibration/
 core/
 examples/
 offside/
+third_party/sn-mvfoul/
 projection/
 tracking/
 .superpowers/

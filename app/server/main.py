@@ -27,10 +27,12 @@ from app.constants.paths import (
 from app.server.api.health import router as health_router
 from app.server.api.status import router as status_router
 from app.server.api.events import router as events_router
+from app.server.api.multiview import router as multiview_router
 from app.server.api.pipeline import router as pipeline_router
 from app.server.api.team_calibration import router as team_calibration_router
 from app.server.ws.state import router as ws_router
 from app.services.publisher import WebSocketPublisher
+from app.multiview.service import MultiviewAnalysisService
 from app.state.models import SourceStatus
 from app.state.store import StateStore
 
@@ -218,6 +220,7 @@ app.add_middleware(
 app.state.store = _store
 app.state.publisher = _publisher
 app.state.pipeline = None
+app.state.multiview_service = MultiviewAnalysisService()
 app.state.create_pipeline = create_pipeline
 app.state.attach_and_start_pipeline = attach_and_start_pipeline
 app.state.stop_and_clear_pipeline = stop_and_clear_pipeline
@@ -225,6 +228,7 @@ app.state.stop_and_clear_pipeline = stop_and_clear_pipeline
 app.include_router(health_router)
 app.include_router(status_router)
 app.include_router(events_router)
+app.include_router(multiview_router)
 app.include_router(pipeline_router)
 app.include_router(team_calibration_router)
 app.include_router(ws_router)

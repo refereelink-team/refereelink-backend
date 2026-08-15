@@ -8,9 +8,10 @@ import EventAlerts from './components/EventAlerts';
 import ControlPanel from './components/ControlPanel';
 import LogPanel from './components/LogPanel';
 import TeamCalibrationPanel from './components/TeamCalibrationPanel';
+import MultiviewReviewPage from './pages/MultiviewReviewPage';
 import './styles/global.css';
 
-const App: React.FC = () => {
+const Dashboard: React.FC = () => {
   const { sendCommand } = useWebSocket();
   const calibrationPhase = useDashboardStore((s) => s.teamCalibration.state);
   const calibrationWorkspace = [
@@ -24,6 +25,12 @@ const App: React.FC = () => {
 
   return (
     <div className={`dashboard-layout${calibrationWorkspace ? ' calibration-workspace-mode' : ''}`}>
+      {!calibrationWorkspace && (
+        <a className="multiview-entry" href="/multiview" aria-label="进入多视角犯规判罚中心">
+          <span>MULTI-VIEW</span>
+          多视角判罚
+        </a>
+      )}
       <VideoPanel />
       <Pitch2D />
       <StatusCards />
@@ -33,6 +40,14 @@ const App: React.FC = () => {
       <LogPanel />
     </div>
   );
+};
+
+const App: React.FC = () => {
+  const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (normalizedPath === '/multiview') {
+    return <MultiviewReviewPage />;
+  }
+  return <Dashboard />;
 };
 
 export default App;
