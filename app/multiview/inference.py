@@ -7,6 +7,7 @@ locations with SC_MVFOUL_CODE_PATH and SC_MVFOUL_WEIGHTS_PATH.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import threading
@@ -39,6 +40,14 @@ def configured_model_dir() -> Path:
 
 def configured_weights_path() -> Path:
     return Path(os.environ.get("SC_MVFOUL_WEIGHTS_PATH", DEFAULT_WEIGHTS_PATH)).expanduser()
+
+
+def checkpoint_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def model_prerequisites() -> dict[str, Any]:
@@ -107,6 +116,7 @@ class FoulInferenceService:
         self.end_frame = DEFAULT_END_FRAME
         self.fps = DEFAULT_FPS
         self._lock = threading.RLock()
+        self.checkpoint_hash = checkpoint_sha256(configured_weights_path())
         self._model = self._load_model()
         from torchvision.models.video import MViT_V2_S_Weights
 
@@ -252,6 +262,22 @@ class FoulInferenceService:
         confidence = float(
             (offence_probabilities[offence_index] + action_probabilities[action_index]).item() / 2.0
         )
+        action_candidates = sorted(
+            (
+                {"label": ACTION_LABELS[index], "confidence": round(float(probability), 4)}
+                for index, probability in enumerate(action_probabilities.detach().cpu())
+            ),
+            key=lambda item: item["confidence"],
+            reverse=True,
+        )[:3]
+        severity_candidates = sorted(
+            (
+                {"label": SEVERITY_LABELS[index], "confidence": round(float(probability), 4)}
+                for index, probability in enumerate(offence_probabilities.detach().cpu())
+            ),
+            key=lambda item: item["confidence"],
+            reverse=True,
+        )[:3]
 
         localization_started = time.perf_counter()
         localization_source: str | None = None
@@ -329,6 +355,9 @@ class FoulInferenceService:
             "decision": DECISIONS[offence_index],
             "decision_zh": DECISIONS_ZH[offence_index],
             "confidence": round(confidence, 4),
+            "action_candidates": action_candidates,
+            "severity_candidates": severity_candidates,
+            "checkpoint_hash": self.checkpoint_hash,
             "model": "MViT_V2_S",
             "device": str(self.device),
             "gpu_name": torch.cuda.get_device_name(0) if self.device.type == "cuda" else "cpu",

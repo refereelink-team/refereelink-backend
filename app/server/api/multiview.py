@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from app.multiview.models import MultiviewAnalyzeRequest
+from app.multiview.models import MultiviewAnalyzeRequest, ReviewUpdateRequest
+from app.multiview.review_store import ReviewRevisionConflict
 from app.multiview.service import MultiviewAnalysisService
 
 router = APIRouter(prefix="/api/multiview", tags=["multiview"])
@@ -28,6 +29,12 @@ def _case_payload(service: MultiviewAnalysisService, case) -> dict:
         view_payload["media_kind"] = (
             "video" if resolved is not None and resolved[1].startswith("video/") else "image"
         )
+    review = service.get_review(case.case_id)
+    if review is not None:
+        payload["review_state"] = review.review_state.value
+        payload["review_revision"] = review.revision
+    else:
+        payload["review_revision"] = 0
     return payload
 
 
@@ -64,3 +71,58 @@ def get_status(request: Request) -> dict:
 @router.post("/analyze")
 def analyze(payload: MultiviewAnalyzeRequest, request: Request) -> dict:
     return _service(request).analyze(payload.case_id, payload.device).model_dump(mode="json")
+
+
+@router.get("/cases/{case_id}/review")
+def get_review(case_id: str, request: Request) -> dict:
+    service = _service(request)
+    if service.repository.get_case(case_id) is None:
+        raise HTTPException(status_code=404, detail=f"Case not found: {case_id}")
+    review = service.get_review(case_id)
+    analysis = (
+        service.review_store.get_analysis(review.analysis_id)
+        if review is not None and review.analysis_id
+        else service.review_store.latest_analysis(case_id)
+    )
+    return {
+        "review": review.model_dump(mode="json") if review else None,
+        "analysis": analysis.model_dump(mode="json") if analysis else None,
+    }
+
+
+@router.put("/cases/{case_id}/review")
+def put_review(case_id: str, payload: ReviewUpdateRequest, request: Request) -> dict:
+    try:
+        record = _service(request).update_review(
+            case_id=case_id,
+            expected_revision=payload.expected_revision,
+            facts=payload.facts,
+            analysis_id=payload.analysis_id,
+            review_state=payload.review_state,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Case not found: {case_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReviewRevisionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "REVIEW_REVISION_CONFLICT",
+                "expected_revision": exc.expected,
+                "current_revision": exc.current,
+            },
+        ) from exc
+    return {"review": record.model_dump(mode="json")}
+
+
+@router.get("/cases/{case_id}/review/history")
+def get_review_history(case_id: str, request: Request) -> dict:
+    service = _service(request)
+    if service.repository.get_case(case_id) is None:
+        raise HTTPException(status_code=404, detail=f"Case not found: {case_id}")
+    history = service.review_history(case_id)
+    return {
+        "count": len(history),
+        "history": [record.model_dump(mode="json") for record in history],
+    }

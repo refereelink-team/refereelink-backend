@@ -14,16 +14,18 @@ from app.multiview.localization import (
     temporal_bins,
 )
 from app.multiview.repository import MultiviewCaseRepository
+from app.multiview.review_store import MultiviewReviewStore
 from app.multiview.service import MultiviewAnalysisService
 from app.server.main import app
 
 
 @pytest.fixture
-def demo_client():
+def demo_client(tmp_path):
     with TestClient(app) as client:
         previous = app.state.multiview_service
         app.state.multiview_service = MultiviewAnalysisService(
-            MultiviewCaseRepository(REPO_ROOT_DIR / "assets" / "multiview" / "cases.json")
+            MultiviewCaseRepository(REPO_ROOT_DIR / "assets" / "multiview" / "cases.json"),
+            MultiviewReviewStore(tmp_path / "reviews.sqlite3"),
         )
         try:
             yield client
@@ -59,6 +61,9 @@ def test_multiview_scripted_fallback_is_explicit(demo_client) -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["decision"]["mode"] == "scripted"
+    assert payload["decision"]["analysis_id"].startswith("analysis-mvfoul_001-")
+    assert payload["decision"]["action_candidates"][0]["label"]
+    assert payload["decision"]["severity_candidates"][0]["confidence"] > 0
     assert "非模型输出" in payload["message"]
     assert payload["decision"]["localization_source"] == "scripted"
     localization = payload["decision"]["localization"]
@@ -160,3 +165,64 @@ def test_no_offence_scripted_case_has_no_localization_overlay(demo_client) -> No
     )
     assert response.status_code == 200
     assert response.json()["decision"]["localization"] == {}
+
+
+def _complete_review_payload(analysis_id: str, expected_revision: int = 0) -> dict:
+    def human(value) -> dict:
+        return {"value": value, "source": "human", "confirmed": True}
+
+    return {
+        "expected_revision": expected_revision,
+        "analysis_id": analysis_id,
+        "review_state": "reviewed",
+        "facts": {
+            "offence_confirmed": human(True),
+            "action": human("Tackle"),
+            "offender_team": human("home"),
+            "victim_team": human("away"),
+            "ball_in_play": human(True),
+            "contact": human(True),
+            "contact_region": human("lower_body"),
+            "intensity": human("reckless"),
+            "attempt_to_play_ball": human(True),
+            "tactical_impact": human("none"),
+            "location": {"x_m": 30.0, "y_m": 34.0, "source": "human", "confirmed": True},
+            "home_defends_side": human("left"),
+        },
+    }
+
+
+def test_review_api_persists_server_computed_assessment_and_history(demo_client) -> None:
+    analyzed = demo_client.post(
+        "/api/multiview/analyze",
+        json={"case_id": "mvfoul_001", "device": "auto"},
+    ).json()["decision"]
+    payload = _complete_review_payload(analyzed["analysis_id"])
+
+    saved = demo_client.put("/api/multiview/cases/mvfoul_001/review", json=payload)
+    assert saved.status_code == 200
+    review = saved.json()["review"]
+    assert review["revision"] == 1
+    assert review["assessment"]["restart"] == "direct_free_kick"
+    assert review["assessment"]["sanction"] == "yellow_card"
+    assert review["assessment"]["status"] == "complete"
+
+    restored = demo_client.get("/api/multiview/cases/mvfoul_001/review").json()
+    assert restored["review"] == review
+    assert restored["analysis"]["analysis_id"] == analyzed["analysis_id"]
+    history = demo_client.get("/api/multiview/cases/mvfoul_001/review/history").json()
+    assert history["count"] == 1
+    assert history["history"][0]["revision"] == 1
+
+
+def test_review_api_rejects_stale_revision(demo_client) -> None:
+    analyzed = demo_client.post(
+        "/api/multiview/analyze",
+        json={"case_id": "mvfoul_001", "device": "auto"},
+    ).json()["decision"]
+    payload = _complete_review_payload(analyzed["analysis_id"])
+    assert demo_client.put("/api/multiview/cases/mvfoul_001/review", json=payload).status_code == 200
+
+    conflict = demo_client.put("/api/multiview/cases/mvfoul_001/review", json=payload)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "REVIEW_REVISION_CONFLICT"

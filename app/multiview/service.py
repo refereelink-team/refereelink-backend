@@ -6,9 +6,17 @@ from typing import Any
 
 from app.multiview.inference import FoulInferenceError, FoulInferenceService, model_prerequisites
 from app.multiview.localization import event_prior_window
-from app.multiview.models import MultiviewAnalyzeResponse, MultiviewDecision
+from app.multiview.models import (
+    AssessmentStatus,
+    FoulFacts,
+    MultiviewAnalyzeResponse,
+    MultiviewDecision,
+    ReviewRecord,
+    ReviewState,
+)
 from app.multiview.repository import MultiviewCaseRepository
 from app.multiview.review_store import MultiviewReviewStore, new_analysis_id
+from app.multiview.rules import IFABRuleEngine, PHYSICAL_ACTIONS
 
 
 class MultiviewAnalysisService:
@@ -19,6 +27,7 @@ class MultiviewAnalysisService:
     ) -> None:
         self.repository = repository or MultiviewCaseRepository()
         self.review_store = review_store or MultiviewReviewStore()
+        self.rule_engine = IFABRuleEngine()
         self._lock = threading.Lock()
         self._analyzers: dict[str, FoulInferenceService] = {}
         self._load_errors: dict[str, str] = {}
@@ -93,6 +102,10 @@ class MultiviewAnalysisService:
                     action=raw["action"],
                     severity=raw["severity"],
                     confidence=raw["confidence"],
+                    action_candidates=raw.get("action_candidates", []),
+                    severity_candidates=raw.get("severity_candidates", []),
+                    checkpoint_hash=raw.get("checkpoint_hash"),
+                    ruleset_compatible=raw["action"].strip().lower() in PHYSICAL_ACTIONS | {"dive"},
                     card=raw["card"],
                     mode="model",
                     model=raw["model"],
@@ -129,6 +142,9 @@ class MultiviewAnalysisService:
             action=scripted.action,
             severity=scripted.severity,
             confidence=scripted.confidence,
+            action_candidates=[{"label": scripted.action, "confidence": scripted.confidence}],
+            severity_candidates=[{"label": scripted.severity, "confidence": scripted.confidence}],
+            ruleset_compatible=scripted.action.strip().lower() in PHYSICAL_ACTIONS | {"dive"},
             card=scripted.card,
             mode="scripted",
             localization=self._localization_with_temporal_prior(case, scripted.localization),
@@ -141,4 +157,62 @@ class MultiviewAnalysisService:
             status="ok",
             message="演示数据（非模型输出）；部署官方 VARS 源码与权重后自动切换真实 CUDA 推理",
             decision=decision,
+        )
+
+    def get_review(self, case_id: str) -> ReviewRecord | None:
+        return self.review_store.latest_review(case_id)
+
+    def review_history(self, case_id: str) -> list[ReviewRecord]:
+        return self.review_store.review_history(case_id)
+
+    @staticmethod
+    def _fact_value(facts: FoulFacts, name: str) -> Any | None:
+        item = getattr(facts, name)
+        return item.value if item.confirmed else None
+
+    def _model_conflicts(
+        self,
+        facts: FoulFacts,
+        analysis: MultiviewDecision | None,
+    ) -> list[str]:
+        if analysis is None:
+            return []
+        conflicts: list[str] = []
+        action = self._fact_value(facts, "action")
+        if action is not None and str(action).strip().lower() != analysis.action.strip().lower():
+            conflicts.append(f"人工动作“{action}”与模型建议“{analysis.action}”不同")
+        offence = self._fact_value(facts, "offence_confirmed")
+        model_says_offence = analysis.card != "none" or "No Offence" not in analysis.severity
+        if offence is not None and bool(offence) != model_says_offence:
+            conflicts.append("人工犯规确认与模型犯规建议不同")
+        return conflicts
+
+    def update_review(
+        self,
+        *,
+        case_id: str,
+        expected_revision: int,
+        facts: FoulFacts,
+        analysis_id: str | None,
+        review_state: ReviewState,
+    ) -> ReviewRecord:
+        if self.repository.get_case(case_id) is None:
+            raise KeyError(case_id)
+        analysis = self.review_store.get_analysis(analysis_id) if analysis_id else None
+        if analysis is not None and analysis.case_id != case_id:
+            raise ValueError("analysis_id does not belong to this case")
+        if analysis is None and analysis_id is None:
+            analysis = self.review_store.latest_analysis(case_id)
+            analysis_id = analysis.analysis_id if analysis is not None else None
+        assessment = self.rule_engine.assess(facts)
+        assessment.conflicts.extend(self._model_conflicts(facts, analysis))
+        if assessment.conflicts and assessment.status.value == "complete":
+            assessment.status = AssessmentStatus.INCOMPLETE
+        return self.review_store.append_review(
+            case_id=case_id,
+            expected_revision=expected_revision,
+            facts=facts,
+            assessment=assessment,
+            analysis_id=analysis_id,
+            review_state=review_state,
         )
