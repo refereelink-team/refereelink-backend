@@ -26,6 +26,151 @@ class RiskLevel(str, Enum):
     LOW = "low"
 
 
+class EvidenceSource(str, Enum):
+    MODEL = "model"
+    HUMAN = "human"
+    GEOMETRY = "geometry"
+    RULE = "rule"
+
+
+class TeamLabel(str, Enum):
+    HOME = "home"
+    AWAY = "away"
+    UNKNOWN = "unknown"
+
+
+class DefendsSide(str, Enum):
+    LEFT = "left"
+    RIGHT = "right"
+    UNKNOWN = "unknown"
+
+
+class ContactRegion(str, Enum):
+    UPPER_BODY = "upper_body"
+    LOWER_BODY = "lower_body"
+    HEAD = "head"
+    UNKNOWN = "unknown"
+
+
+class ChallengeIntensity(str, Enum):
+    CARELESS = "careless"
+    RECKLESS = "reckless"
+    EXCESSIVE_FORCE = "excessive_force"
+    UNKNOWN = "unknown"
+
+
+class TacticalImpact(str, Enum):
+    NONE = "none"
+    SPA = "spa"
+    DOGSO = "dogso"
+    UNKNOWN = "unknown"
+
+
+class AssessmentStatus(str, Enum):
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    UNSUPPORTED = "unsupported"
+
+
+class RestartType(str, Enum):
+    PLAY_ON = "play_on"
+    DIRECT_FREE_KICK = "direct_free_kick"
+    INDIRECT_FREE_KICK = "indirect_free_kick"
+    PENALTY = "penalty"
+    PREVIOUS_RESTART = "previous_restart"
+    UNKNOWN = "unknown"
+
+
+class SanctionType(str, Enum):
+    NONE = "none"
+    YELLOW_CARD = "yellow_card"
+    RED_CARD = "red_card"
+    PENDING = "pending"
+
+
+class EvidenceValue(BaseModel):
+    value: Any | None = None
+    source: EvidenceSource = EvidenceSource.HUMAN
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    confirmed: bool = False
+
+
+class FoulLocation(BaseModel):
+    x_m: float = Field(ge=0.0, le=105.0)
+    y_m: float = Field(ge=0.0, le=68.0)
+    source: Literal["human", "vision"] = "human"
+    confirmed: bool = True
+
+
+class LocationGeometry(BaseModel):
+    half: Literal["left", "right", "center"]
+    zone: str
+    penalty_area_side: Literal["left", "right"] | None = None
+    in_penalty_area: bool
+    in_offender_own_penalty_area: bool | None = None
+    distance_to_left_goal_m: float
+    distance_to_right_goal_m: float
+
+
+class FoulFacts(BaseModel):
+    offence_confirmed: EvidenceValue = Field(default_factory=EvidenceValue)
+    action: EvidenceValue = Field(default_factory=EvidenceValue)
+    offender_team: EvidenceValue = Field(default_factory=EvidenceValue)
+    victim_team: EvidenceValue = Field(default_factory=EvidenceValue)
+    ball_in_play: EvidenceValue = Field(default_factory=EvidenceValue)
+    contact: EvidenceValue = Field(default_factory=EvidenceValue)
+    contact_region: EvidenceValue = Field(default_factory=EvidenceValue)
+    intensity: EvidenceValue = Field(default_factory=EvidenceValue)
+    attempt_to_play_ball: EvidenceValue = Field(default_factory=EvidenceValue)
+    tactical_impact: EvidenceValue = Field(default_factory=EvidenceValue)
+    location: FoulLocation | None = None
+    home_defends_side: EvidenceValue = Field(default_factory=EvidenceValue)
+
+
+class RuleTraceEntry(BaseModel):
+    rule_id: str
+    law: str
+    section: str
+    facts_used: list[str] = Field(default_factory=list)
+    result: str
+    priority: int = 0
+
+
+class RuleAssessment(BaseModel):
+    status: AssessmentStatus
+    restart: RestartType = RestartType.UNKNOWN
+    sanction: SanctionType = SanctionType.PENDING
+    ruleset_version: str = "IFAB_2026_27"
+    rule_trace: list[RuleTraceEntry] = Field(default_factory=list)
+    missing_facts: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    geometry: LocationGeometry | None = None
+    explanation_template: str = ""
+
+
+class ReviewRecord(BaseModel):
+    case_id: str
+    analysis_id: str | None = None
+    revision: int = Field(ge=1)
+    facts: FoulFacts
+    assessment: RuleAssessment
+    review_state: ReviewState = ReviewState.PENDING
+    created_at: str
+    updated_at: str
+
+
+class ReviewUpdateRequest(BaseModel):
+    expected_revision: int = Field(default=0, ge=0)
+    analysis_id: str | None = None
+    facts: FoulFacts
+    review_state: ReviewState = ReviewState.PENDING
+
+
+class CandidateScore(BaseModel):
+    label: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class EvidenceView(BaseModel):
     camera_id: str
     display_name: str
@@ -85,6 +230,7 @@ class MultiviewAnalyzeRequest(BaseModel):
 
 
 class MultiviewDecision(BaseModel):
+    analysis_id: str
     event_id: str
     case_id: str
     timestamp: float
@@ -93,6 +239,10 @@ class MultiviewDecision(BaseModel):
     action: str
     severity: str
     confidence: float = Field(ge=0.0, le=1.0)
+    action_candidates: list[CandidateScore] = Field(default_factory=list)
+    severity_candidates: list[CandidateScore] = Field(default_factory=list)
+    checkpoint_hash: str | None = None
+    ruleset_compatible: bool = True
     card: Literal["none", "yellow", "red"] = "none"
     mode: Literal["model", "scripted"]
     model: str | None = None

@@ -8,11 +8,17 @@ from app.multiview.inference import FoulInferenceError, FoulInferenceService, mo
 from app.multiview.localization import event_prior_window
 from app.multiview.models import MultiviewAnalyzeResponse, MultiviewDecision
 from app.multiview.repository import MultiviewCaseRepository
+from app.multiview.review_store import MultiviewReviewStore, new_analysis_id
 
 
 class MultiviewAnalysisService:
-    def __init__(self, repository: MultiviewCaseRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: MultiviewCaseRepository | None = None,
+        review_store: MultiviewReviewStore | None = None,
+    ) -> None:
         self.repository = repository or MultiviewCaseRepository()
+        self.review_store = review_store or MultiviewReviewStore()
         self._lock = threading.Lock()
         self._analyzers: dict[str, FoulInferenceService] = {}
         self._load_errors: dict[str, str] = {}
@@ -78,6 +84,7 @@ class MultiviewAnalysisService:
                     if int(index) < len(raw.get("views", []))
                 })
                 decision = MultiviewDecision(
+                    analysis_id=new_analysis_id(case.case_id),
                     event_id=f"MVF-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
                     case_id=case.case_id,
                     timestamp=case.event_time_s,
@@ -99,6 +106,7 @@ class MultiviewAnalysisService:
                     view_attention=raw.get("view_attention", []),
                     detail=raw,
                 )
+                self.review_store.save_analysis(decision)
                 return MultiviewAnalyzeResponse(
                     status="ok", message="MViT_V2_S 多视角分析与 Grad-CAM 定位完成", decision=decision
                 )
@@ -112,6 +120,7 @@ class MultiviewAnalysisService:
                 status="error", message=f"真实模型链路不可用，且案例没有演示结果：{missing}"
             )
         decision = MultiviewDecision(
+            analysis_id=new_analysis_id(case.case_id),
             event_id=f"SCRIPT-{case.case_id}",
             case_id=case.case_id,
             timestamp=case.event_time_s,
@@ -127,6 +136,7 @@ class MultiviewAnalysisService:
             view_attention=scripted.view_attention,
             detail={"missing": prerequisites["missing"]},
         )
+        self.review_store.save_analysis(decision)
         return MultiviewAnalyzeResponse(
             status="ok",
             message="演示数据（非模型输出）；部署官方 VARS 源码与权重后自动切换真实 CUDA 推理",
