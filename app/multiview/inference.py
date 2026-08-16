@@ -11,6 +11,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -19,7 +20,7 @@ import numpy as np
 
 from app.constants.paths import REPO_ROOT_DIR, WEIGHTS_DIR
 from app.multiview.labels import ACTION_LABELS, CARDS, DECISIONS, DECISIONS_ZH, SEVERITY_LABELS
-from app.multiview.localization import gradcam_boxes, optical_flow_box
+from app.multiview.localization import event_prior_window, gradcam_boxes, optical_flow_box
 
 DEFAULT_MODEL_DIR = REPO_ROOT_DIR / "third_party" / "sn-mvfoul" / "VARS model"
 DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "14_model.pth.tar"
@@ -82,6 +83,14 @@ def model_prerequisites() -> dict[str, Any]:
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
+@dataclass(frozen=True)
+class ViewTiming:
+    source_fps: float
+    duration_s: float
+    window_start_s: float
+    window_end_s: float
+
+
 class FoulInferenceService:
     def __init__(self, device: str = "auto") -> None:
         try:
@@ -97,9 +106,6 @@ class FoulInferenceService:
         self.start_frame = DEFAULT_START_FRAME
         self.end_frame = DEFAULT_END_FRAME
         self.fps = DEFAULT_FPS
-        self._factor = (self.end_frame - self.start_frame) / (
-            ((self.end_frame - self.start_frame) / 25.0) * self.fps
-        )
         self._lock = threading.RLock()
         self._model = self._load_model()
         from torchvision.models.video import MViT_V2_S_Weights
@@ -130,10 +136,13 @@ class FoulInferenceService:
         return model
 
     @staticmethod
-    def _read_video(path: Path) -> np.ndarray:
+    def _read_video(path: Path) -> tuple[np.ndarray, float]:
         capture = cv2.VideoCapture(str(path))
         if not capture.isOpened():
             raise FoulInferenceError(f"视频无法打开：{path.name}")
+        source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        if not np.isfinite(source_fps) or source_fps <= 0:
+            source_fps = 25.0
         frames: list[np.ndarray] = []
         try:
             while True:
@@ -145,38 +154,51 @@ class FoulInferenceService:
             capture.release()
         if len(frames) < 2:
             raise FoulInferenceError(f"视频帧数不足：{path.name}")
-        return np.stack(frames)
+        return np.stack(frames), source_fps
 
-    def _load_view(self, path: Path) -> tuple[Any, tuple[int, int]]:
-        frames = self._read_video(path)
+    def _load_view(self, path: Path) -> tuple[Any, tuple[int, int], ViewTiming]:
+        frames, source_fps = self._read_video(path)
         original_size = (int(frames.shape[2]), int(frames.shape[1]))
         start = min(self.start_frame, max(0, len(frames) - 2))
         end = min(self.end_frame, len(frames))
         if end - start < 2:
             start, end = 0, len(frames)
         window = frames[start:end]
-        sampled = [window[index] for index in range(len(window)) if index % self._factor < 1]
+        sampling_factor = max(source_fps / self.fps, 1.0)
+        sampled = [
+            window[index]
+            for index in range(len(window))
+            if index % sampling_factor < 1
+        ]
         if len(sampled) < 2:
             sampled = list(window)
         tensor = self.torch.from_numpy(np.stack(sampled)).permute(0, 3, 1, 2)
         transformed = self._transform(tensor)
-        return transformed, original_size
+        timing = ViewTiming(
+            source_fps=source_fps,
+            duration_s=len(frames) / source_fps,
+            window_start_s=start / source_fps,
+            window_end_s=end / source_fps,
+        )
+        return transformed, original_size, timing
 
     def _build_batch(
         self,
         views: Sequence[Path],
         report: ProgressCallback | None,
-    ) -> tuple[Any, list[tuple[int, int]], float]:
+    ) -> tuple[Any, list[tuple[int, int]], list[ViewTiming], float]:
         started = time.perf_counter()
         tensors: list[Any] = []
         frame_sizes: list[tuple[int, int]] = []
+        timings: list[ViewTiming] = []
         for index, path in enumerate(views):
             if report:
                 report({"step": "decode_start", "pct": round(index / len(views) * 60), "view": path.name})
             view_started = time.perf_counter()
-            tensor, frame_size = self._load_view(path)
+            tensor, frame_size, timing = self._load_view(path)
             tensors.append(tensor)
             frame_sizes.append(frame_size)
+            timings.append(timing)
             if report:
                 report({
                     "step": "decode_done",
@@ -186,11 +208,12 @@ class FoulInferenceService:
                 })
         time_count = min(int(tensor.shape[1]) for tensor in tensors)
         batch = self.torch.stack([tensor[:, :time_count] for tensor in tensors]).unsqueeze(0)
-        return batch, frame_sizes, (time.perf_counter() - started) * 1000
+        return batch, frame_sizes, timings, (time.perf_counter() - started) * 1000
 
     def analyze_views(
         self,
         view_paths: Sequence[Path],
+        event_time_s: float = 3.0,
         progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         views = sorted({path.resolve() for path in view_paths}, key=lambda item: item.name.lower())
@@ -198,7 +221,7 @@ class FoulInferenceService:
             raise FoulInferenceError("没有可读取的多视角视频")
         if progress:
             progress({"step": "start", "pct": 0, "views": [item.name for item in views]})
-        batch, frame_sizes, preprocess_ms = self._build_batch(views, progress)
+        batch, frame_sizes, timings, preprocess_ms = self._build_batch(views, progress)
         batch = batch.to(self.device, non_blocking=True)
         torch = self.torch
         with self._lock:
@@ -232,17 +255,68 @@ class FoulInferenceService:
 
         localization_started = time.perf_counter()
         localization_source: str | None = None
-        try:
-            with self._lock:
-                localization = gradcam_boxes(self._model, batch, offence_index, frame_sizes)
-            localization_source = "gradcam" if localization else None
-        except Exception:
+        temporal_diagnostics: dict[str, Any]
+        if offence_index == 0:
             localization = {}
-            for index, path in enumerate(views):
-                box = optical_flow_box(path, self.start_frame, self.end_frame)
-                if box:
-                    localization[index] = box
-            localization_source = "optical_flow" if localization else None
+            temporal_diagnostics = {"reason": "no_offence", "views": {}}
+        else:
+            try:
+                with self._lock:
+                    localization, temporal_diagnostics = gradcam_boxes(
+                        self._model,
+                        batch,
+                        offence_index,
+                        frame_sizes,
+                        [(timing.window_start_s, timing.window_end_s) for timing in timings],
+                    )
+                for index, box in localization.items():
+                    if box.get("active_start_s") is None:
+                        box.update(event_prior_window(event_time_s, timings[index].duration_s))
+                        temporal_diagnostics["views"][str(index)]["fallback"] = "event_prior"
+                    elif timings[index].window_start_s <= event_time_s <= timings[index].window_end_s:
+                        anchored_start = min(float(box["active_start_s"]), event_time_s)
+                        anchored_end = max(float(box["active_end_s"]), event_time_s)
+                        anchor_applied = (
+                            anchored_start != float(box["active_start_s"])
+                            or anchored_end != float(box["active_end_s"])
+                        )
+                        box["active_start_s"] = round(anchored_start, 4)
+                        box["active_end_s"] = round(anchored_end, 4)
+                        temporal_diagnostics["views"][str(index)][
+                            "event_anchor_applied"
+                        ] = anchor_applied
+                fallback_views: list[int] = []
+                for index, path in enumerate(views):
+                    if index in localization:
+                        continue
+                    flow_box = optical_flow_box(path, self.start_frame, self.end_frame)
+                    if flow_box:
+                        flow_box.update(event_prior_window(event_time_s, timings[index].duration_s))
+                        localization[index] = flow_box
+                        fallback_views.append(index)
+                        temporal_diagnostics["views"].setdefault(str(index), {}).update(
+                            fallback="optical_flow_event_prior"
+                        )
+                localization_source = (
+                    "gradcam+optical_flow" if fallback_views else "gradcam"
+                ) if localization else None
+            except Exception as exc:
+                localization = {}
+                temporal_diagnostics = {
+                    "reason": "gradcam_failed",
+                    "error": str(exc),
+                    "views": {},
+                }
+                for index, path in enumerate(views):
+                    box = optical_flow_box(path, self.start_frame, self.end_frame)
+                    if box:
+                        box.update(event_prior_window(event_time_s, timings[index].duration_s))
+                        localization[index] = box
+                        temporal_diagnostics["views"][str(index)] = {
+                            "valid": False,
+                            "reason": "optical_flow_event_prior",
+                        }
+                localization_source = "optical_flow" if localization else None
         gradcam_ms = (time.perf_counter() - localization_started) * 1000
 
         view_attention: list[float] = []
@@ -264,6 +338,19 @@ class FoulInferenceService:
             "gpu_mem_mb": gpu_mem_mb,
             "localization": {str(index): value for index, value in localization.items()},
             "localization_source": localization_source,
+            "temporal_localization": {
+                **temporal_diagnostics,
+                "event_time_s": round(float(event_time_s), 4),
+                "input_windows": [
+                    {
+                        "source_fps": round(timing.source_fps, 4),
+                        "duration_s": round(timing.duration_s, 4),
+                        "start_s": round(timing.window_start_s, 4),
+                        "end_s": round(timing.window_end_s, 4),
+                    }
+                    for timing in timings
+                ],
+            },
             "view_attention": view_attention,
             "views": [path.name for path in views],
         }

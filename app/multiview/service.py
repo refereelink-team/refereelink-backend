@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.multiview.inference import FoulInferenceError, FoulInferenceService, model_prerequisites
+from app.multiview.localization import event_prior_window
 from app.multiview.models import MultiviewAnalyzeResponse, MultiviewDecision
 from app.multiview.repository import MultiviewCaseRepository
 
@@ -41,6 +42,19 @@ class MultiviewAnalysisService:
             self._load_errors.pop(normalized, None)
             return analyzer
 
+    @staticmethod
+    def _localization_with_temporal_prior(case, localization: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        views = {view.camera_id: view for view in case.videos}
+        prepared: dict[str, dict[str, Any]] = {}
+        for camera_id, raw_box in localization.items():
+            box = raw_box.model_dump(mode="json") if hasattr(raw_box, "model_dump") else dict(raw_box)
+            view = views.get(camera_id)
+            if box.get("active_start_s") is None or box.get("temporal_source") == "event_prior":
+                offset_s = (view.sync_offset_ms if view is not None else 0) / 1000.0
+                box.update(event_prior_window(case.event_time_s + offset_s))
+            prepared[camera_id] = box
+        return prepared
+
     def analyze(self, case_id: str, device: str = "auto") -> MultiviewAnalyzeResponse:
         case = self.repository.get_case(case_id)
         if case is None:
@@ -49,17 +63,20 @@ class MultiviewAnalysisService:
         prerequisites = model_prerequisites()
         if prerequisites["ready"] and len(video_paths) == len(case.videos):
             try:
-                raw = self._analyzer(device).analyze_views(video_paths)
+                raw = self._analyzer(device).analyze_views(
+                    video_paths,
+                    event_time_s=case.event_time_s,
+                )
                 views_by_name = {
                     self.repository.resolve_path(view.path).name: view.camera_id
                     for view in case.videos
                     if self.repository.resolve_path(view.path) is not None
                 }
-                localization = {
+                localization = self._localization_with_temporal_prior(case, {
                     views_by_name.get(raw["views"][int(index)], raw["views"][int(index)]): box
                     for index, box in raw.get("localization", {}).items()
                     if int(index) < len(raw.get("views", []))
-                }
+                })
                 decision = MultiviewDecision(
                     event_id=f"MVF-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
                     case_id=case.case_id,
@@ -105,7 +122,7 @@ class MultiviewAnalysisService:
             confidence=scripted.confidence,
             card=scripted.card,
             mode="scripted",
-            localization=scripted.localization,
+            localization=self._localization_with_temporal_prior(case, scripted.localization),
             localization_source="scripted",
             view_attention=scripted.view_attention,
             detail={"missing": prerequisites["missing"]},

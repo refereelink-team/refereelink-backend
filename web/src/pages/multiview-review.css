@@ -321,9 +321,14 @@
   position: absolute;
   border: 2px solid var(--mv-cyan);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), 0 0 18px rgba(53, 199, 255, 0.42);
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.98);
+  transition: opacity 100ms ease, transform 100ms ease, visibility 100ms linear;
   pointer-events: none;
 }
 
+.mv-focus-box.active { opacity: 1; visibility: visible; transform: scale(1); }
 .mv-focus-box.scripted { border-style: dashed; border-color: var(--mv-amber); box-shadow: 0 0 14px rgba(255, 180, 66, 0.35); }
 .mv-focus-box.optical_flow { border-color: #b678ff; }
 .mv-focus-box span { position: absolute; left: -2px; top: -17px; padding: 2px 4px; color: #04101a; background: var(--mv-cyan); font: 7px/1 monospace; }
@@ -338,8 +343,11 @@
 .mv-timeline-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 7px; align-items: center; }
 .mv-timeline-row label { color: var(--mv-muted); font: 8px/1 monospace; }
 .mv-timeline-track { height: 7px; position: relative; border: 1px solid var(--mv-line); background: #06101d; }
-.mv-timeline-track > i { height: 100%; display: block; background: linear-gradient(90deg, rgba(53, 199, 255, 0.28), rgba(53, 199, 255, 0.72)); }
-.mv-timeline-track > b { width: 2px; position: absolute; top: -3px; bottom: -3px; background: var(--mv-amber); box-shadow: 0 0 8px rgba(255, 180, 66, 0.7); }
+.mv-timeline-track > i { height: 100%; display: block; background: linear-gradient(90deg, rgba(53, 199, 255, 0.2), rgba(53, 199, 255, 0.55)); }
+.mv-timeline-track > b { z-index: 4; width: 2px; position: absolute; top: -3px; bottom: -3px; background: var(--mv-amber); box-shadow: 0 0 8px rgba(255, 180, 66, 0.7); }
+.mv-temporal-window { z-index: 2; position: absolute; top: 0; bottom: 0; min-width: 2px; background: rgba(61, 220, 132, 0.7); box-shadow: 0 0 7px rgba(61, 220, 132, 0.5); }
+.mv-temporal-window.event_prior { background: rgba(255, 180, 66, 0.62); box-shadow: 0 0 7px rgba(255, 180, 66, 0.42); }
+.mv-temporal-peak { z-index: 3; width: 1px; position: absolute; top: -2px; bottom: -2px; background: #fff; box-shadow: 0 0 5px rgba(255, 255, 255, 0.8); }
 .mv-timeline-controls { gap: 6px; margin-top: 8px; }
 .mv-timeline-controls button,
 .mv-review-actions button,

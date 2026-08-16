@@ -1,0 +1,49 @@
+{
+  "status": "ok",
+  "thread_errors": [],
+  "elapsed_sec": 44.393,
+  "source_status": "disconnected",
+  "frames": 1930,
+  "video_fps": 30.0,
+  "processing_fps": 43.48,
+  "player_inference_count": 1930,
+  "player_latency_ms": 10.79,
+  "pitch_detection_count": 386,
+  "pitch_latency_ms": 13.36,
+  "pitch_reuse_count": 1544,
+  "homography_available_ratio": 1.0,
+  "homography_states": {
+    "fresh": 386,
+    "reused": 1544
+  },
+  "track_id_interruptions": 0,
+  "ball_detection_count": 966,
+  "ball_predicted_frames": 1000,
+  "ball_available_ratio": 0.848,
+  "ball_states": {
+    "fresh": 636,
+    "predicted": 927,
+    "unavailable": 367
+  },
+  "semantic_inference_count": 644,
+  "player_observations": 32571,
+  "valid_player_coordinate_ratio": 0.866,
+  "last_homography_status": "reused",
+  "last_player_count": 17,
+  "last_valid_field_coordinates": 17,
+  "last_roles": {
+    "unknown": 17
+  },
+  "last_team_ids": {
+    "-1": 17
+  },
+  "event_count": 89,
+  "event_types": {
+    "shot_candidate": 34,
+    "possession_change": 28,
+    "pass_candidate": 27
+  },
+  "cuda": true,
+  "gpu": "NVIDIA GeForce RTX 5060 Ti",
+  "gpu_memory_allocated_mb": 327.0
+}

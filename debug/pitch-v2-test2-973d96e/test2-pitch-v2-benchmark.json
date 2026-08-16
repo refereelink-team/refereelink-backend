@@ -1,0 +1,55 @@
+{
+  "accuracy_valid": false,
+  "camera_rig_profile": null,
+  "camera_status_counts": {
+    "corrected": 389,
+    "lost": 36,
+    "predicted": 748,
+    "relocalized": 2
+  },
+  "coordinate_sigma_m": {
+    "count": 4301,
+    "maximum": 13.726108500810719,
+    "median": 0.5488397885768312,
+    "p95": 1.076159052300832,
+    "sample_count": 4301
+  },
+  "coordinate_usable_ratio": 0.27677015426321566,
+  "device": "cuda",
+  "elapsed_sec": 27.622154405999026,
+  "end_to_end_fps": 42.538318435610925,
+  "frame_latency_ms": {
+    "count": 1175,
+    "maximum": 3648.3137129980605,
+    "median": 15.477978999115294,
+    "p95": 34.515332000592025,
+    "sample_count": 1175
+  },
+  "frames": 1175,
+  "homography_available_ratio": 0.9693617021276596,
+  "model_weights": {
+    "field_perception": "legacy_keypoint_adapter",
+    "pitch": "/home/caysonyin/Projects/SC/assets/weights/football-pitch-detection.pt",
+    "player": "/home/caysonyin/Projects/SC/assets/weights/yolo11s.pt"
+  },
+  "notes": [
+    "This is a stability/performance run, not an accuracy evaluation.",
+    "The V2 tracker uses the legacy keypoint model until a trained dual-head checkpoint exists.",
+    "No rig profile was supplied; generic homography relocalization is not production geometry."
+  ],
+  "peak_gpu_memory_mb": 343.84423828125,
+  "physical_pan_constraint_active": false,
+  "rss_mb": {
+    "first": 2131.92578125,
+    "growth": 14.08984375,
+    "last": 2146.015625,
+    "slope_per_minute": null
+  },
+  "semantic_inference_count": 467,
+  "semantic_reuse_ratio": 0.6025531914893617,
+  "source": "/home/caysonyin/Projects/SC/test2.mp4",
+  "source_fps": 29.97429840590691,
+  "status": "ok",
+  "video_loops": 0,
+  "warmup_frames": 0
+}

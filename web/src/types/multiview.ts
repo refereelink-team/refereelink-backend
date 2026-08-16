@@ -25,10 +25,21 @@ export interface MultiviewCase {
   evidence_notes: string[];
 }
 
+export interface TemporalBin {
+  start_s: number;
+  end_s: number;
+  score: number;
+}
+
 export interface LocalizationBox {
   rect: [number, number, number, number];
   score: number;
   source: 'gradcam' | 'optical_flow' | 'scripted' | string;
+  active_start_s?: number | null;
+  active_end_s?: number | null;
+  peak_s?: number | null;
+  temporal_bins?: TemporalBin[];
+  temporal_source?: 'gradcam' | 'event_prior' | null;
 }
 
 export interface MultiviewDecision {

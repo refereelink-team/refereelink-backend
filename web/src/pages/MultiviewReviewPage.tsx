@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   analyzeMultiviewCase,
   fetchMultiviewCases,
@@ -27,6 +27,41 @@ function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+interface LocalizationWindow {
+  startS: number;
+  endS: number;
+  peakS: number;
+  source: 'gradcam' | 'event_prior';
+}
+
+function localizationWindow(box: LocalizationBox, eventTimeS: number): LocalizationWindow {
+  const hasModelWindow = box.active_start_s !== null
+    && box.active_start_s !== undefined
+    && box.active_end_s !== null
+    && box.active_end_s !== undefined;
+  if (hasModelWindow) {
+    const startS = Math.max(0, box.active_start_s as number);
+    const endS = Math.max(startS, box.active_end_s as number);
+    return {
+      startS,
+      endS,
+      peakS: Math.min(endS, Math.max(startS, box.peak_s ?? (startS + endS) / 2)),
+      source: box.temporal_source === 'event_prior' ? 'event_prior' : 'gradcam',
+    };
+  }
+  const peakS = Math.max(0, eventTimeS);
+  return {
+    startS: Math.max(0, peakS - 0.5),
+    endS: peakS + 0.5,
+    peakS,
+    source: 'event_prior',
+  };
+}
+
+function seconds(value: number): string {
+  return `${value.toFixed(2)}s`;
+}
+
 function modeLabel(decision: MultiviewDecision | null, status: MultiviewStatus | null): string {
   if (decision?.mode === 'model') return 'CUDA 模型结果';
   if (decision?.mode === 'scripted') return '演示数据';
@@ -39,13 +74,28 @@ function MediaFrame({
   primary,
   attention,
   onSelect,
+  onVideoRef,
+  onVideoReady,
+  currentTimeS,
+  eventTimeS,
 }: {
   view: EvidenceView;
   box?: LocalizationBox;
   primary?: boolean;
   attention?: number;
   onSelect: () => void;
+  onVideoRef: (cameraId: string, element: HTMLVideoElement | null) => void;
+  onVideoReady: (cameraId: string) => void;
+  currentTimeS: number;
+  eventTimeS: number;
 }) {
+  const window = box ? localizationWindow(box, eventTimeS) : null;
+  const showBox = Boolean(
+    box
+    && window
+    && currentTimeS >= window.startS
+    && currentTimeS <= window.endS,
+  );
   return (
     <button
       type="button"
@@ -56,16 +106,24 @@ function MediaFrame({
       <div className="mv-camera-media">
         {view.media_url ? (
           view.media_kind === 'video' ? (
-            <video src={view.media_url} muted preload="metadata" />
+            <video
+              ref={(element) => onVideoRef(view.camera_id, element)}
+              src={view.media_url}
+              muted
+              playsInline
+              preload="auto"
+              onLoadedMetadata={() => onVideoReady(view.camera_id)}
+            />
           ) : (
             <img src={view.media_url} alt={`${view.display_name}证据帧`} />
           )
         ) : (
           <div className="mv-media-empty">NO EVIDENCE MEDIA</div>
         )}
-        {box && (
+        {box && window && (
           <div
-            className={`mv-focus-box ${box.source}`}
+            className={`mv-focus-box ${box.source} ${showBox ? 'active' : ''}`}
+            aria-hidden={!showBox}
             style={{
               left: `${box.rect[0]}%`,
               top: `${box.rect[1]}%`,
@@ -73,7 +131,10 @@ function MediaFrame({
               height: `${box.rect[3]}%`,
             }}
           >
-            <span>{box.source === 'gradcam' ? 'GRAD-CAM' : box.source === 'optical_flow' ? 'FLOW' : 'DEMO'}</span>
+            <span>
+              {box.source === 'gradcam' ? 'GRAD-CAM' : box.source === 'optical_flow' ? 'FLOW' : 'DEMO'}
+              {' · '}{seconds(window.startS)}–{seconds(window.endS)}
+            </span>
           </div>
         )}
         {attention !== undefined && (
@@ -125,6 +186,17 @@ export default function MultiviewReviewPage() {
   const [playhead, setPlayhead] = useState(50);
   const [playing, setPlaying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const videoRefs = useRef(new Map<string, HTMLVideoElement>());
+  const playheadRef = useRef(playhead);
+  const playingRef = useRef(playing);
+
+  useEffect(() => {
+    playheadRef.current = playhead;
+  }, [playhead]);
+
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
 
   useEffect(() => {
     Promise.all([fetchMultiviewCases(), fetchMultiviewStatus()])
@@ -138,14 +210,6 @@ export default function MultiviewReviewPage() {
       })
       .catch((error) => setLoadError(String(error)));
   }, []);
-
-  useEffect(() => {
-    if (!playing) return;
-    const timer = window.setInterval(() => {
-      setPlayhead((current) => (current >= 100 ? 0 : current + 1));
-    }, 120);
-    return () => window.clearInterval(timer);
-  }, [playing]);
 
   const activeCase = useMemo(
     () => cases.find((item) => item.case_id === selectedId) ?? null,
@@ -163,7 +227,140 @@ export default function MultiviewReviewPage() {
   const pendingCount = cases.filter((item) => item.review_state === 'pending').length;
   const archivedCount = cases.filter((item) => item.review_state === 'archived').length;
 
+  const pauseAllVideos = useCallback(() => {
+    videoRefs.current.forEach((video) => video.pause());
+  }, []);
+
+  const registerVideo = useCallback((cameraId: string, element: HTMLVideoElement | null) => {
+    if (element) {
+      videoRefs.current.set(cameraId, element);
+    } else {
+      videoRefs.current.delete(cameraId);
+    }
+  }, []);
+
+  function viewOffsetSeconds(cameraId: string): number {
+    const view = activeCase?.videos.find((item) => item.camera_id === cameraId);
+    return (view?.sync_offset_ms ?? 0) / 1000;
+  }
+
+  function targetTime(video: HTMLVideoElement, cameraId: string, percentValue: number): number {
+    if (!Number.isFinite(video.duration) || video.duration <= 0) return 0;
+    const base = video.duration * percentValue / 100;
+    return Math.min(video.duration, Math.max(0, base + viewOffsetSeconds(cameraId)));
+  }
+
+  function fallbackDuration(view: EvidenceView): number {
+    return Math.max(5, (activeCase?.event_time_s ?? 3) + 2, Math.abs(view.sync_offset_ms) / 1000 + 5);
+  }
+
+  function viewDuration(view: EvidenceView): number {
+    const video = videoRefs.current.get(view.camera_id);
+    return video && Number.isFinite(video.duration) && video.duration > 0
+      ? video.duration
+      : fallbackDuration(view);
+  }
+
+  function viewCurrentTime(view: EvidenceView): number {
+    const video = videoRefs.current.get(view.camera_id);
+    if (video && Number.isFinite(video.currentTime)) return video.currentTime;
+    return Math.max(0, viewDuration(view) * playhead / 100 + view.sync_offset_ms / 1000);
+  }
+
+  function viewEventTime(view: EvidenceView): number {
+    return Math.max(0, (activeCase?.event_time_s ?? 3) + view.sync_offset_ms / 1000);
+  }
+
+  function timelinePosition(timeS: number, durationS: number): number {
+    if (!Number.isFinite(durationS) || durationS <= 0) return 0;
+    return Math.min(100, Math.max(0, timeS / durationS * 100));
+  }
+
+  function seekTo(percentValue: number) {
+    const bounded = Math.min(100, Math.max(0, percentValue));
+    playheadRef.current = bounded;
+    setPlayhead(bounded);
+    videoRefs.current.forEach((video, cameraId) => {
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        video.currentTime = targetTime(video, cameraId, bounded);
+      }
+    });
+  }
+
+  const handleVideoReady = useCallback((cameraId: string) => {
+    const video = videoRefs.current.get(cameraId);
+    if (!video) return;
+    const percentValue = playheadRef.current;
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      const offset = activeCase?.videos.find((item) => item.camera_id === cameraId)?.sync_offset_ms ?? 0;
+      const base = video.duration * percentValue / 100 + offset / 1000;
+      video.currentTime = Math.min(video.duration, Math.max(0, base));
+    }
+    if (playingRef.current) {
+      void video.play().catch(() => undefined);
+    }
+  }, [activeCase]);
+
+  function togglePlayback() {
+    if (playing) {
+      pauseAllVideos();
+      setPlaying(false);
+      return;
+    }
+    const startPercent = playheadRef.current >= 99.5 ? 0 : playheadRef.current;
+    seekTo(startPercent);
+    setPlaying(true);
+    videoRefs.current.forEach((video) => {
+      void video.play().catch(() => undefined);
+    });
+  }
+
+  function stepFrame(direction: -1 | 1) {
+    pauseAllVideos();
+    setPlaying(false);
+    const masterId = activeCase?.videos[0]?.camera_id;
+    const master = masterId ? videoRefs.current.get(masterId) : undefined;
+    const percentPerFrame = master && Number.isFinite(master.duration) && master.duration > 0
+      ? 100 / (master.duration * 25)
+      : 0.5;
+    seekTo(playheadRef.current + direction * percentPerFrame);
+  }
+
+  useEffect(() => {
+    if (!playing || !activeCase) return;
+    let animationFrame = 0;
+    const masterId = activeCase.videos[0]?.camera_id;
+
+    const update = () => {
+      const master = masterId ? videoRefs.current.get(masterId) : undefined;
+      if (master && Number.isFinite(master.duration) && master.duration > 0) {
+        const nextPlayhead = Math.min(100, Math.max(0, master.currentTime / master.duration * 100));
+        playheadRef.current = nextPlayhead;
+        setPlayhead(nextPlayhead);
+
+        videoRefs.current.forEach((video, cameraId) => {
+          if (video === master || video.paused || !Number.isFinite(video.duration)) return;
+          const expected = targetTime(video, cameraId, nextPlayhead);
+          if (Math.abs(video.currentTime - expected) > 0.18) {
+            video.currentTime = expected;
+          }
+        });
+
+        if (master.ended || nextPlayhead >= 99.9) {
+          pauseAllVideos();
+          setPlaying(false);
+          return;
+        }
+      }
+      animationFrame = window.requestAnimationFrame(update);
+    };
+
+    animationFrame = window.requestAnimationFrame(update);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [activeCase, pauseAllVideos, playing]);
+
   function selectCase(item: MultiviewCase) {
+    pauseAllVideos();
     setSelectedId(item.case_id);
     setSelectedCameraId(item.videos[0]?.camera_id ?? null);
     setDecision(null);
@@ -185,7 +382,13 @@ export default function MultiviewReviewPage() {
       }
       setDecision(response.decision);
       setAnalysisMessage(response.message);
-      setPlayhead(50);
+      const mainView = activeCase.videos[0];
+      const mainBox = mainView ? response.decision.localization[mainView.camera_id] : undefined;
+      const eventTimeS = mainView ? viewEventTime(mainView) : activeCase.event_time_s;
+      const peakS = mainBox ? localizationWindow(mainBox, eventTimeS).peakS : eventTimeS;
+      const offsetS = mainView ? mainView.sync_offset_ms / 1000 : 0;
+      const durationS = mainView ? viewDuration(mainView) : fallbackDuration(activeCase.videos[0]);
+      seekTo(timelinePosition(peakS - offsetS, durationS));
       setPlaying(false);
     } catch (error) {
       setAnalysisMessage(`分析失败：${String(error)}`);
@@ -296,6 +499,10 @@ export default function MultiviewReviewPage() {
                 attention={decision?.view_attention[activeCase?.videos.findIndex((view) => view.camera_id === activeView.camera_id) ?? 0]}
                 primary
                 onSelect={() => undefined}
+                onVideoRef={registerVideo}
+                onVideoReady={handleVideoReady}
+                currentTimeS={viewCurrentTime(activeView)}
+                eventTimeS={viewEventTime(activeView)}
               />
             )}
             <div className="mv-side-cameras">
@@ -306,6 +513,10 @@ export default function MultiviewReviewPage() {
                   box={decision?.localization[view.camera_id]}
                   attention={decision?.view_attention[activeCase?.videos.findIndex((item) => item.camera_id === view.camera_id) ?? 0]}
                   onSelect={() => setSelectedCameraId(view.camera_id)}
+                  onVideoRef={registerVideo}
+                  onVideoReady={handleVideoReady}
+                  currentTimeS={viewCurrentTime(view)}
+                  eventTimeS={viewEventTime(view)}
                 />
               ))}
             </div>
@@ -317,19 +528,40 @@ export default function MultiviewReviewPage() {
               <div className="mv-frame-readout">FRAME {frameNumber} · {playhead.toFixed(0)}%</div>
             </div>
             <div className="mv-timeline-rows">
-              {activeCase?.videos.map((view, index) => (
-                <div className="mv-timeline-row" key={view.camera_id}>
-                  <label>{view.camera_id.toUpperCase()}</label>
-                  <div className="mv-timeline-track"><i style={{ width: `${86 - index * 4}%` }} /><b style={{ left: `${playhead}%` }} /></div>
-                </div>
-              ))}
+              {activeCase?.videos.map((view, index) => {
+                const durationS = viewDuration(view);
+                const currentS = viewCurrentTime(view);
+                const box = decision?.localization[view.camera_id];
+                const window = box ? localizationWindow(box, viewEventTime(view)) : null;
+                const windowLeft = window ? timelinePosition(window.startS, durationS) : 0;
+                const windowRight = window ? timelinePosition(window.endS, durationS) : 0;
+                const peakLeft = window ? timelinePosition(window.peakS, durationS) : 0;
+                return (
+                  <div className="mv-timeline-row" key={view.camera_id}>
+                    <label>{view.camera_id.toUpperCase()}</label>
+                    <div className="mv-timeline-track">
+                      <i style={{ width: `${86 - index * 4}%` }} />
+                      {window && (
+                        <>
+                          <span
+                            className={`mv-temporal-window ${window.source}`}
+                            style={{ left: `${windowLeft}%`, width: `${Math.max(0.8, windowRight - windowLeft)}%` }}
+                          />
+                          <em className="mv-temporal-peak" style={{ left: `${peakLeft}%` }} />
+                        </>
+                      )}
+                      <b style={{ left: `${timelinePosition(currentS, durationS)}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <div className="mv-timeline-controls">
-              <button onClick={() => setPlayhead((value) => Math.max(0, value - 2))}>−1 帧</button>
-              <button className="play" onClick={() => setPlaying((value) => !value)}>{playing ? '暂停' : '播放'}</button>
-              <button onClick={() => setPlayhead((value) => Math.min(100, value + 2))}>+1 帧</button>
+              <button onClick={() => stepFrame(-1)}>−1 帧</button>
+              <button className="play" onClick={togglePlayback}>{playing ? '暂停' : '播放'}</button>
+              <button onClick={() => stepFrame(1)}>+1 帧</button>
               <span><i className="key" /> 关键帧</span><span><i className="alert" /> 模型关注</span>
-              <input aria-label="证据时间轴" type="range" min="0" max="100" value={playhead} onChange={(event) => setPlayhead(Number(event.target.value))} />
+              <input aria-label="证据时间轴" type="range" min="0" max="100" value={playhead} onChange={(event) => seekTo(Number(event.target.value))} />
             </div>
           </div>
 

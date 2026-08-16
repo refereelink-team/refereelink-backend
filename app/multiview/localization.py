@@ -21,6 +21,11 @@ CROP_SIZE = 224
 RESIZE_SHORT = 256
 CAM_GRID = (8, 7, 7)
 BOX_THRESHOLD = 0.6
+TEMPORAL_TOP_FRACTION = 0.2
+TEMPORAL_MIN_CONTRAST = 0.15
+TEMPORAL_HIGH_THRESHOLD = 0.6
+TEMPORAL_LOW_THRESHOLD = 0.35
+TEMPORAL_SMOOTHING_KERNEL = np.asarray([0.25, 0.5, 0.25], dtype=np.float32)
 
 
 def largest_component_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -64,12 +69,135 @@ def crop_to_original_percent(
     return rect
 
 
+def temporal_activity_scores(cam: np.ndarray) -> tuple[np.ndarray, bool, str | None]:
+    """Reduce a T×H×W attribution volume to a stable normalized timeline."""
+    volume = np.maximum(np.asarray(cam, dtype=np.float32), 0.0)
+    if volume.ndim != 3 or volume.shape[0] < 1:
+        raise ValueError("temporal CAM must have shape T x H x W")
+    flattened = volume.reshape(volume.shape[0], -1)
+    top_count = max(1, int(np.ceil(flattened.shape[1] * TEMPORAL_TOP_FRACTION)))
+    top_values = np.partition(flattened, flattened.shape[1] - top_count, axis=1)[:, -top_count:]
+    raw_scores = top_values.mean(axis=1)
+    maximum = float(raw_scores.max())
+    minimum = float(raw_scores.min())
+    if maximum <= 1e-8:
+        return np.zeros_like(raw_scores), False, "zero_response"
+    contrast = (maximum - minimum) / maximum
+    normalized = (raw_scores - minimum) / max(maximum - minimum, 1e-8)
+    padded = np.pad(normalized, (1, 1), mode="edge")
+    smoothed = np.convolve(padded, TEMPORAL_SMOOTHING_KERNEL, mode="valid")
+    smooth_min = float(smoothed.min())
+    smooth_max = float(smoothed.max())
+    if smooth_max > smooth_min:
+        smoothed = (smoothed - smooth_min) / (smooth_max - smooth_min)
+    else:
+        smoothed = np.zeros_like(smoothed)
+    if contrast < TEMPORAL_MIN_CONTRAST:
+        return smoothed.astype(np.float32), False, "flat_response"
+    return smoothed.astype(np.float32), True, None
+
+
+def temporal_bins(
+    scores: np.ndarray,
+    window_start_s: float,
+    window_end_s: float,
+) -> list[dict[str, float]]:
+    values = np.asarray(scores, dtype=np.float32).reshape(-1)
+    if values.size == 0:
+        return []
+    start_s = max(0.0, float(window_start_s))
+    end_s = max(start_s, float(window_end_s))
+    edges = np.linspace(start_s, end_s, values.size + 1)
+    return [
+        {
+            "start_s": round(float(edges[index]), 4),
+            "end_s": round(float(edges[index + 1]), 4),
+            "score": round(float(np.clip(score, 0.0, 1.0)), 4),
+        }
+        for index, score in enumerate(values)
+    ]
+
+
+def select_temporal_window(
+    cam: np.ndarray,
+    window_start_s: float,
+    window_end_s: float,
+) -> dict[str, Any]:
+    """Select one contiguous high-response interval around the strongest bin."""
+    scores, informative, reason = temporal_activity_scores(cam)
+    bins = temporal_bins(scores, window_start_s, window_end_s)
+    peak_index = int(np.argmax(scores)) if scores.size else 0
+    result: dict[str, Any] = {
+        "valid": informative,
+        "reason": reason,
+        "peak_index": peak_index,
+        "active_indices": [],
+        "temporal_bins": bins,
+    }
+    if not informative or not bins:
+        return result
+
+    left = peak_index
+    right = peak_index
+    while left > 0 and scores[left - 1] >= TEMPORAL_HIGH_THRESHOLD:
+        left -= 1
+    while right + 1 < scores.size and scores[right + 1] >= TEMPORAL_HIGH_THRESHOLD:
+        right += 1
+    while left > 0 and scores[left - 1] >= TEMPORAL_LOW_THRESHOLD:
+        left -= 1
+    while right + 1 < scores.size and scores[right + 1] >= TEMPORAL_LOW_THRESHOLD:
+        right += 1
+
+    if left == right and scores.size > 1:
+        if left == 0:
+            right = 1
+        elif right == scores.size - 1:
+            left -= 1
+        elif scores[left - 1] >= scores[right + 1]:
+            left -= 1
+        else:
+            right += 1
+
+    if left == 0 and right == scores.size - 1:
+        result.update(valid=False, reason="full_window_response")
+        return result
+
+    result.update(
+        active_indices=list(range(left, right + 1)),
+        active_start_s=bins[left]["start_s"],
+        active_end_s=bins[right]["end_s"],
+        peak_s=round((bins[peak_index]["start_s"] + bins[peak_index]["end_s"]) / 2.0, 4),
+    )
+    return result
+
+
+def event_prior_window(
+    event_time_s: float,
+    duration_s: float | None = None,
+    half_width_s: float = 0.5,
+) -> dict[str, float | str]:
+    peak_s = max(0.0, float(event_time_s))
+    start_s = max(0.0, peak_s - half_width_s)
+    end_s = peak_s + half_width_s
+    if duration_s is not None and duration_s > 0:
+        peak_s = min(peak_s, duration_s)
+        start_s = min(start_s, duration_s)
+        end_s = min(end_s, duration_s)
+    return {
+        "active_start_s": round(start_s, 4),
+        "active_end_s": round(max(start_s, end_s), 4),
+        "peak_s": round(peak_s, 4),
+        "temporal_source": "event_prior",
+    }
+
+
 def gradcam_boxes(
     model: Any,
     batch: Any,
     offence_index: int,
     frame_sizes: list[tuple[int, int]],
-) -> dict[int, dict[str, Any]]:
+    window_ranges: list[tuple[float, float]],
+) -> tuple[dict[int, dict[str, Any]], dict[str, Any]]:
     import torch
 
     backbone = model.mvnetwork.aggregation_model.model
@@ -99,11 +227,30 @@ def gradcam_boxes(
 
     weights = gradients.mean(dim=1)
     cam = torch.relu((activations * weights.unsqueeze(1)).sum(dim=-1)[:, 1:])
-    cam = cam.reshape(batch_views, time_grid, height_grid, width_grid).mean(dim=1)
+    cam = cam.reshape(batch_views, time_grid, height_grid, width_grid)
     boxes: dict[int, dict[str, Any]] = {}
-    view_count = min(int(batch.shape[1]), batch_views, len(frame_sizes))
+    diagnostics: dict[str, Any] = {
+        "grid": list(CAM_GRID),
+        "top_fraction": TEMPORAL_TOP_FRACTION,
+        "min_contrast": TEMPORAL_MIN_CONTRAST,
+        "high_threshold": TEMPORAL_HIGH_THRESHOLD,
+        "low_threshold": TEMPORAL_LOW_THRESHOLD,
+        "views": {},
+    }
+    view_count = min(int(batch.shape[1]), batch_views, len(frame_sizes), len(window_ranges))
     for view_index in range(view_count):
-        grid = cam[view_index].detach().float().cpu().numpy()
+        volume = cam[view_index].detach().float().cpu().numpy()
+        window_start_s, window_end_s = window_ranges[view_index]
+        temporal = select_temporal_window(volume, window_start_s, window_end_s)
+        diagnostics["views"][str(view_index)] = {
+            "valid": temporal["valid"],
+            "reason": temporal["reason"],
+            "peak_index": temporal["peak_index"],
+            "active_indices": temporal["active_indices"],
+            "temporal_bins": temporal["temporal_bins"],
+        }
+        active_indices = temporal["active_indices"]
+        grid = volume[active_indices].mean(axis=0) if active_indices else volume.mean(axis=0)
         maximum = float(grid.max())
         if maximum <= 0:
             continue
@@ -124,14 +271,23 @@ def gradcam_boxes(
             )
         x, y, width, height = bbox
         original_width, original_height = frame_sizes[view_index]
-        boxes[view_index] = {
+        box: dict[str, Any] = {
             "rect": crop_to_original_percent(
                 x, y, width, height, original_width, original_height
             ),
             "score": round(float(heat[y : y + height, x : x + width].mean()), 3),
             "source": "gradcam",
+            "temporal_bins": temporal["temporal_bins"],
         }
-    return boxes
+        if temporal["valid"]:
+            box.update(
+                active_start_s=temporal["active_start_s"],
+                active_end_s=temporal["active_end_s"],
+                peak_s=temporal["peak_s"],
+                temporal_source="gradcam",
+            )
+        boxes[view_index] = box
+    return boxes, diagnostics
 
 
 def optical_flow_box(

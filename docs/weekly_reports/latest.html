@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Soccer Analysis — Weekly Development Report 08.03 — 08.08, 2026</title>
+  <style>
+    :root {
+      --ink: #141414;
+      --muted: #5f5f5f;
+      --rule: #1d1d1d;
+      --paper: #fff;
+      --blue: #2554c7;
+      --soft-blue: #eef2fb;
+      --serif: "Noto Serif CJK SC", "Songti SC", "STSong", Georgia, serif;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #d9d9d9; color: var(--ink); font-family: var(--sans); }
+    .paper { width: min(1200px, 100%); margin: 24px auto; padding: 28px 52px 42px; background: var(--paper); box-shadow: 0 10px 38px rgba(0,0,0,.12); }
+    .masthead { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 18px; padding: 10px 0 9px; border-top: 3px solid var(--ink); border-bottom: 1px solid var(--ink); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .masthead div:nth-child(2) { text-align: center; }
+    .masthead div:last-child { text-align: right; }
+    .brandline { margin: 24px 0 18px; border-bottom: 4px solid var(--ink); font-family: var(--serif); font-size: clamp(54px, 9vw, 126px); line-height: .86; letter-spacing: -.065em; }
+    .kicker-row { display: grid; grid-template-columns: 1fr 280px; align-items: end; gap: 28px; padding: 13px 0 16px; border-bottom: 1px solid var(--ink); }
+    h1, h2, h3, p { margin: 0; }
+    h1 { padding-left: 18px; border-left: 10px solid var(--blue); font-family: var(--serif); font-size: clamp(32px, 5vw, 60px); line-height: .95; letter-spacing: -.04em; }
+    .dek { font-size: 12px; line-height: 1.45; text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; margin-top: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--ink); }
+    figure { margin: 0; }
+    .hero-image { display: block; width: 100%; aspect-ratio: 1.6; object-fit: cover; border: 1px solid var(--ink); }
+    figcaption { padding-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+    .brief { padding-left: 18px; border-left: 1px solid #777; }
+    .brief-title, .label { color: var(--blue); font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+    .brief-title { margin-bottom: 4px; }
+    .pitch-diagram { display: block; width: 100%; margin-top: 5px; }
+    .svg-caption { font: 7px var(--sans); letter-spacing: .08em; fill: var(--muted); }
+    .metric-list { margin-top: 8px; border-top: 1px solid var(--rule); }
+    .metric { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #aaa; font-size: 11px; text-transform: uppercase; }
+    .metric strong { color: var(--blue); font-size: 17px; font-weight: 600; }
+    .stories { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 16px; border-bottom: 1px solid var(--ink); }
+    .story { min-height: 200px; padding: 0 18px 18px; border-right: 1px solid #aaa; }
+    .story:first-child { padding-left: 0; }
+    .story:nth-child(3) { border-right: 0; }
+    .story:nth-child(n+4) { padding-top: 18px; border-top: 1px solid #aaa; }
+    .story-index { margin-bottom: 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .story h3 { margin-bottom: 8px; font-family: var(--serif); font-size: 25px; line-height: 1; letter-spacing: -.02em; }
+    .story p { font-size: 13px; line-height: 1.5; }
+    .section-heading { margin-top: 26px; padding-bottom: 8px; border-bottom: 2px solid var(--ink); font-family: var(--serif); font-size: 29px; letter-spacing: -.03em; }
+    .timeline-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 28px; margin-top: 14px; }
+    .activity-chart { display: block; width: 100%; height: auto; padding: 10px 0 0; }
+    .chart-value { font: 12px var(--sans); fill: var(--ink); }
+    .chart-label { font: 11px var(--sans); fill: var(--muted); }
+    .timeline-note { padding: 12px 0 0 18px; border-left: 8px solid var(--blue); font-size: 14px; line-height: 1.5; }
+    .timeline-note strong { display: block; margin-bottom: 6px; font-family: var(--serif); font-size: 22px; line-height: 1.1; }
+    .evidence-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--ink); }
+    .evidence-grid h2 { margin-bottom: 8px; font-family: var(--serif); font-size: 26px; letter-spacing: -.03em; }
+    .evidence-grid ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--ink); }
+    .evidence-grid li { display: grid; grid-template-columns: 82px 1fr auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid #aaa; font-size: 12px; line-height: 1.35; }
+    .evidence-grid li time { color: var(--muted); }
+    .evidence-grid li small { color: var(--blue); font-size: 10px; font-weight: 700; }
+    .worktree li { grid-template-columns: 1fr auto; }
+    .empty-row { color: var(--muted); font-style: italic; }
+    .diagnostic { width: 100%; margin-top: 12px; border: 1px solid var(--ink); }
+    .footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 30px; padding-top: 10px; border-top: 1px solid var(--ink); color: var(--muted); font-size: 10px; line-height: 1.4; }
+    @media (max-width: 760px) {
+      html, body { max-width: 100%; overflow-x: hidden; }
+      .paper { margin: 0; padding: 18px 18px 30px; box-shadow: none; }
+      .masthead { grid-template-columns: 1fr; gap: 5px; }
+      .masthead div, .masthead div:nth-child(2), .masthead div:last-child { text-align: left; }
+      .masthead div { overflow-wrap: anywhere; letter-spacing: .04em; }
+      .brandline { font-size: 48px; overflow-wrap: anywhere; }
+      .kicker-row, .hero-grid, .timeline-grid, .evidence-grid { grid-template-columns: 1fr; }
+      .brief { padding: 16px 0 0; border-left: 0; border-top: 1px solid #777; }
+      .stories { grid-template-columns: 1fr; }
+      .story, .story:first-child, .story:nth-child(3), .story:nth-child(n+4) { min-height: 0; padding: 16px 0; border-right: 0; border-top: 1px solid #aaa; }
+      .story:first-child { border-top: 0; }
+      .footer { display: block; }
+      .footer span { display: block; margin-top: 8px; }
+    }
+    @media print { body { background: white; } .paper { width: 100%; margin: 0; padding: 10mm 12mm; box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <main class="paper">
+    <header class="masthead">
+      <div>Weekly Development Report</div><div>The Signal / The System</div><div>08.03 — 08.08, 2026 &nbsp;|&nbsp; Issue 32</div>
+    </header>
+    <div class="brandline">Soccer Analysis</div>
+    <section class="kicker-row">
+      <h1>This Week in Motion</h1>
+      <p class="dek">关于实时足球计算机视觉系统的周度开发进展、优化与验证证据</p>
+    </section>
+
+    <section class="hero-grid">
+      <figure>
+        <img class="hero-image" src="assets/weekly-report-concept.png" alt="足球计算机视觉项目的编辑式视觉概念图" />
+        <figcaption>Editorial reference image generated for this Artifact; project claims below are derived from the local repository window 08.03 — 08.08, 2026.</figcaption>
+      </figure>
+      <aside class="brief">
+        <div class="brief-title">System View</div>
+        <div style="font-family:var(--serif);font-size:24px;line-height:1.05;">从帧到场地空间</div>
+        <svg class="pitch-diagram" viewBox="0 0 220 310" role="img" aria-label="项目视觉管线示意图">
+      <rect x="16" y="16" width="188" height="278" fill="none" stroke="#191919" stroke-width="1.4"/>
+      <path d="M16 155h188M110 16v278M84 16v44h52V16M84 294v-44h52v44M110 128a27 27 0 1 0 0 54a27 27 0 1 0 0-54" fill="none" stroke="#191919" stroke-width="1.2"/>
+      <path d="M42 82 L88 108 L137 88 L177 120 L143 153 L100 192 L66 225" fill="none" stroke="#2554c7" stroke-width="2"/>
+      <path d="M178 213 L145 190 L110 226 L77 207 L43 232" fill="none" stroke="#787878" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <g fill="#2554c7" stroke="#fff" stroke-width="1.2">
+        <circle cx="42" cy="82" r="6"/><circle cx="88" cy="108" r="6"/><circle cx="137" cy="88" r="6"/>
+        <circle cx="177" cy="120" r="6"/><circle cx="143" cy="153" r="6"/><circle cx="100" cy="192" r="6"/><circle cx="66" cy="225" r="6"/>
+      </g>
+      <g fill="#8b8b8b" stroke="#fff" stroke-width="1.2"><circle cx="178" cy="213" r="5"/><circle cx="145" cy="190" r="5"/><circle cx="110" cy="226" r="5"/><circle cx="77" cy="207" r="5"/><circle cx="43" cy="232" r="5"/></g>
+      <text x="16" y="307" class="svg-caption">PLAYER / BALL / FIELD-SPACE</text>
+    </svg>
+        <div class="metric-list">
+          <div class="metric"><span>Committed changes</span><strong>7</strong></div>
+          <div class="metric"><span>Files touched</span><strong>28</strong></div>
+          <div class="metric"><span>Lines + / −</span><strong>1,636 / 65</strong></div>
+          <div class="metric"><span>Tests in inventory</span><strong>142</strong></div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="stories"><article class="story">
+          <div class="story-index">1 / 视觉与实时管线</div>
+          <h3>视觉与实时管线</h3>
+          <p>窗口内共有 11 个文件落在检测、跟踪、几何投影或运行模式相关路径。重点围绕帧级推理、角色语义与状态稳定性展开；报告只陈述 Git 可验证的文件范围，不替代模型精度评测。</p>
+        </article><article class="story">
+          <div class="story-index">2 / 服务与状态</div>
+          <h3>服务与状态</h3>
+          <p>服务层与状态层涉及 4 个文件。该区域连接 FastAPI、WebSocket 与共享状态，是将视觉结果变成可观测系统的关键边界。</p>
+        </article><article class="story">
+          <div class="story-index">3 / 前端与调试体验</div>
+          <h3>前端与调试体验</h3>
+          <p>前端路径涉及 6 个文件。变化集中在 dashboard 类型定义、渲染层或交互调试链路；实际 UI 体验应结合构建与浏览器验证继续观察。</p>
+        </article></section>
+    <section class="stories"><article class="story">
+          <div class="story-index">4 / 测试与工具链</div>
+          <h3>测试与工具链</h3>
+          <p>测试与工具链涉及 10 个文件。当前测试清单约 142 个测试函数，适合作为本周回归范围的基线，而不是通过率的替代品。</p>
+        </article><article class="story">
+          <div class="story-index">5 / 文档与验证</div>
+          <h3>文档与验证</h3>
+          <p>文档或验证资产涉及 9 个文件。它们帮助把模型、运行模式与诊断证据固定下来，降低下一轮调试的上下文成本。</p>
+        </article></section>
+
+    <h2 class="section-heading">Development Timeline</h2>
+    <section class="timeline-grid">
+      <div><svg class="activity-chart" viewBox="0 0 620 190" role="img" aria-label="每日提交数量"><line x1="0" y1="142" x2="620" y2="142" stroke="#191919" stroke-width="1"/><rect x="23.2" y="142" width="57" height="0" fill="#1a1a1a"/><text x="51.7" y="134" text-anchor="middle" class="chart-value">0</text><text x="51.7" y="166" text-anchor="middle" class="chart-label">08/03</text><rect x="126.5" y="142" width="57" height="0" fill="#1a1a1a"/><text x="155.0" y="134" text-anchor="middle" class="chart-value">0</text><text x="155.0" y="166" text-anchor="middle" class="chart-label">08/04</text><rect x="229.8" y="116" width="57" height="26" fill="#1a1a1a"/><text x="258.3" y="108" text-anchor="middle" class="chart-value">1</text><text x="258.3" y="166" text-anchor="middle" class="chart-label">08/05</text><rect x="333.2" y="37" width="57" height="105" fill="#1a1a1a"/><text x="361.7" y="29" text-anchor="middle" class="chart-value">4</text><text x="361.7" y="166" text-anchor="middle" class="chart-label">08/06</text><rect x="436.5" y="90" width="57" height="52" fill="#1a1a1a"/><text x="465.0" y="82" text-anchor="middle" class="chart-value">2</text><text x="465.0" y="166" text-anchor="middle" class="chart-label">08/07</text><rect x="539.8" y="142" width="57" height="0" fill="#2554c7"/><text x="568.3" y="134" text-anchor="middle" class="chart-value">0</text><text x="568.3" y="166" text-anchor="middle" class="chart-label">08/08</text></svg></div>
+      <div class="timeline-note"><strong>本周进展由提交与工作树共同构成</strong><span>最新记录：feat(video): compact player overlays and add algorithm report。当前工作树：assets/ggbond-football-referee-logo.png、debug/、docs/remote_full_pipeline.json、docs/remote_full_pipeline_final.json、docs/remote_full_pipeline_motion_final.json、docs/remote_phase1_benchmark.json 等 11 项。</span></div>
+    </section>
+
+    <section class="evidence-grid">
+      <article>
+        <div class="label">Committed Record</div>
+        <h2>提交日志</h2>
+        <ul><li><time>2026-08-07</time><span>feat(video): compact player overlays and add algorithm report</span><small>4906f33</small></li><li><time>2026-08-07</time><span>docs(tracking): record full cuda benchmark</span><small>1185697</small></li><li><time>2026-08-06</time><span>test(tracking): cover semantic rebind integration</span><small>f47d424</small></li><li><time>2026-08-06</time><span>feat(tracking): add lifecycle diagnostics</span><small>3e2ad07</small></li><li><time>2026-08-06</time><span>feat(tracking): improve short occlusion stability</span><small>488a8a3</small></li><li><time>2026-08-06</time><span>fix(ui): use browser-compatible calibration review video</span><small>86689f2</small></li></ul>
+      </article>
+      <article>
+        <div class="label">Uncommitted Surface</div>
+        <h2>工作树观察</h2>
+        <ul class="worktree"><li><span>assets/ggbond-football-referee-logo.png</span><small>其他</small></li><li><span>debug/</span><small>其他</small></li><li><span>docs/remote_full_pipeline.json</span><small>文档与验证</small></li><li><span>docs/remote_full_pipeline_final.json</span><small>文档与验证</small></li><li><span>docs/remote_full_pipeline_motion_final.json</span><small>文档与验证</small></li><li><span>docs/remote_phase1_benchmark.json</span><small>文档与验证</small></li><li><span>docs/remote_root_pipeline_final.json</span><small>文档与验证</small></li><li><span>docs/test1_diagnostic.json</span><small>文档与验证</small></li><li><span>docs/test1_diagnostic_contact_sheet.jpg</span><small>文档与验证</small></li><li><span>tools/generate_weekly_report.py</span><small>测试与工具链</small></li></ul>
+        <p style="margin-top:12px;font-size:11px;color:var(--muted);">测试基线：静态测试清单；本页不把未执行的测试写成“通过”。</p>
+      </article>
+    </section>
+
+    <section style="margin-top:24px;padding-top:16px;border-top:1px solid var(--ink);">
+      <div class="label">Visual Evidence</div>
+      <h2 class="section-heading" style="margin-top:6px;">诊断画面 / Field Evidence</h2>
+      <figure>
+        <img class="diagnostic" src="../test1_diagnostic_contact_sheet.jpg" alt="项目诊断画面联系表，展示球员检测、投影与球追踪结果" />
+        <figcaption>如果本地诊断联系表存在，它会作为项目证据图一并呈现；缺失时浏览器会保留空位，不影响报告其余内容。</figcaption>
+      </figure>
+    </section>
+
+    <footer class="footer"><span>Generated from local Git history, working-tree status and test inventory.</span><span>Snapshot: 2026.08.08 · HEAD 4906f33</span></footer>
+  </main>
+</body>
+</html>

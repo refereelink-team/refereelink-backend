@@ -1,0 +1,33 @@
+{
+  "status": "ok",
+  "thread_errors": [],
+  "source": "/home/caysonyin/test1.mp4",
+  "source_status": "disconnected",
+  "pipeline_running_before_stop": false,
+  "frames": 1930,
+  "elapsed_sec": 46.383,
+  "video_fps": 30.0,
+  "processing_fps": 41.61,
+  "pitch_detection_count": 486,
+  "pitch_reuse_count": 1444,
+  "camera_motion_refresh_count": 268,
+  "homography_available_ratio": 1.0,
+  "homography_states": {
+    "fresh": 486,
+    "reused": 1444
+  },
+  "track_id_interruptions": 0,
+  "ball_detection_count": 966,
+  "ball_available_ratio": 0.851,
+  "valid_player_coordinate_ratio": 0.869,
+  "semantic_inference_count": 644,
+  "event_count": 95,
+  "roles": {
+    "unknown": 17
+  },
+  "team_ids": {
+    "-1": 17
+  },
+  "cuda": true,
+  "gpu": "NVIDIA GeForce RTX 5060 Ti"
+}

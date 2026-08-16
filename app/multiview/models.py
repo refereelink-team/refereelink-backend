@@ -36,6 +36,23 @@ class EvidenceView(BaseModel):
     quality: str = "清晰"
 
 
+class TemporalBin(BaseModel):
+    start_s: float = Field(ge=0.0)
+    end_s: float = Field(ge=0.0)
+    score: float = Field(ge=0.0, le=1.0)
+
+
+class LocalizationBox(BaseModel):
+    rect: tuple[float, float, float, float]
+    score: float = Field(ge=0.0)
+    source: str
+    active_start_s: float | None = Field(default=None, ge=0.0)
+    active_end_s: float | None = Field(default=None, ge=0.0)
+    peak_s: float | None = Field(default=None, ge=0.0)
+    temporal_bins: list[TemporalBin] = Field(default_factory=list)
+    temporal_source: Literal["gradcam", "event_prior"] | None = None
+
+
 class ScriptedResult(BaseModel):
     decision: str
     decision_zh: str
@@ -43,7 +60,7 @@ class ScriptedResult(BaseModel):
     severity: str
     confidence: float = Field(ge=0.0, le=1.0)
     card: Literal["none", "yellow", "red"] = "none"
-    localization: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    localization: dict[str, LocalizationBox] = Field(default_factory=dict)
     view_attention: list[float] = Field(default_factory=list)
 
 
@@ -84,7 +101,7 @@ class MultiviewDecision(BaseModel):
     preprocess_ms: float | None = None
     gradcam_ms: float | None = None
     gpu_mem_mb: float | None = None
-    localization: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    localization: dict[str, LocalizationBox] = Field(default_factory=dict)
     localization_source: str | None = None
     view_attention: list[float] = Field(default_factory=list)
     detail: dict[str, Any] = Field(default_factory=dict)
