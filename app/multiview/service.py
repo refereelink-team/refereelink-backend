@@ -5,10 +5,12 @@ from datetime import datetime
 from typing import Any
 
 from app.multiview.inference import FoulInferenceError, FoulInferenceService, model_prerequisites
+from app.multiview.explanation import GuardedExplanationWriter
 from app.multiview.localization import event_prior_window
 from app.multiview.models import (
     AssessmentStatus,
     FoulFacts,
+    ExplanationResponse,
     MultiviewAnalyzeResponse,
     MultiviewDecision,
     ReviewRecord,
@@ -28,6 +30,7 @@ class MultiviewAnalysisService:
         self.repository = repository or MultiviewCaseRepository()
         self.review_store = review_store or MultiviewReviewStore()
         self.rule_engine = IFABRuleEngine()
+        self.explanation_writer = GuardedExplanationWriter()
         self._lock = threading.Lock()
         self._analyzers: dict[str, FoulInferenceService] = {}
         self._load_errors: dict[str, str] = {}
@@ -164,6 +167,27 @@ class MultiviewAnalysisService:
 
     def review_history(self, case_id: str) -> list[ReviewRecord]:
         return self.review_store.review_history(case_id)
+
+    def explain_review(
+        self,
+        case_id: str,
+        revision: int | None,
+        *,
+        use_llm: bool,
+    ) -> ExplanationResponse:
+        record = (
+            self.review_store.get_review_revision(case_id, revision)
+            if revision is not None
+            else self.review_store.latest_review(case_id)
+        )
+        if record is None:
+            raise KeyError(case_id)
+        analysis = (
+            self.review_store.get_analysis(record.analysis_id)
+            if record.analysis_id is not None
+            else None
+        )
+        return self.explanation_writer.explain(record, analysis, use_llm=use_llm)
 
     @staticmethod
     def _fact_value(facts: FoulFacts, name: str) -> Any | None:

@@ -140,6 +140,18 @@ class MultiviewReviewStore:
             ).fetchone()
         return self._record_from_row(row) if row else None
 
+    def get_review_revision(self, case_id: str, revision: int) -> ReviewRecord | None:
+        self._ensure_schema()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM review_revisions
+                WHERE case_id = ? AND revision = ?
+                """,
+                (case_id, revision),
+            ).fetchone()
+        return self._record_from_row(row) if row else None
+
     def review_history(self, case_id: str) -> list[ReviewRecord]:
         self._ensure_schema()
         with self._connect() as connection:

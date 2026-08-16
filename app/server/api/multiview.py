@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from app.multiview.models import MultiviewAnalyzeRequest, ReviewUpdateRequest
+from app.multiview.models import ExplanationRequest, MultiviewAnalyzeRequest, ReviewUpdateRequest
 from app.multiview.review_store import ReviewRevisionConflict
 from app.multiview.service import MultiviewAnalysisService
 
@@ -126,3 +126,16 @@ def get_review_history(case_id: str, request: Request) -> dict:
         "count": len(history),
         "history": [record.model_dump(mode="json") for record in history],
     }
+
+
+@router.post("/cases/{case_id}/explanation")
+def explain_review(case_id: str, payload: ExplanationRequest, request: Request) -> dict:
+    try:
+        explanation = _service(request).explain_review(
+            case_id,
+            payload.revision,
+            use_llm=payload.use_llm,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Review revision not found") from exc
+    return explanation.model_dump(mode="json")

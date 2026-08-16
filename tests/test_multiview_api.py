@@ -226,3 +226,23 @@ def test_review_api_rejects_stale_revision(demo_client) -> None:
     conflict = demo_client.put("/api/multiview/cases/mvfoul_001/review", json=payload)
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "REVIEW_REVISION_CONFLICT"
+
+
+def test_explanation_api_has_deterministic_template_fallback(demo_client) -> None:
+    analyzed = demo_client.post(
+        "/api/multiview/analyze",
+        json={"case_id": "mvfoul_001", "device": "auto"},
+    ).json()["decision"]
+    payload = _complete_review_payload(analyzed["analysis_id"])
+    saved = demo_client.put("/api/multiview/cases/mvfoul_001/review", json=payload).json()["review"]
+
+    response = demo_client.post(
+        "/api/multiview/cases/mvfoul_001/explanation",
+        json={"revision": saved["revision"], "use_llm": False},
+    )
+    assert response.status_code == 200
+    explanation = response.json()
+    assert explanation["source"] == "template"
+    assert explanation["restart"] == "direct_free_kick"
+    assert explanation["sanction"] == "yellow_card"
+    assert explanation["summary"] == saved["assessment"]["explanation_template"]

@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from app.multiview.explanation import GuardedExplanationWriter
+from app.multiview.models import (
+    AssessmentStatus,
+    FoulFacts,
+    RestartType,
+    ReviewRecord,
+    RuleAssessment,
+    RuleTraceEntry,
+    SanctionType,
+)
+
+
+def record() -> ReviewRecord:
+    return ReviewRecord(
+        case_id="case-1",
+        revision=2,
+        facts=FoulFacts(),
+        assessment=RuleAssessment(
+            status=AssessmentStatus.COMPLETE,
+            restart=RestartType.DIRECT_FREE_KICK,
+            sanction=SanctionType.YELLOW_CARD,
+            rule_trace=[
+                RuleTraceEntry(
+                    rule_id="L12-RECKLESS",
+                    law="Law 12",
+                    section="Reckless challenge",
+                    result="黄牌",
+                )
+            ],
+            explanation_template="模板解释",
+        ),
+        created_at="2026-08-16T00:00:00+00:00",
+        updated_at="2026-08-16T00:00:00+00:00",
+    )
+
+
+def test_explanation_uses_template_without_configured_llm() -> None:
+    result = GuardedExplanationWriter(url="").explain(record(), None, use_llm=True)
+    assert result.source == "template"
+    assert result.summary == "模板解释"
+    assert "not configured" in (result.fallback_reason or "")
+
+
+def test_explanation_accepts_only_matching_llm_conclusion(monkeypatch) -> None:
+    writer = GuardedExplanationWriter(url="http://127.0.0.1:8080")
+    monkeypatch.setattr(
+        writer,
+        "_request",
+        lambda payload: {
+            "summary": "依据已确认事实，应判直接任意球并出示黄牌。",
+            "restart": "direct_free_kick",
+            "sanction": "yellow_card",
+            "rule_ids": ["L12-RECKLESS"],
+        },
+    )
+    result = writer.explain(record(), None)
+    assert result.source == "local_llm"
+    assert result.fallback_reason is None
+
+
+def test_explanation_rejects_llm_attempt_to_change_card(monkeypatch) -> None:
+    writer = GuardedExplanationWriter(url="http://127.0.0.1:8080")
+    monkeypatch.setattr(
+        writer,
+        "_request",
+        lambda payload: {
+            "summary": "应判直接任意球并出示红牌。",
+            "restart": "direct_free_kick",
+            "sanction": "red_card",
+            "rule_ids": ["L12-RECKLESS"],
+        },
+    )
+    result = writer.explain(record(), None)
+    assert result.source == "template"
+    assert result.summary == "模板解释"
+    assert "changed sanction" in (result.fallback_reason or "")

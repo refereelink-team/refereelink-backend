@@ -166,6 +166,22 @@ class ReviewUpdateRequest(BaseModel):
     review_state: ReviewState = ReviewState.PENDING
 
 
+class ExplanationRequest(BaseModel):
+    revision: int | None = Field(default=None, ge=1)
+    use_llm: bool = True
+
+
+class ExplanationResponse(BaseModel):
+    case_id: str
+    revision: int
+    source: Literal["template", "local_llm"]
+    summary: str
+    restart: RestartType
+    sanction: SanctionType
+    rule_ids: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None
+
+
 class CandidateScore(BaseModel):
     label: str
     confidence: float = Field(ge=0.0, le=1.0)
