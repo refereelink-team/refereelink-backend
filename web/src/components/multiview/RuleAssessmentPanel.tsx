@@ -34,13 +34,24 @@ export default function RuleAssessmentPanel({
   assessment,
   explanation,
   explaining,
+  draftChanged,
   onExplain,
 }: {
   assessment: RuleAssessment | null;
   explanation: ExplanationResponse | null;
   explaining: boolean;
+  draftChanged?: boolean;
   onExplain: () => void;
 }) {
+  if (draftChanged) {
+    return (
+      <div className="mv-decision-empty stale">
+        <i />
+        <strong>人工事实已修改</strong>
+        <span>旧几何结果、判罚和解释已隐藏。请保存后重新计算。</span>
+      </div>
+    );
+  }
   if (!assessment) {
     return <div className="mv-decision-empty"><i />保存人工事实后由服务端计算规则结论</div>;
   }
@@ -65,7 +76,7 @@ export default function RuleAssessmentPanel({
             ? ' 本方禁区条件无法确定'
             : assessment.geometry.in_offender_own_penalty_area
               ? ' 犯规方本方禁区内'
-              : ' 非犯规方本方禁区'}
+              : ' 犯规方本方禁区外'}
         </div>
       ) : null}
       <p className="mv-rule-summary">{explanation?.summary ?? assessment.explanation_template}</p>

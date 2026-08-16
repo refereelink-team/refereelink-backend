@@ -39,6 +39,18 @@ def test_pitch_geometry_does_not_guess_own_penalty_area_without_direction() -> N
     assert geometry.in_offender_own_penalty_area is None
 
 
+def test_pitch_geometry_keeps_location_outside_penalty_area() -> None:
+    geometry = analyze_location(
+        FoulLocation(x_m=30.42, y_m=14.42),
+        TeamLabel.HOME,
+        DefendsSide.LEFT,
+    )
+    assert geometry.zone == "左半场"
+    assert geometry.in_penalty_area is False
+    assert geometry.penalty_area_side is None
+    assert geometry.in_offender_own_penalty_area is False
+
+
 def test_review_store_is_append_only_and_detects_revision_conflicts(tmp_path) -> None:
     store = MultiviewReviewStore(tmp_path / "reviews.sqlite3")
     facts = FoulFacts(location=FoulLocation(x_m=45.0, y_m=30.0))

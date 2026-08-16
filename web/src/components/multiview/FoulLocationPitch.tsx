@@ -12,7 +12,10 @@ interface Props {
   geometry: LocationGeometry | null;
   offenderTeam: TeamLabel | null;
   homeDefendsSide: DefendsSide | null;
+  dirty: boolean;
+  saving: boolean;
   onChange: (location: FoulLocation | null) => void;
+  onSave: () => void;
 }
 
 function pointerLocation(event: PointerEvent<SVGSVGElement>): FoulLocation {
@@ -41,7 +44,10 @@ export default function FoulLocationPitch({
   geometry,
   offenderTeam,
   homeDefendsSide,
+  dirty,
+  saving,
   onChange,
+  onSave,
 }: Props) {
   const previousLocation = useRef<FoulLocation | null>(null);
   const dragging = useRef(false);
@@ -113,12 +119,19 @@ export default function FoulLocationPitch({
             disabled={previousLocation.current === location}
             onClick={() => onChange(previousLocation.current)}
           >撤销</button>
+          <button
+            type="button"
+            className="save"
+            disabled={!dirty || saving}
+            onClick={onSave}
+          >{saving ? '保存中…' : '保存并更新判罚'}</button>
         </div>
       </div>
       <p className="mv-location-context">
         犯规方 {offenderTeam?.toUpperCase() ?? '未确认'} · HOME 防守
         {homeDefendsSide === 'left' ? '左侧' : homeDefendsSide === 'right' ? '右侧' : '方向未确认'}
         {geometry?.in_offender_own_penalty_area === true ? ' · 犯规方本方禁区内' : ''}
+        {dirty ? ' · 尚未保存' : ''}
       </p>
     </div>
   );

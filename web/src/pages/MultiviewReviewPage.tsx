@@ -212,6 +212,7 @@ export default function MultiviewReviewPage() {
   const [decision, setDecision] = useState<MultiviewDecision | null>(null);
   const [review, setReview] = useState<ReviewRecord | null>(null);
   const [facts, setFacts] = useState<FoulFacts>(() => emptyFacts());
+  const [reviewDirty, setReviewDirty] = useState(false);
   const [explanation, setExplanation] = useState<ExplanationResponse | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState('选择事件后运行多视角分析');
   const [analyzing, setAnalyzing] = useState(false);
@@ -252,6 +253,7 @@ export default function MultiviewReviewPage() {
     setReview(null);
     setDecision(null);
     setFacts(emptyFacts());
+    setReviewDirty(false);
     setExplanation(null);
     fetchMultiviewReview(selectedId)
       .then((payload) => {
@@ -259,6 +261,7 @@ export default function MultiviewReviewPage() {
         setReview(payload.review);
         setDecision(payload.analysis);
         setFacts(payload.review?.facts ?? (payload.analysis ? factsFromDecision(payload.analysis) : emptyFacts()));
+        setReviewDirty(false);
         setReviewState(payload.review?.review_state ?? null);
         if (payload.review) {
           setAnalysisMessage(`已恢复审核修订 REV ${payload.review.revision}`);
@@ -427,6 +430,7 @@ export default function MultiviewReviewPage() {
     setDecision(null);
     setReview(null);
     setFacts(emptyFacts());
+    setReviewDirty(false);
     setExplanation(null);
     setAnalysisMessage('证据已载入，等待运行模型');
     setReviewState(null);
@@ -462,6 +466,22 @@ export default function MultiviewReviewPage() {
     }
   }
 
+  function invalidateSavedAssessment() {
+    setReviewDirty(true);
+    setExplanation(null);
+    setAnalysisMessage('人工事实已修改；旧规则结论已失效，请保存并更新判罚');
+  }
+
+  function updateDraftFacts(nextFacts: FoulFacts) {
+    setFacts(nextFacts);
+    invalidateSavedAssessment();
+  }
+
+  function updateDraftLocation(location: FoulFacts['location']) {
+    setFacts((current) => ({ ...current, location }));
+    invalidateSavedAssessment();
+  }
+
   async function saveReview(nextState: ReviewState = reviewState ?? 'pending') {
     if (!activeCase || savingReview) return;
     setSavingReview(true);
@@ -475,6 +495,7 @@ export default function MultiviewReviewPage() {
       });
       setReview(payload.review);
       setFacts(payload.review.facts);
+      setReviewDirty(false);
       setReviewState(payload.review.review_state);
       setCases((current) => current.map((item) => item.case_id === activeCase.case_id
         ? { ...item, review_state: payload.review.review_state, review_revision: payload.review.revision }
@@ -489,6 +510,10 @@ export default function MultiviewReviewPage() {
 
   async function generateExplanation() {
     if (!activeCase || !review || explaining) return;
+    if (reviewDirty) {
+      setAnalysisMessage('请先保存当前人工事实，再基于新规则结论整理解释');
+      return;
+    }
     setExplaining(true);
     try {
       const result = await explainMultiviewReview(activeCase.case_id, review.revision, true);
@@ -670,7 +695,7 @@ export default function MultiviewReviewPage() {
             </button>
             <span className="mv-action-status">{analysisMessage}</span>
             <div className="mv-review-actions">
-              <button disabled={!activeCase || savingReview} onClick={() => saveReview('pending')}>保存事实</button>
+              <button disabled={!activeCase || savingReview} onClick={() => saveReview()}>保存事实</button>
               <button disabled={!activeCase || savingReview} onClick={() => saveReview('uncertain')}>暂不确定</button>
               <button disabled={!activeCase || savingReview} onClick={() => saveReview('reviewed')}>完成复核</button>
               <button disabled={!review || savingReview} onClick={() => saveReview('archived')}>完成归档</button>
@@ -684,25 +709,29 @@ export default function MultiviewReviewPage() {
               <div className="mv-panel-title compact"><div><span>HUMAN SPATIAL FACT</span><h2>人工确认犯规位置</h2></div><b>105×68</b></div>
               <FoulLocationPitch
                 location={facts.location}
-                geometry={review?.assessment.geometry ?? null}
+                geometry={reviewDirty ? null : review?.assessment.geometry ?? null}
                 offenderTeam={facts.offender_team.confirmed ? facts.offender_team.value : null}
                 homeDefendsSide={facts.home_defends_side.confirmed ? facts.home_defends_side.value : null}
-                onChange={(location) => setFacts((current) => ({ ...current, location }))}
+                dirty={reviewDirty}
+                saving={savingReview}
+                onChange={updateDraftLocation}
+                onSave={() => saveReview()}
               />
             </div>
           )}
 
           <div className="mv-panel mv-facts-panel">
             <div className="mv-panel-title compact"><div><span>CONFIRMED EVENT FACTS</span><h2>渐进式事实确认</h2></div><b>HUMAN</b></div>
-            <FoulFactsPanel facts={facts} decision={decision} onChange={setFacts} />
+            <FoulFactsPanel facts={facts} decision={decision} onChange={updateDraftFacts} />
           </div>
 
           <div className="mv-panel mv-rule-panel">
             <div className="mv-panel-title compact"><div><span>DETERMINISTIC RULES</span><h2>规则辅助判罚</h2></div><b>{review?.assessment.ruleset_version ?? 'IFAB'}</b></div>
             <RuleAssessmentPanel
-              assessment={review?.assessment ?? null}
-              explanation={explanation}
+              assessment={reviewDirty ? null : review?.assessment ?? null}
+              explanation={reviewDirty ? null : explanation}
               explaining={explaining}
+              draftChanged={reviewDirty}
               onExplain={generateExplanation}
             />
           </div>
