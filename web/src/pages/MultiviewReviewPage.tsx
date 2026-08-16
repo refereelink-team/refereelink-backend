@@ -1,16 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   analyzeMultiviewCase,
+  explainMultiviewReview,
   fetchMultiviewCases,
+  fetchMultiviewReview,
   fetchMultiviewStatus,
+  updateMultiviewReview,
 } from '../api/multiview';
+import FoulFactsPanel from '../components/multiview/FoulFactsPanel';
+import FoulLocationPitch from '../components/multiview/FoulLocationPitch';
+import ModelEvidencePanel from '../components/multiview/ModelEvidencePanel';
+import RuleAssessmentPanel from '../components/multiview/RuleAssessmentPanel';
 import type {
+  DefendsSide,
   EvidenceView,
+  ExplanationResponse,
+  FoulFacts,
   LocalizationBox,
   MultiviewCase,
   MultiviewDecision,
   MultiviewStatus,
+  ReviewRecord,
   ReviewState,
+  TeamLabel,
 } from '../types/multiview';
 import './multiview-review.css';
 
@@ -66,6 +78,48 @@ function modeLabel(decision: MultiviewDecision | null, status: MultiviewStatus |
   if (decision?.mode === 'model') return 'CUDA 模型结果';
   if (decision?.mode === 'scripted') return '演示数据';
   return status?.ready ? '模型待命' : '演示模式';
+}
+
+function unconfirmed<T>(value: T | null = null, source: 'human' | 'model' = 'human', confidence: number | null = null) {
+  return { value, source, confidence, confirmed: false };
+}
+
+function emptyFacts(): FoulFacts {
+  return {
+    offence_confirmed: unconfirmed<boolean>(),
+    action: unconfirmed<string>(),
+    offender_team: unconfirmed<TeamLabel>(),
+    victim_team: unconfirmed<TeamLabel>(),
+    ball_in_play: unconfirmed<boolean>(),
+    contact: unconfirmed<boolean>(),
+    contact_region: unconfirmed<string>(),
+    intensity: unconfirmed<string>(),
+    attempt_to_play_ball: unconfirmed<boolean>(),
+    tactical_impact: unconfirmed<string>(),
+    location: null,
+    home_defends_side: unconfirmed<DefendsSide>(),
+  };
+}
+
+function factsFromDecision(decision: MultiviewDecision): FoulFacts {
+  const facts = emptyFacts();
+  facts.offence_confirmed = unconfirmed(
+    decision.severity !== 'No Offence',
+    'model',
+    decision.severity_candidates[0]?.confidence ?? decision.confidence,
+  );
+  facts.action = unconfirmed(
+    decision.action,
+    'model',
+    decision.action_candidates[0]?.confidence ?? decision.confidence,
+  );
+  const intensity = decision.card === 'red'
+    ? 'excessive_force'
+    : decision.card === 'yellow'
+      ? 'reckless'
+      : 'careless';
+  facts.intensity = unconfirmed(intensity, 'model', decision.confidence);
+  return facts;
 }
 
 function MediaFrame({
@@ -149,30 +203,6 @@ function MediaFrame({
   );
 }
 
-function PitchEvidence({ activeCase }: { activeCase: MultiviewCase }) {
-  return (
-    <div className="mv-pitch-wrap">
-      <svg viewBox="0 0 360 210" role="img" aria-label="二维球场证据示意图">
-        <rect x="8" y="8" width="344" height="194" />
-        <line x1="180" y1="8" x2="180" y2="202" />
-        <circle cx="180" cy="105" r="34" />
-        <rect x="8" y="54" width="58" height="102" />
-        <rect x="294" y="54" width="58" height="102" />
-        <circle className="home" cx="228" cy="87" r="6" />
-        <circle className="away" cx="248" cy="105" r="6" />
-        <circle className="away" cx="274" cy="118" r="6" />
-        <circle className="ref" cx="216" cy="128" r="5" />
-        <path className="motion" d="M230 92 C246 93, 254 98, 267 110" />
-      </svg>
-      <div className="mv-pitch-caption">
-        <span>事件区域</span>
-        <strong>{activeCase.zone}</strong>
-        <span>空间证据仅作辅助</span>
-      </div>
-    </div>
-  );
-}
-
 export default function MultiviewReviewPage() {
   const [cases, setCases] = useState<MultiviewCase[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -180,8 +210,13 @@ export default function MultiviewReviewPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [status, setStatus] = useState<MultiviewStatus | null>(null);
   const [decision, setDecision] = useState<MultiviewDecision | null>(null);
+  const [review, setReview] = useState<ReviewRecord | null>(null);
+  const [facts, setFacts] = useState<FoulFacts>(() => emptyFacts());
+  const [explanation, setExplanation] = useState<ExplanationResponse | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState('选择事件后运行多视角分析');
   const [analyzing, setAnalyzing] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
+  const [explaining, setExplaining] = useState(false);
   const [reviewState, setReviewState] = useState<ReviewState | null>(null);
   const [playhead, setPlayhead] = useState(50);
   const [playing, setPlaying] = useState(false);
@@ -210,6 +245,32 @@ export default function MultiviewReviewPage() {
       })
       .catch((error) => setLoadError(String(error)));
   }, []);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    let cancelled = false;
+    setReview(null);
+    setDecision(null);
+    setFacts(emptyFacts());
+    setExplanation(null);
+    fetchMultiviewReview(selectedId)
+      .then((payload) => {
+        if (cancelled) return;
+        setReview(payload.review);
+        setDecision(payload.analysis);
+        setFacts(payload.review?.facts ?? (payload.analysis ? factsFromDecision(payload.analysis) : emptyFacts()));
+        setReviewState(payload.review?.review_state ?? null);
+        if (payload.review) {
+          setAnalysisMessage(`已恢复审核修订 REV ${payload.review.revision}`);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setAnalysisMessage(`审核记录加载失败：${String(error)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
 
   const activeCase = useMemo(
     () => cases.find((item) => item.case_id === selectedId) ?? null,
@@ -364,6 +425,9 @@ export default function MultiviewReviewPage() {
     setSelectedId(item.case_id);
     setSelectedCameraId(item.videos[0]?.camera_id ?? null);
     setDecision(null);
+    setReview(null);
+    setFacts(emptyFacts());
+    setExplanation(null);
     setAnalysisMessage('证据已载入，等待运行模型');
     setReviewState(null);
     setPlayhead(50);
@@ -381,6 +445,7 @@ export default function MultiviewReviewPage() {
         throw new Error(response.message);
       }
       setDecision(response.decision);
+      if (!review) setFacts(factsFromDecision(response.decision));
       setAnalysisMessage(response.message);
       const mainView = activeCase.videos[0];
       const mainBox = mainView ? response.decision.localization[mainView.camera_id] : undefined;
@@ -397,9 +462,43 @@ export default function MultiviewReviewPage() {
     }
   }
 
-  function applyReview(next: ReviewState) {
-    setReviewState(next);
-    setAnalysisMessage(`人工复核已在本次会话标记为“${stateLabels[next]}”`);
+  async function saveReview(nextState: ReviewState = reviewState ?? 'pending') {
+    if (!activeCase || savingReview) return;
+    setSavingReview(true);
+    setExplanation(null);
+    try {
+      const payload = await updateMultiviewReview(activeCase.case_id, {
+        expected_revision: review?.revision ?? 0,
+        analysis_id: decision?.analysis_id ?? review?.analysis_id ?? null,
+        facts,
+        review_state: nextState,
+      });
+      setReview(payload.review);
+      setFacts(payload.review.facts);
+      setReviewState(payload.review.review_state);
+      setCases((current) => current.map((item) => item.case_id === activeCase.case_id
+        ? { ...item, review_state: payload.review.review_state, review_revision: payload.review.revision }
+        : item));
+      setAnalysisMessage(`人工事实与规则结论已保存为 REV ${payload.review.revision}`);
+    } catch (error) {
+      setAnalysisMessage(`保存失败：${String(error)}；如有版本冲突请重新载入案例`);
+    } finally {
+      setSavingReview(false);
+    }
+  }
+
+  async function generateExplanation() {
+    if (!activeCase || !review || explaining) return;
+    setExplaining(true);
+    try {
+      const result = await explainMultiviewReview(activeCase.case_id, review.revision, true);
+      setExplanation(result);
+      setAnalysisMessage(result.source === 'local_llm' ? '本地 LLM 已在规则边界内整理文案' : '已使用确定性模板生成解释');
+    } catch (error) {
+      setAnalysisMessage(`解释生成失败：${String(error)}`);
+    } finally {
+      setExplaining(false);
+    }
   }
 
   if (loadError) {
@@ -571,9 +670,10 @@ export default function MultiviewReviewPage() {
             </button>
             <span className="mv-action-status">{analysisMessage}</span>
             <div className="mv-review-actions">
-              <button disabled={!decision} onClick={() => applyReview('uncertain')}>暂不确定</button>
-              <button disabled={!decision} onClick={() => applyReview('reviewed')}>确认建议</button>
-              <button disabled={!decision} onClick={() => applyReview('archived')}>完成归档</button>
+              <button disabled={!activeCase || savingReview} onClick={() => saveReview('pending')}>保存事实</button>
+              <button disabled={!activeCase || savingReview} onClick={() => saveReview('uncertain')}>暂不确定</button>
+              <button disabled={!activeCase || savingReview} onClick={() => saveReview('reviewed')}>完成复核</button>
+              <button disabled={!review || savingReview} onClick={() => saveReview('archived')}>完成归档</button>
             </div>
           </div>
         </section>
@@ -581,31 +681,35 @@ export default function MultiviewReviewPage() {
         <aside className="mv-right-column">
           {activeCase && (
             <div className="mv-panel mv-pitch-panel">
-              <div className="mv-panel-title compact"><div><span>SPATIAL EVIDENCE</span><h2>二维球场空间证据</h2></div><b>辅助</b></div>
-              <PitchEvidence activeCase={activeCase} />
+              <div className="mv-panel-title compact"><div><span>HUMAN SPATIAL FACT</span><h2>人工确认犯规位置</h2></div><b>105×68</b></div>
+              <FoulLocationPitch
+                location={facts.location}
+                geometry={review?.assessment.geometry ?? null}
+                offenderTeam={facts.offender_team.confirmed ? facts.offender_team.value : null}
+                homeDefendsSide={facts.home_defends_side.confirmed ? facts.home_defends_side.value : null}
+                onChange={(location) => setFacts((current) => ({ ...current, location }))}
+              />
             </div>
           )}
 
+          <div className="mv-panel mv-facts-panel">
+            <div className="mv-panel-title compact"><div><span>CONFIRMED EVENT FACTS</span><h2>渐进式事实确认</h2></div><b>HUMAN</b></div>
+            <FoulFactsPanel facts={facts} decision={decision} onChange={setFacts} />
+          </div>
+
+          <div className="mv-panel mv-rule-panel">
+            <div className="mv-panel-title compact"><div><span>DETERMINISTIC RULES</span><h2>规则辅助判罚</h2></div><b>{review?.assessment.ruleset_version ?? 'IFAB'}</b></div>
+            <RuleAssessmentPanel
+              assessment={review?.assessment ?? null}
+              explanation={explanation}
+              explaining={explaining}
+              onExplain={generateExplanation}
+            />
+          </div>
+
           <div className="mv-panel mv-decision-panel">
-            <div className="mv-panel-title compact"><div><span>MODEL DECISION</span><h2>结构化判罚记录</h2></div></div>
-            {decision ? (
-              <>
-                <div className={`mv-decision-hero ${decision.card}`}>
-                  <div><span>辅助建议</span><strong>{decision.decision_zh}</strong></div>
-                  <b>{percent(decision.confidence)}</b>
-                </div>
-                <dl className="mv-record-grid">
-                  <div><dt>动作类型</dt><dd>{decision.action}</dd></div>
-                  <div><dt>严重程度</dt><dd>{decision.severity}</dd></div>
-                  <div><dt>解释来源</dt><dd>{decision.localization_source ?? '无定位'}</dd></div>
-                  <div><dt>推理模式</dt><dd className={decision.mode}>{decision.mode === 'model' ? decision.model : 'SCRIPTED DEMO'}</dd></div>
-                  <div><dt>前向耗时</dt><dd>{decision.inference_ms ? `${decision.inference_ms} ms` : '—'}</dd></div>
-                  <div><dt>Grad-CAM</dt><dd>{decision.gradcam_ms ? `${decision.gradcam_ms} ms` : '—'}</dd></div>
-                </dl>
-              </>
-            ) : (
-              <div className="mv-decision-empty"><i />运行分析后显示模型建议、置信度与解释来源</div>
-            )}
+            <div className="mv-panel-title compact"><div><span>MODEL EVIDENCE</span><h2>视觉模型原始建议</h2></div><b>{decision ? percent(decision.confidence) : '—'}</b></div>
+            <ModelEvidencePanel decision={decision} />
           </div>
 
           <div className="mv-panel mv-chain-panel">
@@ -614,7 +718,7 @@ export default function MultiviewReviewPage() {
               <li className="done"><b>01</b><div><strong>多机位同步</strong><span>偏差检查与片段对齐</span></div></li>
               <li className={decision ? 'done' : 'active'}><b>02</b><div><strong>模型联合分析</strong><span>MViT 动作与严重程度</span></div></li>
               <li className={decision ? 'done' : ''}><b>03</b><div><strong>Grad-CAM 解释</strong><span>定位模型关注区域</span></div></li>
-              <li className={reviewState ? 'done' : ''}><b>04</b><div><strong>人工复核</strong><span>裁判确认或拒绝建议</span></div></li>
+              <li className={review ? 'done' : ''}><b>04</b><div><strong>事实与规则</strong><span>人工确认后确定性计算</span></div></li>
             </ol>
           </div>
 
