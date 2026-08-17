@@ -26,12 +26,49 @@ class GuardedExplanationWriter:
 
     @staticmethod
     def _endpoint(base_url: str) -> str:
+        """ollama 原生 /api/chat 端点。
+
+        OpenAI 兼容端点（/v1/chat/completions）会忽略顶层 think 参数，
+        思考模型会额外产生数百 thinking tokens 拖慢生成；原生端点支持
+        "think": false 彻底关闭思考，故统一走原生端点。
+        """
         value = base_url.rstrip("/")
-        if value.endswith("/chat/completions"):
+        if value.endswith("/api/chat"):
             return value
+        if value.endswith("/chat/completions"):
+            value = value[: -len("/chat/completions")]
         if value.endswith("/v1"):
-            return f"{value}/chat/completions"
-        return f"{value}/v1/chat/completions"
+            value = value[:-3]
+        return f"{value}/api/chat"
+
+    def _native_base(self) -> str:
+        value = self.url.rstrip("/")
+        if value.endswith("/chat/completions"):
+            value = value[: -len("/chat/completions")]
+        if value.endswith("/v1"):
+            value = value[:-3]
+        return value
+
+    def keep_hot(self, timeout_s: float = 2.0) -> None:
+        """让模型常驻推理服务内存（keep_alive=-1），避免每次解释都冷启动装载。
+
+        解释路径上用短超时（模型已常驻时立即返回；未装载时由后续正式请求完成装载）；
+        服务启动预热时用长超时，等待首次装载完成。
+        """
+        if not self.url:
+            return
+        payload = {"model": self.model, "keep_alive": -1, "messages": []}
+        request = urllib.request.Request(
+            f"{self._native_base()}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                response.read()
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
 
     @staticmethod
     def _confirmed_facts(record: ReviewRecord) -> dict[str, Any]:
@@ -57,7 +94,15 @@ class GuardedExplanationWriter:
             }
         system = (
             "你是足球辅助判罚文案整理器。只能复述输入中的已确认事实和确定性规则结果；"
-            "不得新增球员身份、位置、动作、牌级、重启方式或规则。输出严格 JSON。"
+            "不得新增球员身份、位置、动作、牌级、重启方式或规则。"
+            "summary 必须是 1-2 句、不超过 80 字的精简判罚说明，依次包含：犯规方与动作、"
+            "判罚依据（引用 canonical_assessment.rules 中的 law 与 rule_id，"
+            "如'依据 Law 12（L12-INTENSITY-RECKLESS）'）、重启方式、纪律处罚。"
+            "同一结论只表述一次，禁止重复、禁止拆成多句、禁止添加修饰性描述。"
+            "只输出一个 JSON 对象，不包含 markdown 或任何其他文字，字段为："
+            f"summary（字符串）、restart（只能取 \"{assessment.restart.value}\"）、"
+            f"sanction（只能取 \"{assessment.sanction.value}\"）、"
+            f"rule_ids（数组，只能从 {rule_ids} 中选取）。"
         )
         content = {
             "confirmed_facts": self._confirmed_facts(record),
@@ -66,26 +111,16 @@ class GuardedExplanationWriter:
                 "status": assessment.status.value,
                 "restart": assessment.restart.value,
                 "sanction": assessment.sanction.value,
-                "rule_ids": rule_ids,
+                "rules": [
+                    {
+                        "rule_id": item.rule_id,
+                        "law": item.law,
+                        "section": item.section,
+                        "result": item.result,
+                    }
+                    for item in assessment.rule_trace
+                ],
                 "template": assessment.explanation_template,
-            },
-        }
-        schema = {
-            "name": "officiating_explanation",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string", "maxLength": 800},
-                    "restart": {"type": "string", "enum": [assessment.restart.value]},
-                    "sanction": {"type": "string", "enum": [assessment.sanction.value]},
-                    "rule_ids": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": rule_ids or ["NONE"]},
-                    },
-                },
-                "required": ["summary", "restart", "sanction", "rule_ids"],
-                "additionalProperties": False,
             },
         }
         return {
@@ -94,8 +129,12 @@ class GuardedExplanationWriter:
                 {"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(content, ensure_ascii=False)},
             ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_schema", "json_schema": schema},
+            "stream": False,
+            "options": {"temperature": 0.1},
+            # 关闭思考模式：gemma 思考版会先输出数百 token 思考内容，把耗时从 ~1s 拖到 ~10s；
+            # 仅原生 /api/chat 端点支持该参数
+            "think": False,
+            # 不传 max_tokens：当前 ollama + gemma 组合下会导致空输出；长度由提示词约束
         }
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -107,7 +146,11 @@ class GuardedExplanationWriter:
         )
         with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
             body = json.loads(response.read().decode("utf-8"))
-        content = body["choices"][0]["message"]["content"]
+        content = body["message"]["content"].strip()
+        # 容错：部分模型会给 JSON 包上 markdown 代码块围栏
+        if content.startswith("```"):
+            content = content.strip("`")
+            content = content.removeprefix("json").strip()
         return json.loads(content)
 
     @staticmethod
@@ -145,6 +188,11 @@ class GuardedExplanationWriter:
         for value in restart_words.values():
             if value in summary and value != expected_restart:
                 raise ValueError("LLM summary contradicts restart")
+        if expected_restart and expected_restart not in summary:
+            raise ValueError("LLM summary omitted restart")
+        # play_on 的模板措辞为"不作纪律处罚"，不强制出现"不出牌"字样
+        if expected_sanction and assessment.restart.value != "play_on" and expected_sanction not in summary:
+            raise ValueError("LLM summary omitted sanction")
         for unsupported in ("越位", "手球", "优势原则"):
             if unsupported in summary:
                 raise ValueError("LLM introduced an unsupported fact")
@@ -161,6 +209,7 @@ class GuardedExplanationWriter:
         fallback_reason = None
         if use_llm and self.url:
             try:
+                self.keep_hot()
                 output = self._request(self._payload(record, analysis))
                 summary = self._validate(output, record)
                 return ExplanationResponse(

@@ -1,13 +1,10 @@
 import type {
   EvidenceValue,
   FoulFacts,
-  MultiviewDecision,
-  TeamLabel,
 } from '../../types/multiview';
 
 interface Props {
   facts: FoulFacts;
-  decision: MultiviewDecision | null;
   onChange: (facts: FoulFacts) => void;
 }
 
@@ -21,6 +18,13 @@ const ACTIONS = [
   'Challenge',
   'Dive',
 ];
+
+const sourceLabels: Record<string, string> = {
+  human: '人工',
+  model: '模型',
+  geometry: '几何',
+  rule: '推导',
+};
 
 function humanValue<T>(value: T | null): EvidenceValue<T> {
   return {
@@ -36,41 +40,71 @@ function selectValue(value: EvidenceValue): string {
 }
 
 function SourceTag({ value }: { value: EvidenceValue }) {
-  return <span className={`mv-source-tag ${value.source}`}>{value.confirmed ? value.source.toUpperCase() : '待确认'}</span>;
+  if (!value.confirmed) return <span className="mv-source-tag">待确认</span>;
+  const label = sourceLabels[value.source] ?? value.source;
+  const withConfidence = value.source === 'model' && typeof value.confidence === 'number'
+    ? `${label} ${Math.round(value.confidence * 100)}%`
+    : label;
+  return <span className={`mv-source-tag ${value.source}`}>{withConfidence}</span>;
 }
+
+function Segmented({
+  ariaLabel,
+  value,
+  options,
+  onSelect,
+}: {
+  ariaLabel: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onSelect: (value: string | null) => void;
+}) {
+  return (
+    <div className="mv-segmented" role="group" aria-label={ariaLabel}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={option.value === value ? 'active' : undefined}
+          aria-pressed={option.value === value}
+          onClick={() => onSelect(option.value === value ? null : option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const YES_NO = [
+  { value: 'true', label: '是' },
+  { value: 'false', label: '否' },
+];
 
 function FactRow({
   label,
   value,
   children,
-  modelHint,
 }: {
   label: string;
   value: EvidenceValue;
   children: React.ReactNode;
-  modelHint?: string;
 }) {
   return (
-    <label className="mv-fact-row">
+    <div className="mv-fact-row">
       <span>{label}<SourceTag value={value} /></span>
       {children}
-      {modelHint ? <small>模型建议：{modelHint}</small> : null}
-    </label>
+    </div>
   );
 }
 
-export default function FoulFactsPanel({ facts, decision, onChange }: Props) {
+export default function FoulFactsPanel({ facts, onChange }: Props) {
   function setFact(name: keyof FoulFacts, value: unknown | null) {
     onChange({ ...facts, [name]: humanValue(value) } as FoulFacts);
   }
 
-  function setOffender(value: TeamLabel | null) {
-    const victim = value === 'home' ? 'away' : value === 'away' ? 'home' : null;
-    onChange({
-      ...facts,
-      offender_team: humanValue(value),
-      victim_team: facts.victim_team.confirmed ? facts.victim_team : humanValue(victim),
-    });
+  function setBool(name: keyof FoulFacts) {
+    return (raw: string | null) => setFact(name, raw === null ? null : raw === 'true');
   }
 
   const offence = facts.offence_confirmed.confirmed ? facts.offence_confirmed.value : null;
@@ -78,118 +112,100 @@ export default function FoulFactsPanel({ facts, decision, onChange }: Props) {
   const isDive = action.toLowerCase() === 'dive';
   const showAttempt = selectValue(facts.tactical_impact) === 'dogso'
     || selectValue(facts.tactical_impact) === 'spa';
+  const hasModelPrefill = [facts.offence_confirmed, facts.action, facts.intensity]
+    .some((item) => item.source === 'model' && item.confirmed);
 
   return (
     <div className="mv-facts-form">
+      {hasModelPrefill ? (
+        <p className="mv-facts-prefill-note">模型已完成预填，仅在有误时修改</p>
+      ) : null}
       <FactRow
-        label="是否确认发生犯规"
+        label="确认犯规"
         value={facts.offence_confirmed}
-        modelHint={decision ? decision.decision_zh : undefined}
       >
-        <select
-          aria-label="是否确认发生犯规"
+        <Segmented
+          ariaLabel="是否确认发生犯规"
           value={offence === null ? '' : String(offence)}
-          onChange={(event) => setFact('offence_confirmed', event.target.value === '' ? null : event.target.value === 'true')}
-        >
-          <option value="">请选择</option>
-          <option value="true">确认犯规</option>
-          <option value="false">确认不犯规</option>
-        </select>
+          options={[
+            { value: 'true', label: '犯规' },
+            { value: 'false', label: '不犯规' },
+          ]}
+          onSelect={(raw) => setFact('offence_confirmed', raw === null ? null : raw === 'true')}
+        />
       </FactRow>
 
       {offence === true ? (
         <>
-          <FactRow label="动作类型" value={facts.action} modelHint={decision?.action}>
+          <FactRow label="动作类型" value={facts.action}>
             <select aria-label="动作类型" value={action} onChange={(event) => setFact('action', event.target.value || null)}>
               <option value="">请选择</option>
               {ACTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </FactRow>
+          <FactRow label="犯规方" value={facts.offender_team}>
+            <Segmented
+              ariaLabel="犯规方"
+              value={selectValue(facts.offender_team)}
+              options={[
+                { value: 'home', label: 'HOME' },
+                { value: 'away', label: 'AWAY' },
+              ]}
+              onSelect={(raw) => setFact('offender_team', raw)}
+            />
+          </FactRow>
           <div className="mv-fact-row-pair">
-            <FactRow label="犯规方" value={facts.offender_team}>
-              <select
-                aria-label="犯规方"
-                value={selectValue(facts.offender_team)}
-                onChange={(event) => setOffender((event.target.value || null) as TeamLabel | null)}
-              >
-                <option value="">请选择</option>
-                <option value="home">HOME</option>
-                <option value="away">AWAY</option>
-                <option value="unknown">UNKNOWN</option>
-              </select>
+            <FactRow label="球在比赛中" value={facts.ball_in_play}>
+              <Segmented
+                ariaLabel="球是否在比赛中"
+                value={selectValue(facts.ball_in_play)}
+                options={YES_NO}
+                onSelect={setBool('ball_in_play')}
+              />
             </FactRow>
-            <FactRow label="受害方" value={facts.victim_team}>
-              <select aria-label="受害方" value={selectValue(facts.victim_team)} onChange={(event) => setFact('victim_team', event.target.value || null)}>
-                <option value="">请选择</option>
-                <option value="home">HOME</option>
-                <option value="away">AWAY</option>
-                <option value="unknown">UNKNOWN</option>
-              </select>
+            <FactRow label="HOME 防守" value={facts.home_defends_side}>
+              <Segmented
+                ariaLabel="HOME 防守球门方向"
+                value={selectValue(facts.home_defends_side)}
+                options={[
+                  { value: 'left', label: '左侧' },
+                  { value: 'right', label: '右侧' },
+                ]}
+                onSelect={(raw) => setFact('home_defends_side', raw)}
+              />
             </FactRow>
           </div>
-          <FactRow label="球是否在比赛中" value={facts.ball_in_play}>
-            <select aria-label="球是否在比赛中" value={selectValue(facts.ball_in_play)} onChange={(event) => setFact('ball_in_play', event.target.value === '' ? null : event.target.value === 'true')}>
-              <option value="">请选择</option>
-              <option value="true">是</option>
-              <option value="false">否</option>
-            </select>
-          </FactRow>
-          <FactRow label="HOME 防守球门" value={facts.home_defends_side}>
-            <select aria-label="HOME 防守球门" value={selectValue(facts.home_defends_side)} onChange={(event) => setFact('home_defends_side', event.target.value || null)}>
-              <option value="">请选择</option>
-              <option value="left">左侧</option>
-              <option value="right">右侧</option>
-              <option value="unknown">未知</option>
-            </select>
-          </FactRow>
 
           {!isDive ? (
             <>
-              <div className="mv-fact-row-pair">
-                <FactRow label="发生身体接触" value={facts.contact}>
-                  <select aria-label="发生身体接触" value={selectValue(facts.contact)} onChange={(event) => setFact('contact', event.target.value === '' ? null : event.target.value === 'true')}>
-                    <option value="">请选择</option>
-                    <option value="true">是</option>
-                    <option value="false">否</option>
-                  </select>
-                </FactRow>
-                <FactRow label="动作强度" value={facts.intensity} modelHint={decision?.severity}>
-                  <select aria-label="动作强度" value={selectValue(facts.intensity)} onChange={(event) => setFact('intensity', event.target.value || null)}>
-                    <option value="">请选择</option>
-                    <option value="careless">草率</option>
-                    <option value="reckless">鲁莽</option>
-                    <option value="excessive_force">使用过分力量</option>
-                    <option value="unknown">未知</option>
-                  </select>
-                </FactRow>
-              </div>
-              {facts.contact.value === true && facts.contact.confirmed ? (
-                <FactRow label="接触部位" value={facts.contact_region}>
-                  <select aria-label="接触部位" value={selectValue(facts.contact_region)} onChange={(event) => setFact('contact_region', event.target.value || null)}>
-                    <option value="">请选择</option>
-                    <option value="upper_body">上身</option>
-                    <option value="lower_body">下身</option>
-                    <option value="head">头部</option>
-                    <option value="unknown">未知</option>
-                  </select>
-                </FactRow>
-              ) : null}
-              <FactRow label="战术影响" value={facts.tactical_impact}>
-                <select aria-label="战术影响" value={selectValue(facts.tactical_impact)} onChange={(event) => setFact('tactical_impact', event.target.value || null)}>
+              <FactRow label="动作强度" value={facts.intensity}>
+                <select aria-label="动作强度" value={selectValue(facts.intensity)} onChange={(event) => setFact('intensity', event.target.value || null)}>
                   <option value="">请选择</option>
-                  <option value="none">无</option>
-                  <option value="spa">SPA · 阻止有希望进攻</option>
-                  <option value="dogso">DOGSO · 破坏明显得分机会</option>
-                  <option value="unknown">未知</option>
+                  <option value="careless">草率</option>
+                  <option value="reckless">鲁莽</option>
+                  <option value="excessive_force">使用过分力量</option>
                 </select>
               </FactRow>
+              <FactRow label="战术影响" value={facts.tactical_impact}>
+                <Segmented
+                  ariaLabel="战术影响"
+                  value={selectValue(facts.tactical_impact)}
+                  options={[
+                    { value: 'none', label: '无' },
+                    { value: 'spa', label: 'SPA' },
+                    { value: 'dogso', label: 'DOGSO' },
+                  ]}
+                  onSelect={(raw) => setFact('tactical_impact', raw)}
+                />
+              </FactRow>
               {showAttempt ? (
-                <FactRow label="尝试或争抢球" value={facts.attempt_to_play_ball}>
-                  <select aria-label="尝试或争抢球" value={selectValue(facts.attempt_to_play_ball)} onChange={(event) => setFact('attempt_to_play_ball', event.target.value === '' ? null : event.target.value === 'true')}>
-                    <option value="">请选择</option>
-                    <option value="true">是</option>
-                    <option value="false">否</option>
-                  </select>
+                <FactRow label="尝试争抢球" value={facts.attempt_to_play_ball}>
+                  <Segmented
+                    ariaLabel="是否尝试或争抢球"
+                    value={selectValue(facts.attempt_to_play_ball)}
+                    options={YES_NO}
+                    onSelect={setBool('attempt_to_play_ball')}
+                  />
                 </FactRow>
               ) : null}
             </>

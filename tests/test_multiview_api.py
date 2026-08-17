@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from app.constants.paths import REPO_ROOT_DIR
 from app.multiview.localization import (
     attention_gate,
     crop_to_original_percent,
@@ -23,13 +24,17 @@ from app.multiview.review_store import MultiviewReviewStore
 from app.multiview.service import MultiviewAnalysisService
 from app.server.main import app
 
+# Deterministic scripted cases used only by tests; the product cases.json
+# holds the real SoccerNet clips, which require GPU model inference.
+DEMO_CASES_PATH = Path(__file__).parent / "fixtures" / "multiview_demo_cases.json"
+
 
 @pytest.fixture
 def demo_client(tmp_path):
     with TestClient(app) as client:
         previous = app.state.multiview_service
         app.state.multiview_service = MultiviewAnalysisService(
-            MultiviewCaseRepository(REPO_ROOT_DIR / "assets" / "multiview" / "cases.json"),
+            MultiviewCaseRepository(DEMO_CASES_PATH),
             MultiviewReviewStore(tmp_path / "reviews.sqlite3"),
         )
         try:
@@ -70,6 +75,7 @@ def test_multiview_scripted_fallback_is_explicit(demo_client) -> None:
     assert payload["decision"]["action_candidates"][0]["label"]
     assert payload["decision"]["severity_candidates"][0]["confidence"] > 0
     assert "非模型输出" in payload["message"]
+    assert payload["decision"]["suggested_intensity"] == "reckless"
     assert payload["decision"]["localization_source"] == "scripted"
     localization = payload["decision"]["localization"]
     assert localization

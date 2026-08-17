@@ -79,6 +79,7 @@ export interface RuleTraceEntry {
   facts_used: string[];
   result: string;
   priority: number;
+  law_excerpt: string;
 }
 
 export interface RuleAssessment {
@@ -145,6 +146,7 @@ export interface MultiviewDecision {
   checkpoint_hash: string | null;
   ruleset_compatible: boolean;
   card: 'none' | 'yellow' | 'red';
+  suggested_intensity: string | null;
   mode: 'model' | 'scripted';
   model: string | null;
   device: string | null;

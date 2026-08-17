@@ -73,6 +73,17 @@ def test_simulation_is_indirect_free_kick_and_yellow() -> None:
     assert assessment.sanction is SanctionType.YELLOW_CARD
 
 
+def test_rule_trace_entries_carry_law_excerpt() -> None:
+    assessment = IFABRuleEngine().assess(contact_facts(x_m=30, intensity="reckless"))
+    assert assessment.rule_trace
+    for entry in assessment.rule_trace:
+        assert entry.law_excerpt, f"{entry.rule_id} 缺少法条摘译"
+    intensity_entry = next(
+        item for item in assessment.rule_trace if item.rule_id == "L12-INTENSITY-RECKLESS"
+    )
+    assert "鲁莽犯规予以警告" in intensity_entry.law_excerpt
+
+
 def test_no_foul_is_play_on() -> None:
     assessment = IFABRuleEngine().assess(FoulFacts(offence_confirmed=human(False)))
     assert assessment.status is AssessmentStatus.COMPLETE

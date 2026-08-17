@@ -1,69 +1,72 @@
 [
   {
-    "case_id": "mvfoul_001",
-    "title": "禁区前沿铲球 · 黄牌复核",
-    "match_name": "蓝队 vs 白队",
-    "match_clock": "67:24",
-    "description": "主机位与两个侧机位共同覆盖接触动作，用于演示多视角证据聚合、模型注意力与人工复核。",
+    "case_id": "soccernet_action_183",
+    "title": "疑似犯规",
+    "match_name": "UEFA Champions League · 2017-03-08",
+    "match_clock": "62:14",
+    "description": "检测到疑似犯规事件，待人工复核确认。",
     "event_time_s": 3.0,
     "review_state": "pending",
     "risk_level": "high",
-    "zone": "前场右侧",
+    "zone": "位置待确认",
     "videos": [
-      {"camera_id": "cam_main", "display_name": "主机位", "role": "main", "preview_path": "web/public/multiview/cam_main.jpg", "sync_offset_ms": 0},
-      {"camera_id": "cam_side1", "display_name": "侧边机位", "role": "side", "preview_path": "web/public/multiview/cam_side1.jpg", "sync_offset_ms": 30},
-      {"camera_id": "cam_side2", "display_name": "反向机位", "role": "side", "preview_path": "web/public/multiview/cam_side2.jpg", "sync_offset_ms": -20}
+      {"camera_id": "view_1", "display_name": "主机位", "role": "main", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_183/clip_0.mp4"},
+      {"camera_id": "view_2", "display_name": "近景回放 1", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_183/clip_1.mp4"},
+      {"camera_id": "view_3", "display_name": "近景回放 2", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_183/clip_2.mp4"}
     ],
-    "scripted_result": {
-      "decision": "yellow_card",
-      "decision_zh": "建议黄牌",
-      "action": "Tackle",
-      "severity": "Offence + Yellow Card",
-      "confidence": 0.87,
-      "card": "yellow",
-      "localization": {
-        "cam_main": {"rect": [46, 38, 18, 35], "score": 0.83, "source": "scripted"},
-        "cam_side1": {"rect": [42, 42, 22, 31], "score": 0.76, "source": "scripted"},
-        "cam_side2": {"rect": [38, 39, 20, 36], "score": 0.71, "source": "scripted"}
-      },
-      "view_attention": [0.52, 0.29, 0.19]
-    },
-    "evidence_notes": ["三机位时间偏差低于 50 ms", "主机位接触动作清晰", "侧机位补充触球顺序"]
+    "evidence_notes": ["官方真值：Tackling", "官方真值：Offence + Yellow card", "低清 · 3 个视角"]
   },
   {
-    "case_id": "mvfoul_002",
-    "title": "高强度冲撞 · 红牌复核",
-    "match_name": "蓝队 vs 白队",
-    "match_clock": "71:06",
-    "description": "高风险接触事件，供裁判对严重程度与亮牌建议进行复核。",
-    "event_time_s": 4.2,
-    "review_state": "reviewed",
-    "risk_level": "high",
-    "zone": "中场右侧",
+    "case_id": "soccernet_action_2",
+    "title": "疑似犯规",
+    "match_name": "English Premier League · 2015-08-23",
+    "match_clock": "37:05",
+    "description": "检测到疑似犯规事件，待人工复核确认。",
+    "event_time_s": 3.0,
+    "review_state": "pending",
+    "risk_level": "medium",
+    "zone": "位置待确认",
     "videos": [
-      {"camera_id": "cam_main", "display_name": "主机位", "role": "main", "preview_path": "web/public/multiview/cam_main.jpg"},
-      {"camera_id": "cam_side1", "display_name": "侧边机位", "role": "replay", "preview_path": "web/public/multiview/cam_side1.jpg", "sync_offset_ms": 40},
-      {"camera_id": "cam_side2", "display_name": "反向机位", "role": "replay", "preview_path": "web/public/multiview/cam_side2.jpg", "sync_offset_ms": -10}
+      {"camera_id": "view_1", "display_name": "主机位", "role": "main", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_2/clip_0.mp4"},
+      {"camera_id": "view_2", "display_name": "近景回放 1", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_2/clip_1.mp4"},
+      {"camera_id": "view_3", "display_name": "近景回放 2", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_2/clip_2.mp4"},
+      {"camera_id": "view_4", "display_name": "近景回放 3", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_2/clip_3.mp4"}
     ],
-    "scripted_result": {"decision": "red_card", "decision_zh": "建议红牌", "action": "Challenge", "severity": "Offence + Red Card", "confidence": 0.91, "card": "red", "localization": {}, "view_attention": [0.44, 0.36, 0.2]},
-    "evidence_notes": ["动作速度快", "反向机位存在短时遮挡"]
+    "evidence_notes": ["官方真值：Standing tackling", "官方真值：Offence + No card", "低清 · 4 个视角"]
   },
   {
-    "case_id": "mvfoul_003",
-    "title": "合理身体对抗 · 不犯规",
-    "match_name": "蓝队 vs 白队",
-    "match_clock": "74:41",
-    "description": "反例案例，用于展示模型给出不犯规建议及人工归档。",
-    "event_time_s": 2.8,
-    "review_state": "archived",
+    "case_id": "soccernet_action_78",
+    "title": "疑似犯规",
+    "match_name": "UEFA Champions League · 2014-11-04",
+    "match_clock": "18:47",
+    "description": "检测到疑似犯规事件，待人工复核确认。",
+    "event_time_s": 3.0,
+    "review_state": "pending",
     "risk_level": "low",
-    "zone": "中场",
+    "zone": "位置待确认",
     "videos": [
-      {"camera_id": "cam_main", "display_name": "主机位", "role": "main", "preview_path": "web/public/multiview/cam_main.jpg"},
-      {"camera_id": "cam_side1", "display_name": "侧边机位", "role": "side", "preview_path": "web/public/multiview/cam_side1.jpg"},
-      {"camera_id": "cam_side2", "display_name": "反向机位", "role": "side", "preview_path": "web/public/multiview/cam_side2.jpg"}
+      {"camera_id": "view_1", "display_name": "主机位", "role": "main", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_78/clip_0.mp4"},
+      {"camera_id": "view_2", "display_name": "侧向主机位", "role": "side", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_78/clip_1.mp4"},
+      {"camera_id": "view_3", "display_name": "近景回放 1", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_78/clip_2.mp4"},
+      {"camera_id": "view_4", "display_name": "近景回放 2", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_78/clip_3.mp4"}
     ],
-    "scripted_result": {"decision": "no_offence", "decision_zh": "未检测到犯规", "action": "Challenge", "severity": "No Offence", "confidence": 0.79, "card": "none", "localization": {}, "view_attention": [0.48, 0.31, 0.21]},
-    "evidence_notes": ["双方对球均有合理争抢机会", "未发现危险动作"]
+    "evidence_notes": ["官方真值：Tackling", "官方真值：No offence", "低清 · 4 个视角"]
+  },
+  {
+    "case_id": "soccernet_action_144",
+    "title": "疑似犯规",
+    "match_name": "UEFA Champions League · 2015-11-03",
+    "match_clock": "78:32",
+    "description": "检测到疑似犯规事件，待人工复核确认。",
+    "event_time_s": 3.0,
+    "review_state": "pending",
+    "risk_level": "high",
+    "zone": "位置待确认",
+    "videos": [
+      {"camera_id": "view_1", "display_name": "主机位", "role": "main", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_144/clip_0.mp4"},
+      {"camera_id": "view_2", "display_name": "球门后回放", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_144/clip_1.mp4"},
+      {"camera_id": "view_3", "display_name": "近景回放", "role": "replay", "path": "/home/caysonyin/datasets/SN-MVFouls-2024/test/action_144/clip_2.mp4"}
+    ],
+    "evidence_notes": ["官方真值：Tackling", "官方真值：Offence + Red card", "低清 · 3 个视角"]
   }
 ]

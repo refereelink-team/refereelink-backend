@@ -8,7 +8,8 @@ from app.multiview.inference import FoulInferenceError, FoulInferenceService, mo
 from app.multiview.explanation import GuardedExplanationWriter
 from app.multiview.localization import event_prior_window
 from app.multiview.models import (
-    AssessmentStatus,
+    EvidenceSource,
+    EvidenceValue,
     FoulFacts,
     ExplanationResponse,
     MultiviewAnalyzeResponse,
@@ -19,6 +20,50 @@ from app.multiview.models import (
 from app.multiview.repository import MultiviewCaseRepository
 from app.multiview.review_store import MultiviewReviewStore, new_analysis_id
 from app.multiview.rules import IFABRuleEngine, PHYSICAL_ACTIONS
+
+# Expected-severity weights for the foul-conditional card distribution.
+_SEVERITY_WEIGHTS = {
+    "Offence + No Card": 1.0,
+    "Offence + Yellow Card": 2.0,
+    "Offence + Red Card": 3.0,
+}
+_CARD_INTENSITY = {"none": "careless", "yellow": "reckless", "red": "excessive_force"}
+
+
+def _candidate_pair(candidate: Any) -> tuple[str | None, float]:
+    if isinstance(candidate, dict):
+        label = candidate.get("label")
+        confidence = candidate.get("confidence")
+    else:
+        label = getattr(candidate, "label", None)
+        confidence = getattr(candidate, "confidence", None)
+    return label, float(confidence or 0.0)
+
+
+def model_severity_to_intensity(severity_candidates: Any, card: str) -> str | None:
+    """Convert the model's card-level probabilities into an IFAB intensity.
+
+    Expected severity E = 1*P(no card) + 2*P(yellow) + 3*P(red), conditioned
+    on an offence existing; thresholds map E onto careless / reckless /
+    excessive_force so reviewers no longer choose intensity by hand.
+    """
+    mass = 0.0
+    weighted = 0.0
+    for candidate in severity_candidates or []:
+        label, probability = _candidate_pair(candidate)
+        weight = _SEVERITY_WEIGHTS.get(str(label or "").strip())
+        if weight is None or probability <= 0.0:
+            continue
+        mass += probability
+        weighted += weight * probability
+    if mass <= 0.0:
+        return _CARD_INTENSITY.get(card)
+    expected = weighted / mass
+    if expected < 1.5:
+        return "careless"
+    if expected < 2.5:
+        return "reckless"
+    return "excessive_force"
 
 
 class MultiviewAnalysisService:
@@ -31,6 +76,10 @@ class MultiviewAnalysisService:
         self.review_store = review_store or MultiviewReviewStore()
         self.rule_engine = IFABRuleEngine()
         self.explanation_writer = GuardedExplanationWriter()
+        # 后台预热解释模型，首次生成判罚说明时避免冷启动装载延迟
+        threading.Thread(
+            target=self.explanation_writer.keep_hot, kwargs={"timeout_s": 60.0}, daemon=True
+        ).start()
         self._lock = threading.Lock()
         self._analyzers: dict[str, FoulInferenceService] = {}
         self._load_errors: dict[str, str] = {}
@@ -110,6 +159,9 @@ class MultiviewAnalysisService:
                     checkpoint_hash=raw.get("checkpoint_hash"),
                     ruleset_compatible=raw["action"].strip().lower() in PHYSICAL_ACTIONS | {"dive"},
                     card=raw["card"],
+                    suggested_intensity=model_severity_to_intensity(
+                        raw.get("severity_candidates", []), raw["card"]
+                    ),
                     mode="model",
                     model=raw["model"],
                     device=raw["device"],
@@ -149,6 +201,10 @@ class MultiviewAnalysisService:
             severity_candidates=[{"label": scripted.severity, "confidence": scripted.confidence}],
             ruleset_compatible=scripted.action.strip().lower() in PHYSICAL_ACTIONS | {"dive"},
             card=scripted.card,
+            suggested_intensity=model_severity_to_intensity(
+                [{"label": scripted.severity, "confidence": scripted.confidence}],
+                scripted.card,
+            ),
             mode="scripted",
             localization=self._localization_with_temporal_prior(case, scripted.localization),
             localization_source="scripted",
@@ -194,6 +250,38 @@ class MultiviewAnalysisService:
         item = getattr(facts, name)
         return item.value if item.confirmed else None
 
+    @staticmethod
+    def _derive_missing_facts(facts: FoulFacts) -> FoulFacts:
+        """Derive facts that follow from other confirmed facts.
+
+        The review form stays minimal: contact follows from the confirmed
+        action (every physical MVFoul action implies contact, Dive implies
+        none) and the victim is the opposite team of the offender.  The
+        form has no victim control, so the victim is always re-derived
+        from the offender — stale same-team values from older records
+        would otherwise trigger a false conflict.
+        """
+        derived = facts.model_copy(deep=True)
+        action = derived.action
+        if not derived.contact.confirmed and action.confirmed and action.value is not None:
+            is_dive = str(action.value).strip().lower() == "dive"
+            derived.contact = EvidenceValue(
+                value=not is_dive,
+                source=EvidenceSource.RULE,
+                confirmed=True,
+            )
+        offender = derived.offender_team
+        if offender.confirmed and str(offender.value).lower() in {"home", "away"}:
+            victim = "away" if str(offender.value).lower() == "home" else "home"
+            current = derived.victim_team
+            if not current.confirmed or str(current.value).lower() != victim:
+                derived.victim_team = EvidenceValue(
+                    value=victim,
+                    source=EvidenceSource.RULE,
+                    confirmed=True,
+                )
+        return derived
+
     def _model_conflicts(
         self,
         facts: FoulFacts,
@@ -228,10 +316,12 @@ class MultiviewAnalysisService:
         if analysis is None and analysis_id is None:
             analysis = self.review_store.latest_analysis(case_id)
             analysis_id = analysis.analysis_id if analysis is not None else None
+        facts = self._derive_missing_facts(facts)
         assessment = self.rule_engine.assess(facts)
+        # Human overrides of model suggestions are recorded as visible
+        # warnings, but they never downgrade the assessment: the human is
+        # the final authority.
         assessment.conflicts.extend(self._model_conflicts(facts, analysis))
-        if assessment.conflicts and assessment.status.value == "complete":
-            assessment.status = AssessmentStatus.INCOMPLETE
         return self.review_store.append_review(
             case_id=case_id,
             expected_revision=expected_revision,

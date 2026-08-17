@@ -106,7 +106,7 @@ export default function FoulLocationPitch({
       </svg>
       <div className="mv-location-readout">
         <div>
-          <span>人工空间事实</span>
+          <span>犯规位置</span>
           <strong>{geometry?.zone ?? approximateZone(location)}</strong>
           <small>
             {location ? `x ${location.x_m.toFixed(2)} m · y ${location.y_m.toFixed(2)} m` : '点击球场设置位置'}
@@ -124,13 +124,13 @@ export default function FoulLocationPitch({
             className="save"
             disabled={!dirty || saving}
             onClick={onSave}
-          >{saving ? '保存中…' : '保存并更新判罚'}</button>
+          >{saving ? '保存中…' : '保存'}</button>
         </div>
       </div>
       <p className="mv-location-context">
         犯规方 {offenderTeam?.toUpperCase() ?? '未确认'} · HOME 防守
         {homeDefendsSide === 'left' ? '左侧' : homeDefendsSide === 'right' ? '右侧' : '方向未确认'}
-        {geometry?.in_offender_own_penalty_area === true ? ' · 犯规方本方禁区内' : ''}
+        {geometry?.in_offender_own_penalty_area === true ? ' · 本方禁区内' : ''}
         {dirty ? ' · 尚未保存' : ''}
       </p>
     </div>

@@ -9,7 +9,6 @@ import {
 } from '../api/multiview';
 import FoulFactsPanel from '../components/multiview/FoulFactsPanel';
 import FoulLocationPitch from '../components/multiview/FoulLocationPitch';
-import ModelEvidencePanel from '../components/multiview/ModelEvidencePanel';
 import RuleAssessmentPanel from '../components/multiview/RuleAssessmentPanel';
 import type {
   DefendsSide,
@@ -77,10 +76,6 @@ function localizationWindow(box: LocalizationBox, eventTimeS: number): Localizat
   };
 }
 
-function seconds(value: number): string {
-  return `${value.toFixed(2)}s`;
-}
-
 function containedMediaBounds(
   containerWidth: number,
   containerHeight: number,
@@ -139,14 +134,16 @@ function temporalFocusStrength(
   return gate * evidenceStrength;
 }
 
-function modeLabel(decision: MultiviewDecision | null, status: MultiviewStatus | null): string {
-  if (decision?.mode === 'model') return 'CUDA 模型结果';
-  if (decision?.mode === 'scripted') return '演示数据';
-  return status?.ready ? '模型待命' : '演示模式';
-}
-
 function unconfirmed<T>(value: T | null = null, source: 'human' | 'model' = 'human', confidence: number | null = null) {
   return { value, source, confidence, confirmed: false };
+}
+
+function modelFact<T>(value: T, confidence: number | null) {
+  return { value, source: 'model' as const, confidence, confirmed: true };
+}
+
+function defaultFact<T>(value: T) {
+  return { value, source: 'human' as const, confidence: null, confirmed: true };
 }
 
 function emptyFacts(): FoulFacts {
@@ -168,22 +165,26 @@ function emptyFacts(): FoulFacts {
 
 function factsFromDecision(decision: MultiviewDecision): FoulFacts {
   const facts = emptyFacts();
-  facts.offence_confirmed = unconfirmed(
+  facts.offence_confirmed = modelFact(
     decision.severity !== 'No Offence',
-    'model',
     decision.severity_candidates[0]?.confidence ?? decision.confidence,
   );
-  facts.action = unconfirmed(
+  facts.action = modelFact(
     decision.action,
-    'model',
     decision.action_candidates[0]?.confidence ?? decision.confidence,
   );
-  const intensity = decision.card === 'red'
+  const fallbackIntensity = decision.card === 'red'
     ? 'excessive_force'
     : decision.card === 'yellow'
       ? 'reckless'
       : 'careless';
-  facts.intensity = unconfirmed(intensity, 'model', decision.confidence);
+  facts.intensity = modelFact(
+    decision.suggested_intensity ?? fallbackIntensity,
+    decision.severity_candidates[0]?.confidence ?? decision.confidence,
+  );
+  // Smart defaults the reviewer only touches when wrong.
+  facts.ball_in_play = defaultFact(true);
+  facts.tactical_impact = defaultFact('none');
   return facts;
 }
 
@@ -302,7 +303,7 @@ function MediaFrame({
             />
           )
         ) : (
-          <div className="mv-media-empty">NO EVIDENCE MEDIA</div>
+          <div className="mv-media-empty">无媒体</div>
         )}
         {mediaBounds && (
           <div className="mv-media-coordinate-layer" style={mediaBounds}>
@@ -322,12 +323,12 @@ function MediaFrame({
           </div>
         )}
         {attention !== undefined && (
-          <div className="mv-attention-badge">ATTN {percent(attention)}</div>
+          <div className="mv-attention-badge">注意力 {percent(attention)}</div>
         )}
       </div>
       <div className="mv-camera-meta">
-        <strong>{view.camera_id.toUpperCase()} · {view.display_name}</strong>
-        <span>{view.quality} · SYNC {view.sync_offset_ms >= 0 ? '+' : ''}{view.sync_offset_ms}ms</span>
+        <strong>{view.display_name}</strong>
+        <span>{view.camera_id.toUpperCase()} · {view.sync_offset_ms >= 0 ? '+' : ''}{view.sync_offset_ms}ms</span>
       </div>
     </button>
   );
@@ -410,7 +411,9 @@ export default function MultiviewReviewPage() {
     [cases, selectedId],
   );
   const filteredCases = useMemo(
-    () => cases.filter((item) => filter === 'all' || item.review_state === filter),
+    () => cases
+      .filter((item) => filter === 'all' || item.review_state === filter)
+      .sort((a, b) => a.match_clock.localeCompare(b.match_clock)),
     [cases, filter],
   );
   const activeView = activeCase?.videos.find((view) => view.camera_id === selectedCameraId)
@@ -419,7 +422,6 @@ export default function MultiviewReviewPage() {
   const sideViews = activeCase?.videos.filter((view) => view.camera_id !== activeView?.camera_id) ?? [];
   const frameNumber = Math.round(12120 + playhead * 2.56);
   const pendingCount = cases.filter((item) => item.review_state === 'pending').length;
-  const archivedCount = cases.filter((item) => item.review_state === 'archived').length;
 
   const pauseAllVideos = useCallback(() => {
     videoRefs.current.forEach((video) => video.pause());
@@ -599,7 +601,7 @@ export default function MultiviewReviewPage() {
   function invalidateSavedAssessment() {
     setReviewDirty(true);
     setExplanation(null);
-    setAnalysisMessage('人工事实已修改；旧规则结论已失效，请保存并更新判罚');
+    setAnalysisMessage('人工事实已修改，请保存后重新计算');
   }
 
   function updateDraftFacts(nextFacts: FoulFacts) {
@@ -631,6 +633,8 @@ export default function MultiviewReviewPage() {
         ? { ...item, review_state: payload.review.review_state, review_revision: payload.review.revision }
         : item));
       setAnalysisMessage(`人工事实与规则结论已保存为 REV ${payload.review.revision}`);
+      // 保存成功后自动调用模型整理解释，无需再手动触发
+      void loadExplanation(activeCase.case_id, payload.review.revision);
     } catch (error) {
       setAnalysisMessage(`保存失败：${String(error)}；如有版本冲突请重新载入案例`);
     } finally {
@@ -638,15 +642,10 @@ export default function MultiviewReviewPage() {
     }
   }
 
-  async function generateExplanation() {
-    if (!activeCase || !review || explaining) return;
-    if (reviewDirty) {
-      setAnalysisMessage('请先保存当前人工事实，再基于新规则结论整理解释');
-      return;
-    }
+  async function loadExplanation(caseId: string, revision: number) {
     setExplaining(true);
     try {
-      const result = await explainMultiviewReview(activeCase.case_id, review.revision, true);
+      const result = await explainMultiviewReview(caseId, revision, true);
       setExplanation(result);
       setAnalysisMessage(result.source === 'local_llm' ? '本地 LLM 已在规则边界内整理文案' : '已使用确定性模板生成解释');
     } catch (error) {
@@ -659,7 +658,7 @@ export default function MultiviewReviewPage() {
   if (loadError) {
     return (
       <main className="mv-page mv-centered">
-        <div className="mv-load-error">多视角页面加载失败：{loadError}</div>
+        <div className="mv-load-error">页面加载失败：{loadError}</div>
         <a href="/">返回实时分析</a>
       </main>
     );
@@ -669,62 +668,56 @@ export default function MultiviewReviewPage() {
     <main className="mv-page">
       <header className="mv-topbar">
         <div className="mv-brand">
-          <div className="mv-brand-mark"><span /></div>
-          <div>
-            <div className="mv-eyebrow">SOCCER ASSISTED OFFICIATING · EVIDENCE DESK</div>
-            <h1>多视角犯规判罚中心</h1>
-            <p>{activeCase ? `${activeCase.match_name} · ${activeCase.match_clock}` : '正在载入案例'}</p>
-          </div>
+          <h1>多视角复核平台</h1>
         </div>
         <div className="mv-top-stats">
           <span className={`mv-system-pill ${status?.ready ? 'ready' : 'demo'}`}>
-            <i />{status?.ready ? 'MViT 模型就绪' : '演示模式'}
+            <i />{status?.ready ? '模型就绪' : '演示模式'}
           </span>
-          <span>机位 <b>{activeCase?.videos.length ?? 0}</b></span>
-          <span>待复核 <b>{pendingCount}</b></span>
-          <span>已归档 <b>{archivedCount}</b></span>
+          <span className="mv-stat">机位 <b>{activeCase?.videos.length ?? 0}</b></span>
+          <span className="mv-stat">待复核 <b>{pendingCount}</b></span>
           <a className="mv-back-link" href="/">返回实时分析</a>
         </div>
       </header>
 
-      <div className="mv-ticker">
-        <span>多机位证据同步 · 模型推理与人工结论分层记录 · Grad-CAM 仅解释模型关注区域</span>
-        <strong className={decision?.mode === 'model' ? 'model' : 'demo'}>{modeLabel(decision, status)}</strong>
-      </div>
-
       <section className="mv-workspace">
         <aside className="mv-panel mv-queue">
           <div className="mv-panel-title">
-            <div><span>EVENT QUEUE</span><h2>争议事件队列</h2></div>
+            <h2>事件队列</h2>
             <b>{filteredCases.length}</b>
           </div>
-          <div className="mv-filters">
+          <div className="mv-filters" role="tablist" aria-label="按状态筛选">
             {([
               ['all', '全部'],
               ['pending', '待复核'],
               ['reviewed', '已复核'],
               ['archived', '已归档'],
-              ['uncertain', '暂不确定'],
+              ['uncertain', '不确定'],
             ] as [Filter, string][]).map(([value, label]) => (
-              <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>
+              <button
+                key={value}
+                role="tab"
+                aria-selected={filter === value}
+                className={filter === value ? 'active' : ''}
+                onClick={() => setFilter(value)}
+              >
                 {label}
               </button>
             ))}
           </div>
           <div className="mv-event-list">
-            {filteredCases.map((item, index) => (
+            {filteredCases.map((item) => (
               <button
                 key={item.case_id}
                 className={`mv-event-card ${item.case_id === selectedId ? 'active' : ''}`}
                 onClick={() => selectCase(item)}
               >
                 <div className="mv-event-card-top">
-                  <span>{item.case_id.toUpperCase()}</span>
+                  <strong>{item.match_clock} · {item.title}</strong>
                   <em className={item.risk_level}>{item.risk_level === 'high' ? '高风险' : item.risk_level === 'medium' ? '中风险' : '低风险'}</em>
                 </div>
-                <strong>{item.title}</strong>
-                <p>{item.match_clock} · {item.zone} · {item.videos.length} 机位</p>
-                <div><i>{String(index + 1).padStart(2, '0')}</i><span className={item.review_state}>{stateLabels[item.review_state]}</span></div>
+                <p>{item.videos.length} 机位 · {item.zone}</p>
+                <div><span className={item.review_state}>{stateLabels[item.review_state]}</span></div>
               </button>
             ))}
           </div>
@@ -733,12 +726,11 @@ export default function MultiviewReviewPage() {
         <section className="mv-center-column">
           <div className="mv-panel mv-event-heading">
             <div>
-              <span>{activeCase?.case_id.toUpperCase() ?? 'NO CASE'}</span>
-              <h2>{activeCase?.title ?? '等待案例'}</h2>
+              <h2>{activeCase ? `${activeCase.match_clock} · ${activeCase.title}` : '等待案例'}</h2>
+              <span>{activeCase ? `${activeCase.videos.length} 机位 · ${activeCase.zone}` : ''}</span>
             </div>
             <div className="mv-heading-tags">
               <span className={`risk ${activeCase?.risk_level ?? 'low'}`}>{activeCase?.risk_level === 'high' ? '高风险' : '常规复核'}</span>
-              <span>{activeCase?.videos.length ?? 0} 路证据</span>
               <span className={reviewState ?? activeCase?.review_state ?? 'pending'}>
                 {stateLabels[reviewState ?? activeCase?.review_state ?? 'pending']}
               </span>
@@ -778,8 +770,8 @@ export default function MultiviewReviewPage() {
 
           <div className="mv-panel mv-timeline-panel">
             <div className="mv-timeline-head">
-              <div><span>SYNCHRONIZED CLIP</span><strong>多机位同期证据时间轴</strong></div>
-              <div className="mv-frame-readout">FRAME {frameNumber} · {playhead.toFixed(0)}%</div>
+              <h3>同期时间轴</h3>
+              <div className="mv-frame-readout">FRAME {frameNumber}</div>
             </div>
             <div className="mv-timeline-rows">
               {activeCase?.videos.map((view, index) => {
@@ -811,10 +803,10 @@ export default function MultiviewReviewPage() {
               })}
             </div>
             <div className="mv-timeline-controls">
-              <button onClick={() => stepFrame(-1)}>−1 帧</button>
+              <button aria-label="上一帧" onClick={() => stepFrame(-1)}>−1 帧</button>
               <button className="play" onClick={togglePlayback}>{playing ? '暂停' : '播放'}</button>
-              <button onClick={() => stepFrame(1)}>+1 帧</button>
-              <span><i className="key" /> 关键帧</span><span><i className="alert" /> 模型关注</span>
+              <button aria-label="下一帧" onClick={() => stepFrame(1)}>+1 帧</button>
+              <span><i className="key" /> 片段</span><span><i className="alert" /> 模型关注</span>
               <input aria-label="证据时间轴" type="range" min="0" max="100" value={playhead} onChange={(event) => seekTo(Number(event.target.value))} />
             </div>
           </div>
@@ -828,7 +820,7 @@ export default function MultiviewReviewPage() {
               <button disabled={!activeCase || savingReview} onClick={() => saveReview()}>保存事实</button>
               <button disabled={!activeCase || savingReview} onClick={() => saveReview('uncertain')}>暂不确定</button>
               <button disabled={!activeCase || savingReview} onClick={() => saveReview('reviewed')}>完成复核</button>
-              <button disabled={!review || savingReview} onClick={() => saveReview('archived')}>完成归档</button>
+              <button disabled={!review || savingReview} onClick={() => saveReview('archived')}>归档</button>
             </div>
           </div>
         </section>
@@ -836,7 +828,7 @@ export default function MultiviewReviewPage() {
         <aside className="mv-right-column">
           {activeCase && (
             <div className="mv-panel mv-pitch-panel">
-              <div className="mv-panel-title compact"><div><span>HUMAN SPATIAL FACT</span><h2>人工确认犯规位置</h2></div><b>105×68</b></div>
+              <div className="mv-panel-title compact"><h2>犯规位置</h2></div>
               <FoulLocationPitch
                 location={facts.location}
                 geometry={reviewDirty ? null : review?.assessment.geometry ?? null}
@@ -851,42 +843,18 @@ export default function MultiviewReviewPage() {
           )}
 
           <div className="mv-panel mv-facts-panel">
-            <div className="mv-panel-title compact"><div><span>CONFIRMED EVENT FACTS</span><h2>渐进式事实确认</h2></div><b>HUMAN</b></div>
-            <FoulFactsPanel facts={facts} decision={decision} onChange={updateDraftFacts} />
+            <div className="mv-panel-title compact"><h2>事实确认</h2></div>
+            <FoulFactsPanel facts={facts} onChange={updateDraftFacts} />
           </div>
 
           <div className="mv-panel mv-rule-panel">
-            <div className="mv-panel-title compact"><div><span>DETERMINISTIC RULES</span><h2>规则辅助判罚</h2></div><b>{review?.assessment.ruleset_version ?? 'IFAB'}</b></div>
+            <div className="mv-panel-title compact"><h2>规则判罚</h2><b>{review?.assessment.ruleset_version ?? 'IFAB'}</b></div>
             <RuleAssessmentPanel
               assessment={reviewDirty ? null : review?.assessment ?? null}
               explanation={reviewDirty ? null : explanation}
               explaining={explaining}
               draftChanged={reviewDirty}
-              onExplain={generateExplanation}
             />
-          </div>
-
-          <div className="mv-panel mv-decision-panel">
-            <div className="mv-panel-title compact"><div><span>MODEL EVIDENCE</span><h2>视觉模型原始建议</h2></div><b>{decision ? percent(decision.confidence) : '—'}</b></div>
-            <ModelEvidencePanel decision={decision} />
-          </div>
-
-          <div className="mv-panel mv-chain-panel">
-            <div className="mv-panel-title compact"><div><span>CHAIN OF CUSTODY</span><h2>事件证据链</h2></div></div>
-            <ol>
-              <li className="done"><b>01</b><div><strong>多机位同步</strong><span>偏差检查与片段对齐</span></div></li>
-              <li className={decision ? 'done' : 'active'}><b>02</b><div><strong>模型联合分析</strong><span>MViT 动作与严重程度</span></div></li>
-              <li className={decision ? 'done' : ''}><b>03</b><div><strong>Grad-CAM 解释</strong><span>定位模型关注区域</span></div></li>
-              <li className={review ? 'done' : ''}><b>04</b><div><strong>事实与规则</strong><span>人工确认后确定性计算</span></div></li>
-            </ol>
-          </div>
-
-          <div className="mv-panel mv-notes-panel">
-            <div className="mv-panel-title compact"><div><span>EVIDENCE NOTES</span><h2>证据质量</h2></div></div>
-            <ul>{activeCase?.evidence_notes.map((note) => <li key={note}>{note}</li>)}</ul>
-            {!status?.ready && (
-              <p className="mv-runtime-note">真实模型未就绪：{status?.missing.join('；') || '正在检查运行资产'}</p>
-            )}
           </div>
         </aside>
       </section>

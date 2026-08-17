@@ -29,6 +29,32 @@ PHYSICAL_ACTIONS = {
     "challenge",
 }
 
+# 各规则条目对应的《足球竞赛规则》原文摘译，供复核界面展示以增强权威性
+LAW_EXCERPTS = {
+    "L12-NO-OFFENCE": "Law 12：未发生犯规，比赛继续。",
+    "L12-SIMULATION": "Law 12：试图以假装被犯规（simulation）欺骗裁判员的球员，必须予以警告。",
+    "L12-BALL-OUT": "Law 12：比赛停止后发生的犯规，不另行改变恢复方式，但纪律处罚照常执行。",
+    "L12-CONTACT-RESTART": "Law 12：以草率、鲁莽或使用过分力量的方式对对方队员犯规，判罚直接任意球；犯规发生在犯规方本方禁区内，判罚点球（Law 14）。",
+    "L12-EXCESSIVE-FORCE": "Law 12：使用过分力量或危及对方队员安全的抢截，必须作为严重犯规罚令出场。",
+    "L12-DOGSO-PENALTY-ATTEMPT": "Law 12：在本方禁区内以争抢球为目的的犯规破坏明显得分机会，判点球并予以警告。",
+    "L12-DOGSO-PENALTY-NO-ATTEMPT": "Law 12：破坏对方明显得分机会的犯规，必须罚令出场；禁区内犯规判点球。",
+    "L12-DOGSO-OUTSIDE": "Law 12：在禁区外以犯规破坏对方明显得分机会，必须罚令出场。",
+    "L12-SPA-PENALTY-ATTEMPT": "Law 12：在禁区内以争抢球为目的的犯规阻止有威胁进攻，已判点球时不另行警告。",
+    "L12-SPA": "Law 12：以犯规阻止或干扰有威胁的进攻，予以警告。",
+    "L12-INTENSITY": "Law 12：草率犯规不作纪律处罚；鲁莽犯规予以警告；使用过分力量必须罚令出场。",
+    "SCOPE-UNSUPPORTED-ACTION": "该动作尚未纳入本系统首版规则集，需人工裁判判定。",
+    "SCOPE-NON-CONTACT": "本系统首版规则集仅覆盖已确认身体接触的犯规场景。",
+}
+
+
+def _law_excerpt(rule_id: str) -> str:
+    if rule_id in LAW_EXCERPTS:
+        return LAW_EXCERPTS[rule_id]
+    # L12-INTENSITY-CARELESS / -RECKLESS 等动态条目共用强度条款摘译
+    if rule_id.startswith("L12-INTENSITY-"):
+        return LAW_EXCERPTS["L12-INTENSITY"]
+    return ""
+
 
 @dataclass(frozen=True)
 class ConfirmedFact:
@@ -52,6 +78,7 @@ def _trace(
     facts_used: list[str],
     result: str,
     priority: int,
+    law_excerpt: str = "",
 ) -> RuleTraceEntry:
     return RuleTraceEntry(
         rule_id=rule_id,
@@ -60,6 +87,7 @@ def _trace(
         facts_used=facts_used,
         result=result,
         priority=priority,
+        law_excerpt=law_excerpt or _law_excerpt(rule_id),
     )
 
 

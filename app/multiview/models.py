@@ -134,6 +134,7 @@ class RuleTraceEntry(BaseModel):
     facts_used: list[str] = Field(default_factory=list)
     result: str
     priority: int = 0
+    law_excerpt: str = ""
 
 
 class RuleAssessment(BaseModel):
@@ -264,6 +265,7 @@ class MultiviewDecision(BaseModel):
     checkpoint_hash: str | None = None
     ruleset_compatible: bool = True
     card: Literal["none", "yellow", "red"] = "none"
+    suggested_intensity: str | None = None
     mode: Literal["model", "scripted"]
     model: str | None = None
     device: str | None = None

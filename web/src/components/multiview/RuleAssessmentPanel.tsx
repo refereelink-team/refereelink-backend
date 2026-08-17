@@ -35,25 +35,23 @@ export default function RuleAssessmentPanel({
   explanation,
   explaining,
   draftChanged,
-  onExplain,
 }: {
   assessment: RuleAssessment | null;
   explanation: ExplanationResponse | null;
-  explaining: boolean;
+  explaining?: boolean;
   draftChanged?: boolean;
-  onExplain: () => void;
 }) {
   if (draftChanged) {
     return (
       <div className="mv-decision-empty stale">
         <i />
         <strong>人工事实已修改</strong>
-        <span>旧几何结果、判罚和解释已隐藏。请保存后重新计算。</span>
+        <span>保存后重新计算</span>
       </div>
     );
   }
   if (!assessment) {
-    return <div className="mv-decision-empty"><i />保存人工事实后由服务端计算规则结论</div>;
+    return <div className="mv-decision-empty"><i />保存事实后计算规则结论</div>;
   }
   return (
     <div className="mv-rule-assessment">
@@ -70,7 +68,7 @@ export default function RuleAssessmentPanel({
       {assessment.conflicts.map((conflict) => <div className="mv-rule-alert conflict" key={conflict}>{conflict}</div>)}
       {assessment.geometry ? (
         <div className="mv-geometry-result">
-          <span>GEOMETRY</span>
+          <span>区域</span>
           {assessment.geometry.zone} ·
           {assessment.geometry.in_offender_own_penalty_area === null
             ? ' 本方禁区条件无法确定'
@@ -81,14 +79,20 @@ export default function RuleAssessmentPanel({
       ) : null}
       <p className="mv-rule-summary">{explanation?.summary ?? assessment.explanation_template}</p>
       <div className="mv-explanation-controls">
-        <span>{explanation ? `${explanation.source === 'local_llm' ? 'AI 组织措辞' : '确定性模板'} · REV ${explanation.revision}` : assessment.ruleset_version}</span>
-        <button type="button" disabled={explaining} onClick={onExplain}>{explaining ? '生成中…' : '整理解释'}</button>
+        <span>
+          {explanation
+            ? `${explanation.source === 'local_llm' ? 'AI 生成' : '模板'} · REV ${explanation.revision}`
+            : explaining
+              ? '正在生成 AI 判罚说明…'
+              : assessment.ruleset_version}
+        </span>
       </div>
       <div className="mv-rule-trace">
         {assessment.rule_trace.map((item) => (
           <details key={item.rule_id}>
             <summary><b>{item.law}</b><span>{item.rule_id}</span></summary>
             <p>{item.result}</p>
+            {item.law_excerpt ? <blockquote className="mv-law-quote">{item.law_excerpt}</blockquote> : null}
             <small>{item.section}</small>
           </details>
         ))}
