@@ -143,3 +143,58 @@ def test_explanation_rejects_llm_summary_missing_sanction(monkeypatch) -> None:
     result = writer.explain(record(), None)
     assert result.source == "template"
     assert "omitted sanction" in (result.fallback_reason or "")
+
+
+def test_explanation_rejects_unknown_law_citation(monkeypatch) -> None:
+    # 编造的“Law 99”不在规则轨迹内，必须回退模板
+    writer = GuardedExplanationWriter(url="http://127.0.0.1:8080")
+    monkeypatch.setattr(
+        writer,
+        "_request",
+        lambda payload: {
+            "summary": "依据 Law 99，判直接任意球并出示黄牌。",
+            "restart": "direct_free_kick",
+            "sanction": "yellow_card",
+            "rule_ids": ["L12-RECKLESS"],
+        },
+    )
+    result = writer.explain(record(), None)
+    assert result.source == "template"
+    assert "unknown law" in (result.fallback_reason or "")
+
+
+def test_explanation_rejects_unknown_rule_citation(monkeypatch) -> None:
+    writer = GuardedExplanationWriter(url="http://127.0.0.1:8080")
+    monkeypatch.setattr(
+        writer,
+        "_request",
+        lambda payload: {
+            "summary": "依据 Law 12（L12-FAKE-RULE），判直接任意球并出示黄牌。",
+            "restart": "direct_free_kick",
+            "sanction": "yellow_card",
+            "rule_ids": ["L12-RECKLESS"],
+        },
+    )
+    result = writer.explain(record(), None)
+    assert result.source == "template"
+    assert "unknown rule" in (result.fallback_reason or "")
+
+
+def test_explanation_rejects_overlong_summary(monkeypatch) -> None:
+    writer = GuardedExplanationWriter(url="http://127.0.0.1:8080")
+    summary = (
+        "已确认犯规，判直接任意球并出示黄牌。" + "补充描述。" * 30
+    )
+    monkeypatch.setattr(
+        writer,
+        "_request",
+        lambda payload: {
+            "summary": summary,
+            "restart": "direct_free_kick",
+            "sanction": "yellow_card",
+            "rule_ids": ["L12-RECKLESS"],
+        },
+    )
+    result = writer.explain(record(), None)
+    assert result.source == "template"
+    assert "too long" in (result.fallback_reason or "")

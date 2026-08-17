@@ -22,6 +22,7 @@ from app.multiview.localization import (
 from app.multiview.repository import MultiviewCaseRepository
 from app.multiview.review_store import MultiviewReviewStore
 from app.multiview.service import MultiviewAnalysisService
+from app.multiview import service as multiview_service_module
 from app.server.main import app
 
 # Deterministic scripted cases used only by tests; the product cases.json
@@ -305,6 +306,38 @@ def test_no_offence_scripted_case_has_no_localization_overlay(demo_client) -> No
     )
     assert response.status_code == 200
     assert response.json()["decision"]["localization"] == {}
+
+
+def test_unexpected_inference_exception_falls_back_to_scripted(demo_client, monkeypatch) -> None:
+    # 权重不兼容、外部模型代码导入失败、Torch 运行时错误等非自定义异常
+    # 也必须回退到演示结果，而不是升级为 HTTP 500
+    monkeypatch.setattr(
+        multiview_service_module,
+        "model_prerequisites",
+        lambda: {"ready": True, "missing": []},
+    )
+
+    service = app.state.multiview_service
+    # 模拟视频齐全且模型前置条件满足，强制进入真实模型链路
+    monkeypatch.setattr(
+        service.repository,
+        "available_video_paths",
+        lambda c: [f"/tmp/{view.camera_id}.mp4" for view in c.videos],
+    )
+
+    def raise_runtime_error(device):
+        raise RuntimeError("torch runtime exploded")
+
+    monkeypatch.setattr(service, "_analyzer", raise_runtime_error)
+    response = demo_client.post(
+        "/api/multiview/analyze",
+        json={"case_id": "mvfoul_001", "device": "auto"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["decision"]["mode"] == "scripted"
+    assert "torch runtime exploded" in " ".join(service._load_errors.values())
 
 
 def _complete_review_payload(analysis_id: str, expected_revision: int = 0) -> dict:

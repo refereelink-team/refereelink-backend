@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import datetime
 from typing import Any
 
-from app.multiview.inference import FoulInferenceError, FoulInferenceService, model_prerequisites
+from app.multiview.inference import FoulInferenceService, model_prerequisites
 from app.multiview.explanation import GuardedExplanationWriter
 from app.multiview.localization import event_prior_window
 from app.multiview.models import (
@@ -178,7 +179,13 @@ class MultiviewAnalysisService:
                 return MultiviewAnalyzeResponse(
                     status="ok", message="MViT_V2_S 多视角分析与 Grad-CAM 定位完成", decision=decision
                 )
-            except FoulInferenceError as exc:
+            except Exception as exc:
+                # 权重不兼容、外部模型代码导入失败、Torch 运行时/OOM 等任意异常
+                # 都不应升级为 HTTP 500，而是回退到案例的演示结果
+                logging.getLogger(__name__).warning(
+                    "Multiview model inference failed, falling back to scripted result",
+                    exc_info=True,
+                )
                 self._load_errors[device] = str(exc)
 
         scripted = case.scripted_result

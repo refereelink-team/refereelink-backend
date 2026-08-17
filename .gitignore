@@ -163,7 +163,7 @@ Desktop.ini
 *.pdf
 
 # Frontend
-web/node_modules/
+web/node_modules
 web/dist/
 web/.vite/
 

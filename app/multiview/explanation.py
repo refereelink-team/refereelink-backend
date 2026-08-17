@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -164,8 +165,22 @@ class GuardedExplanationWriter:
         if not set(output.get("rule_ids", [])).issubset(allowed_rules):
             raise ValueError("LLM introduced unknown rule")
         summary = str(output.get("summary", "")).strip()
-        if not summary or len(summary) > 800:
+        if not summary or len(summary) > 160:
             raise ValueError("LLM summary is empty or too long")
+
+        # 引用校验：summary 里出现的 Law 编号与规则条目编号必须全部来自
+        # 规则轨迹，拦截编造的“Law 99”或不存在的条款编号
+        allowed_law_numbers = {
+            number
+            for item in assessment.rule_trace
+            for number in re.findall(r"Law\s*(\d+)", item.law)
+        }
+        for number in re.findall(r"Law\s*(\d+)", summary):
+            if number not in allowed_law_numbers:
+                raise ValueError("LLM cited an unknown law")
+        for rule_id in re.findall(r"L\d+-[A-Z-]+", summary):
+            if rule_id not in allowed_rules:
+                raise ValueError("LLM cited an unknown rule")
 
         sanction_words = {
             "yellow_card": "黄牌",

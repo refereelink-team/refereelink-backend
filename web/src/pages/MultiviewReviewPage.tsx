@@ -354,8 +354,13 @@ export default function MultiviewReviewPage() {
   const [playing, setPlaying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const videoRefs = useRef(new Map<string, HTMLVideoElement>());
+  const selectedIdRef = useRef<string | null>(null);
   const playheadRef = useRef(playhead);
   const playingRef = useRef(playing);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   useEffect(() => {
     playheadRef.current = playhead;
@@ -572,11 +577,14 @@ export default function MultiviewReviewPage() {
 
   async function runAnalysis() {
     if (!activeCase || analyzing) return;
+    const requestedCaseId = activeCase.case_id;
     setAnalyzing(true);
     setDecision(null);
     setAnalysisMessage('正在解码多机位片段并执行推理…');
     try {
-      const response = await analyzeMultiviewCase(activeCase.case_id);
+      const response = await analyzeMultiviewCase(requestedCaseId);
+      // 分析期间若已切换到其他案例，丢弃过期响应，避免跨案例污染
+      if (selectedIdRef.current !== requestedCaseId) return;
       if (response.status !== 'ok' || !response.decision) {
         throw new Error(response.message);
       }
