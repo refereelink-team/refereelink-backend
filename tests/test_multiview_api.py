@@ -6,9 +6,14 @@ from fastapi.testclient import TestClient
 
 from app.constants.paths import REPO_ROOT_DIR
 from app.multiview.localization import (
+    attention_gate,
     crop_to_original_percent,
     event_prior_window,
+    event_weighted_spatial_grid,
+    full_window_spatial_grid,
+    infer_cam_grid,
     largest_component_bbox,
+    localization_reliability,
     select_temporal_window,
     temporal_activity_scores,
     temporal_bins,
@@ -75,6 +80,7 @@ def test_multiview_scripted_fallback_is_explicit(demo_client) -> None:
         assert box["active_end_s"] == pytest.approx(expected_peak + 0.5)
         assert box["peak_s"] == pytest.approx(expected_peak)
         assert box["temporal_source"] == "event_prior"
+        assert box["reliable"] is True
 
 
 def test_multiview_missing_case_returns_clear_error(demo_client) -> None:
@@ -103,6 +109,121 @@ def test_localization_geometry_helpers() -> None:
     assert 0 < height <= 100 - y
 
 
+def test_cam_grid_supports_last_and_higher_resolution_mvit_blocks() -> None:
+    assert infer_cam_grid(1 + 8 * 7 * 7) == (8, 7, 7)
+    assert infer_cam_grid(1 + 8 * 14 * 14) == (8, 14, 14)
+    with pytest.raises(RuntimeError, match="Unexpected Grad-CAM token count"):
+        infer_cam_grid(400)
+
+
+def test_spatial_cam_uses_full_window_independently_from_temporal_gate() -> None:
+    cam = np.zeros((8, 7, 7), dtype=np.float32)
+    cam[:6, 1:3, 1:3] = 1.0
+    cam[6:, 4:6, 4:6] = 2.0
+
+    grid = full_window_spatial_grid(cam)
+
+    assert grid[1, 1] == pytest.approx(0.75)
+    assert grid[4, 4] == pytest.approx(0.5)
+    assert np.array_equal(grid, cam.mean(axis=0))
+
+
+def test_spatial_cam_softly_prioritizes_the_known_event_time() -> None:
+    cam = np.zeros((8, 7, 7), dtype=np.float32)
+    cam[0, 1:3, 1:3] = 2.0
+    cam[3:5, 4:6, 4:6] = 1.0
+
+    grid = event_weighted_spatial_grid(cam, 2.52, 3.48, 3.0)
+
+    assert grid[4, 4] > grid[1, 1]
+    assert grid[4, 4] > 0.0
+
+
+def test_spatial_cam_falls_back_when_event_is_outside_model_window() -> None:
+    cam = np.arange(8 * 7 * 7, dtype=np.float32).reshape(8, 7, 7)
+
+    grid = event_weighted_spatial_grid(cam, 2.52, 3.48, 4.5)
+
+    assert np.array_equal(grid, cam.mean(axis=0))
+
+
+def test_localization_reliability_rejects_low_attention_and_crop_edges() -> None:
+    valid, score, reasons = attention_gate(1, [0.46, 0.09, 0.45])
+    assert valid is False
+    assert 0 < score < 1
+    assert reasons == ["low_view_attention"]
+
+    grid = np.zeros((7, 7), dtype=np.float32)
+    grid[2:5, 2:5] = 1.0
+    reliable = localization_reliability(
+        view_index=0,
+        view_attention=[0.46, 0.09, 0.45],
+        temporal_valid=True,
+        temporal_reason=None,
+        spatial_grid=grid,
+        bbox=(50, 50, 80, 80),
+    )
+    assert reliable["reliable"] is True
+    assert reliable["display_tier"] == "normal"
+    assert reliable["reliability_reasons"] == []
+
+    caution = localization_reliability(
+        view_index=0,
+        view_attention=[0.46, 0.09, 0.45],
+        temporal_valid=False,
+        temporal_reason="flat_response",
+        spatial_grid=grid,
+        bbox=(0, 50, 80, 80),
+    )
+    assert caution["reliable"] is False
+    assert caution["display_tier"] == "caution"
+    assert caution["reliability_score"] == 0.45
+    assert caution["reliability_reasons"] == [
+        "flat_response",
+        "crop_boundary_contact",
+    ]
+
+    compound = localization_reliability(
+        view_index=1,
+        view_attention=[0.46, 0.09, 0.45],
+        temporal_valid=False,
+        temporal_reason="flat_response",
+        spatial_grid=grid,
+        bbox=(0, 50, 80, 80),
+    )
+    assert compound["reliable"] is False
+    assert compound["display_tier"] == "hidden"
+    assert 0.0 < compound["reliability_score"] <= 0.45
+    assert compound["reliability_reasons"] == [
+        "low_view_attention",
+        "flat_response",
+        "crop_boundary_contact",
+    ]
+
+    low_attention_only = localization_reliability(
+        view_index=1,
+        view_attention=[0.46, 0.09, 0.45],
+        temporal_valid=True,
+        temporal_reason=None,
+        spatial_grid=grid,
+        bbox=(50, 50, 80, 80),
+    )
+    assert low_attention_only["display_tier"] == "caution"
+    assert low_attention_only["reliability_reasons"] == ["low_view_attention"]
+
+    empty = localization_reliability(
+        view_index=0,
+        view_attention=[0.46, 0.09, 0.45],
+        temporal_valid=True,
+        temporal_reason=None,
+        spatial_grid=np.zeros((7, 7), dtype=np.float32),
+        bbox=(50, 50, 80, 80),
+    )
+    assert empty["display_tier"] == "hidden"
+    assert empty["reliability_score"] == 0.0
+    assert empty["reliability_reasons"] == ["zero_response"]
+
+
 def test_temporal_cam_selects_peak_interval_without_averaging_time() -> None:
     cam = np.zeros((8, 7, 7), dtype=np.float32)
     cam[3, 2:5, 2:5] = 1.0
@@ -125,6 +246,19 @@ def test_temporal_cam_keeps_one_contiguous_region_for_multiple_peaks() -> None:
     assert selected["valid"] is True
     assert 1 in selected["active_indices"]
     assert 6 not in selected["active_indices"]
+
+
+def test_temporal_cam_caps_broad_response_around_peak() -> None:
+    cam = np.zeros((8, 7, 7), dtype=np.float32)
+    for index, strength in enumerate((1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.0)):
+        cam[index, 2:5, 2:5] = strength
+
+    selected = select_temporal_window(cam, 2.52, 3.48)
+
+    assert selected["valid"] is True
+    assert selected["peak_index"] in selected["active_indices"]
+    assert 2 <= len(selected["active_indices"]) <= 4
+    assert selected["active_end_s"] - selected["active_start_s"] <= 0.4801
 
 
 def test_flat_and_zero_temporal_cam_require_event_prior() -> None:

@@ -1,14 +1,17 @@
 """Grad-CAM localization for the SoccerNet VARS MViT model.
 
 The classifier does not output boxes. We back-propagate the selected offence
-logit through the last MViT transformer block, reduce the 8x7x7 token grid and
-return the largest high-response component. Optical flow is an explicit
+logit through an MViT transformer block and return the largest high-response
+component. Temporal attribution controls *when* evidence is shown; spatial
+attribution uses a soft event-time prior so unrelated motion elsewhere in the
+model window cannot dominate the displayed region. Optical flow is an explicit
 fallback and is reported as such to the UI.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +22,162 @@ logger = logging.getLogger(__name__)
 
 CROP_SIZE = 224
 RESIZE_SHORT = 256
-CAM_GRID = (8, 7, 7)
+CAM_TIME_BINS = 8
 BOX_THRESHOLD = 0.6
 TEMPORAL_TOP_FRACTION = 0.2
 TEMPORAL_MIN_CONTRAST = 0.15
 TEMPORAL_HIGH_THRESHOLD = 0.6
 TEMPORAL_LOW_THRESHOLD = 0.35
+TEMPORAL_MAX_ACTIVE_BINS = 4
 TEMPORAL_SMOOTHING_KERNEL = np.asarray([0.25, 0.5, 0.25], dtype=np.float32)
+SPATIAL_MIN_CONTRAST = 0.15
+VIEW_ATTENTION_MIN_ABSOLUTE = 0.08
+VIEW_ATTENTION_MIN_PEAK_RATIO = 0.35
+EVENT_SPATIAL_SIGMA_S = 0.24
+EVENT_ACTIVITY_FLOOR = 0.35
+
+
+def infer_cam_grid(token_count: int, time_bins: int = CAM_TIME_BINS) -> tuple[int, int, int]:
+    """Infer the T×H×W grid from an MViT token sequence including its CLS token."""
+    spatial_tokens, remainder = divmod(int(token_count) - 1, int(time_bins))
+    side = math.isqrt(max(0, spatial_tokens))
+    if remainder or side * side != spatial_tokens:
+        raise RuntimeError(
+            f"Unexpected Grad-CAM token count: {token_count}; "
+            f"cannot form {time_bins} square temporal grids"
+        )
+    return time_bins, side, side
+
+
+def full_window_spatial_grid(cam: np.ndarray) -> np.ndarray:
+    """Aggregate space independently from the temporal activation gate."""
+    volume = np.maximum(np.asarray(cam, dtype=np.float32), 0.0)
+    if volume.ndim != 3 or volume.shape[0] < 1:
+        raise ValueError("spatiotemporal CAM must have shape T x H x W")
+    return volume.mean(axis=0)
+
+
+def event_weighted_spatial_grid(
+    cam: np.ndarray,
+    window_start_s: float,
+    window_end_s: float,
+    event_time_s: float | None,
+    *,
+    sigma_s: float = EVENT_SPATIAL_SIGMA_S,
+) -> np.ndarray:
+    """Aggregate CAM space with a soft prior around the known event time.
+
+    The prior is deliberately soft: every temporal token keeps a non-zero
+    contribution, while tokens near the event and with stronger temporal CAM
+    activity receive more weight. If the event does not fall inside the model
+    window, the stable full-window mean remains the fallback.
+    """
+    volume = np.maximum(np.asarray(cam, dtype=np.float32), 0.0)
+    if volume.ndim != 3 or volume.shape[0] < 1:
+        raise ValueError("spatiotemporal CAM must have shape T x H x W")
+    start_s = float(window_start_s)
+    end_s = float(window_end_s)
+    if (
+        event_time_s is None
+        or not np.isfinite(event_time_s)
+        or end_s <= start_s
+        or not start_s <= float(event_time_s) <= end_s
+    ):
+        return full_window_spatial_grid(volume)
+
+    edges = np.linspace(start_s, end_s, volume.shape[0] + 1, dtype=np.float32)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    sigma = max(float(sigma_s), (end_s - start_s) / volume.shape[0] / 2.0, 1e-6)
+    event_weights = np.exp(-0.5 * ((centers - float(event_time_s)) / sigma) ** 2)
+    activity_scores, _informative, _reason = temporal_activity_scores(volume)
+    activity_weights = EVENT_ACTIVITY_FLOOR + (1.0 - EVENT_ACTIVITY_FLOOR) * activity_scores
+    weights = event_weights * activity_weights
+    total = float(weights.sum())
+    if total <= 1e-8:
+        return full_window_spatial_grid(volume)
+    weights = weights / total
+    return np.tensordot(weights.astype(np.float32), volume, axes=(0, 0))
+
+
+def attention_gate(
+    view_index: int,
+    view_attention: list[float] | None,
+) -> tuple[bool, float, list[str]]:
+    """Reject views whose fusion attention is negligible relative to other views."""
+    if not view_attention or view_index >= len(view_attention):
+        return True, 1.0, []
+    values = np.maximum(np.asarray(view_attention, dtype=np.float32), 0.0)
+    peak = float(values.max()) if values.size else 0.0
+    value = float(values[view_index])
+    threshold = max(VIEW_ATTENTION_MIN_ABSOLUTE, peak * VIEW_ATTENTION_MIN_PEAK_RATIO)
+    score = min(1.0, value / max(threshold, 1e-8))
+    return value >= threshold, score, ([] if value >= threshold else ["low_view_attention"])
+
+
+def localization_reliability(
+    *,
+    view_index: int,
+    view_attention: list[float] | None,
+    temporal_valid: bool,
+    temporal_reason: str | None,
+    spatial_grid: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    crop_size: int = CROP_SIZE,
+) -> dict[str, Any]:
+    """Classify CAM evidence as normal, cautionary, or hidden.
+
+    A soft warning should not erase useful demo evidence. Only conditions that
+    make the localization effectively unusable are hidden; boundary contact,
+    broad temporal response, and weak contrast remain visible with a caution
+    treatment in the UI.
+    """
+    attention_valid, attention_score, reasons = attention_gate(view_index, view_attention)
+    if not temporal_valid:
+        reasons.append(temporal_reason or "unreliable_temporal_response")
+
+    grid = np.maximum(np.asarray(spatial_grid, dtype=np.float32), 0.0)
+    maximum = float(grid.max()) if grid.size else 0.0
+    median = float(np.median(grid)) if grid.size else 0.0
+    spatial_contrast = (maximum - median) / max(maximum, 1e-8)
+    if maximum <= 1e-8:
+        reasons.append("zero_response")
+    elif spatial_contrast < SPATIAL_MIN_CONTRAST:
+        reasons.append("low_spatial_contrast")
+
+    x, y, width, height = bbox
+    if x <= 0 or y <= 0 or x + width >= crop_size or y + height >= crop_size:
+        reasons.append("crop_boundary_contact")
+
+    unique_reasons = list(dict.fromkeys(reasons))
+    # Either warning alone can still be useful in a demo. Their conjunction is
+    # materially different: the model barely used the view and its activation
+    # points outside the observable center crop, which produced the grossly
+    # unrelated wide-shot regions seen in CUDA evaluation.
+    low_attention_at_boundary = (
+        not attention_valid and "crop_boundary_contact" in unique_reasons
+    )
+    if "zero_response" in unique_reasons or low_attention_at_boundary:
+        display_tier = "hidden"
+    elif unique_reasons:
+        display_tier = "caution"
+    else:
+        display_tier = "normal"
+
+    temporal_score = 1.0 if temporal_valid else 0.45
+    contrast_score = (
+        0.0
+        if maximum <= 1e-8
+        else max(0.4, min(1.0, spatial_contrast / max(SPATIAL_MIN_CONTRAST, 1e-8)))
+    )
+    boundary_score = 0.6 if "crop_boundary_contact" in unique_reasons else 1.0
+    reliability_score = min(attention_score, temporal_score, contrast_score, boundary_score)
+    return {
+        "display_tier": display_tier,
+        "reliable": display_tier == "normal",
+        "reliability_score": round(float(np.clip(reliability_score, 0.0, 1.0)), 4),
+        "reliability_reasons": unique_reasons,
+        "spatial_contrast": round(spatial_contrast, 4),
+    }
 
 
 def largest_component_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -148,6 +300,28 @@ def select_temporal_window(
     while right + 1 < scores.size and scores[right + 1] >= TEMPORAL_LOW_THRESHOLD:
         right += 1
 
+    if left == 0 and right == scores.size - 1:
+        result.update(valid=False, reason="full_window_response")
+        return result
+
+    # The MViT head only exposes eight temporal tokens. A broad response over
+    # most of those tokens is not evidence for a frame-precise interval. Keep
+    # the strongest contiguous sub-window around the peak so the UI does not
+    # present an almost full-clip activation as a confident localization.
+    if right - left + 1 > TEMPORAL_MAX_ACTIVE_BINS:
+        first_start = max(left, peak_index - TEMPORAL_MAX_ACTIVE_BINS + 1)
+        last_start = min(peak_index, right - TEMPORAL_MAX_ACTIVE_BINS + 1)
+        candidates = range(first_start, last_start + 1)
+        best_start = max(
+            candidates,
+            key=lambda start: (
+                float(scores[start : start + TEMPORAL_MAX_ACTIVE_BINS].sum()),
+                -abs((start + (TEMPORAL_MAX_ACTIVE_BINS - 1) / 2.0) - peak_index),
+            ),
+        )
+        left = best_start
+        right = best_start + TEMPORAL_MAX_ACTIVE_BINS - 1
+
     if left == right and scores.size > 1:
         if left == 0:
             right = 1
@@ -157,10 +331,6 @@ def select_temporal_window(
             left -= 1
         else:
             right += 1
-
-    if left == 0 and right == scores.size - 1:
-        result.update(valid=False, reason="full_window_response")
-        return result
 
     result.update(
         active_indices=list(range(left, right + 1)),
@@ -197,11 +367,17 @@ def gradcam_boxes(
     offence_index: int,
     frame_sizes: list[tuple[int, int]],
     window_ranges: list[tuple[float, float]],
+    *,
+    action_index: int | None = None,
+    target_head: str = "offence",
+    target_block_index: int = -1,
+    view_attention: list[float] | None = None,
+    event_time_s: float | None = None,
 ) -> tuple[dict[int, dict[str, Any]], dict[str, Any]]:
     import torch
 
     backbone = model.mvnetwork.aggregation_model.model
-    target_block = backbone.blocks[-1]
+    target_block = backbone.blocks[target_block_index]
     captured: dict[str, Any] = {}
 
     def hook(_module: Any, _inputs: Any, output: Any) -> None:
@@ -210,31 +386,38 @@ def gradcam_boxes(
     handle = target_block.register_forward_hook(hook)
     try:
         with torch.enable_grad():
-            offence_logits, _action_logits, _attention = model(batch)
-            score = offence_logits.reshape(-1, 4)[0, offence_index]
+            offence_logits, action_logits, _attention = model(batch)
+            if target_head == "offence":
+                score = offence_logits.reshape(-1, 4)[0, offence_index]
+            elif target_head == "action" and action_index is not None:
+                score = action_logits.reshape(-1, 8)[0, action_index]
+            else:
+                raise ValueError(f"Unsupported Grad-CAM target: {target_head}")
             activations = captured["activations"]
             gradients = torch.autograd.grad(score, activations, retain_graph=False)[0]
     finally:
         handle.remove()
 
     batch_views, token_count, _ = activations.shape
-    time_grid, height_grid, width_grid = CAM_GRID
-    expected_tokens = 1 + time_grid * height_grid * width_grid
-    if token_count != expected_tokens:
-        raise RuntimeError(
-            f"Unexpected Grad-CAM token count: {token_count}, expected {expected_tokens}"
-        )
+    time_grid, height_grid, width_grid = infer_cam_grid(token_count)
 
     weights = gradients.mean(dim=1)
     cam = torch.relu((activations * weights.unsqueeze(1)).sum(dim=-1)[:, 1:])
     cam = cam.reshape(batch_views, time_grid, height_grid, width_grid)
     boxes: dict[int, dict[str, Any]] = {}
     diagnostics: dict[str, Any] = {
-        "grid": list(CAM_GRID),
+        "grid": [time_grid, height_grid, width_grid],
+        "target_head": target_head,
+        "target_block_index": target_block_index,
+        "spatial_aggregation": "event_time_weighted",
+        "event_time_s": event_time_s,
+        "event_spatial_sigma_s": EVENT_SPATIAL_SIGMA_S,
+        "event_activity_floor": EVENT_ACTIVITY_FLOOR,
         "top_fraction": TEMPORAL_TOP_FRACTION,
         "min_contrast": TEMPORAL_MIN_CONTRAST,
         "high_threshold": TEMPORAL_HIGH_THRESHOLD,
         "low_threshold": TEMPORAL_LOW_THRESHOLD,
+        "max_active_bins": TEMPORAL_MAX_ACTIVE_BINS,
         "views": {},
     }
     view_count = min(int(batch.shape[1]), batch_views, len(frame_sizes), len(window_ranges))
@@ -249,8 +432,15 @@ def gradcam_boxes(
             "active_indices": temporal["active_indices"],
             "temporal_bins": temporal["temporal_bins"],
         }
-        active_indices = temporal["active_indices"]
-        grid = volume[active_indices].mean(axis=0) if active_indices else volume.mean(axis=0)
+        # Use a soft event prior rather than the hard display interval. This
+        # preserves spatial stability while preventing unrelated motion in the
+        # early/late parts of the clip from dominating the localization.
+        grid = event_weighted_spatial_grid(
+            volume,
+            window_start_s,
+            window_end_s,
+            event_time_s,
+        )
         maximum = float(grid.max())
         if maximum <= 0:
             continue
@@ -270,6 +460,15 @@ def gradcam_boxes(
                 int(min(CROP_SIZE, half * 2)),
             )
         x, y, width, height = bbox
+        reliability = localization_reliability(
+            view_index=view_index,
+            view_attention=view_attention,
+            temporal_valid=bool(temporal["valid"]),
+            temporal_reason=temporal["reason"],
+            spatial_grid=grid,
+            bbox=bbox,
+        )
+        diagnostics["views"][str(view_index)].update(reliability)
         original_width, original_height = frame_sizes[view_index]
         box: dict[str, Any] = {
             "rect": crop_to_original_percent(
@@ -278,6 +477,10 @@ def gradcam_boxes(
             "score": round(float(heat[y : y + height, x : x + width].mean()), 3),
             "source": "gradcam",
             "temporal_bins": temporal["temporal_bins"],
+            "display_tier": reliability["display_tier"],
+            "reliable": reliability["reliable"],
+            "reliability_score": reliability["reliability_score"],
+            "reliability_reasons": reliability["reliability_reasons"],
         }
         if temporal["valid"]:
             box.update(

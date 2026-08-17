@@ -46,6 +46,13 @@ interface LocalizationWindow {
   source: 'gradcam' | 'event_prior';
 }
 
+interface MediaBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 function localizationWindow(box: LocalizationBox, eventTimeS: number): LocalizationWindow {
   const hasModelWindow = box.active_start_s !== null
     && box.active_start_s !== undefined
@@ -72,6 +79,64 @@ function localizationWindow(box: LocalizationBox, eventTimeS: number): Localizat
 
 function seconds(value: number): string {
   return `${value.toFixed(2)}s`;
+}
+
+function containedMediaBounds(
+  containerWidth: number,
+  containerHeight: number,
+  mediaWidth: number,
+  mediaHeight: number,
+): MediaBounds | null {
+  if (containerWidth <= 0 || containerHeight <= 0 || mediaWidth <= 0 || mediaHeight <= 0) {
+    return null;
+  }
+  const scale = Math.min(containerWidth / mediaWidth, containerHeight / mediaHeight);
+  const width = mediaWidth * scale;
+  const height = mediaHeight * scale;
+  return {
+    left: (containerWidth - width) / 2,
+    top: (containerHeight - height) / 2,
+    width,
+    height,
+  };
+}
+
+function expandedFocusRect(rect: LocalizationBox['rect']): LocalizationBox['rect'] {
+  const [left, top, width, height] = rect;
+  const padX = Math.max(3.5, width * 0.25);
+  const padY = Math.max(3.5, height * 0.25);
+  const expandedLeft = Math.max(0, left - padX);
+  const expandedTop = Math.max(0, top - padY);
+  const expandedRight = Math.min(100, left + width + padX);
+  const expandedBottom = Math.min(100, top + height + padY);
+  return [
+    expandedLeft,
+    expandedTop,
+    expandedRight - expandedLeft,
+    expandedBottom - expandedTop,
+  ];
+}
+
+function temporalFocusStrength(
+  box: LocalizationBox,
+  currentTimeS: number,
+  window: LocalizationWindow,
+): number {
+  const fadeS = Math.max(0.12, Math.min(0.2, (window.endS - window.startS) * 0.35));
+  let gate = 1;
+  if (currentTimeS < window.startS) {
+    gate = (currentTimeS - (window.startS - fadeS)) / fadeS;
+  } else if (currentTimeS > window.endS) {
+    gate = ((window.endS + fadeS) - currentTimeS) / fadeS;
+  }
+  gate = Math.min(1, Math.max(0, gate));
+  if (gate === 0) return 0;
+
+  const currentBin = box.temporal_bins?.find(
+    (bin) => currentTimeS >= bin.start_s && currentTimeS <= bin.end_s,
+  );
+  const evidenceStrength = currentBin ? 0.65 + 0.35 * currentBin.score : 0.82;
+  return gate * evidenceStrength;
 }
 
 function modeLabel(decision: MultiviewDecision | null, status: MultiviewStatus | null): string {
@@ -143,13 +208,70 @@ function MediaFrame({
   currentTimeS: number;
   eventTimeS: number;
 }) {
-  const window = box ? localizationWindow(box, eventTimeS) : null;
-  const showBox = Boolean(
-    box
-    && window
-    && currentTimeS >= window.startS
-    && currentTimeS <= window.endS,
-  );
+  const mediaContainerRef = useRef<HTMLDivElement | null>(null);
+  const mediaElementRef = useRef<HTMLVideoElement | HTMLImageElement | null>(null);
+  const [mediaBounds, setMediaBounds] = useState<MediaBounds | null>(null);
+
+  const updateMediaBounds = useCallback(() => {
+    const container = mediaContainerRef.current;
+    const media = mediaElementRef.current;
+    if (!container || !media) return;
+    const mediaWidth = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth;
+    const mediaHeight = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
+    const next = containedMediaBounds(
+      container.clientWidth,
+      container.clientHeight,
+      mediaWidth,
+      mediaHeight,
+    );
+    if (!next) return;
+    setMediaBounds((current) => (
+      current
+      && Math.abs(current.left - next.left) < 0.25
+      && Math.abs(current.top - next.top) < 0.25
+      && Math.abs(current.width - next.width) < 0.25
+      && Math.abs(current.height - next.height) < 0.25
+        ? current
+        : next
+    ));
+  }, []);
+
+  useEffect(() => {
+    const container = mediaContainerRef.current;
+    if (!container) return undefined;
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateMediaBounds);
+    observer?.observe(container);
+    window.addEventListener('resize', updateMediaBounds);
+    updateMediaBounds();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateMediaBounds);
+    };
+  }, [updateMediaBounds]);
+
+  const setVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    mediaElementRef.current = element;
+    onVideoRef(view.camera_id, element);
+    if (element) window.requestAnimationFrame(updateMediaBounds);
+  }, [onVideoRef, updateMediaBounds, view.camera_id]);
+
+  const setImageElement = useCallback((element: HTMLImageElement | null) => {
+    mediaElementRef.current = element;
+    if (element) window.requestAnimationFrame(updateMediaBounds);
+  }, [updateMediaBounds]);
+
+  const activeWindow = box ? localizationWindow(box, eventTimeS) : null;
+  const focusRect = box ? expandedFocusRect(box.rect) : null;
+  const focusStrength = box && activeWindow
+    ? temporalFocusStrength(box, currentTimeS, activeWindow)
+    : 0;
+  const displayTier = box?.display_tier ?? (box?.reliable === false ? 'hidden' : 'normal');
+  const showFocus = displayTier !== 'hidden' && focusStrength > 0.01;
+  const displayedFocusStrength = displayTier === 'caution'
+    ? focusStrength * 0.64
+    : focusStrength;
   return (
     <button
       type="button"
@@ -157,38 +279,46 @@ function MediaFrame({
       onClick={onSelect}
       aria-label={`查看${view.display_name}`}
     >
-      <div className="mv-camera-media">
+      <div className="mv-camera-media" ref={mediaContainerRef}>
         {view.media_url ? (
           view.media_kind === 'video' ? (
             <video
-              ref={(element) => onVideoRef(view.camera_id, element)}
+              ref={setVideoElement}
               src={view.media_url}
               muted
               playsInline
               preload="auto"
-              onLoadedMetadata={() => onVideoReady(view.camera_id)}
+              onLoadedMetadata={() => {
+                updateMediaBounds();
+                onVideoReady(view.camera_id);
+              }}
             />
           ) : (
-            <img src={view.media_url} alt={`${view.display_name}证据帧`} />
+            <img
+              ref={setImageElement}
+              src={view.media_url}
+              alt={`${view.display_name}证据帧`}
+              onLoad={updateMediaBounds}
+            />
           )
         ) : (
           <div className="mv-media-empty">NO EVIDENCE MEDIA</div>
         )}
-        {box && window && (
-          <div
-            className={`mv-focus-box ${box.source} ${showBox ? 'active' : ''}`}
-            aria-hidden={!showBox}
-            style={{
-              left: `${box.rect[0]}%`,
-              top: `${box.rect[1]}%`,
-              width: `${box.rect[2]}%`,
-              height: `${box.rect[3]}%`,
-            }}
-          >
-            <span>
-              {box.source === 'gradcam' ? 'GRAD-CAM' : box.source === 'optical_flow' ? 'FLOW' : 'DEMO'}
-              {' · '}{seconds(window.startS)}–{seconds(window.endS)}
-            </span>
+        {mediaBounds && (
+          <div className="mv-media-coordinate-layer" style={mediaBounds}>
+            {box && activeWindow && focusRect && (
+              <div
+                className={`mv-focus-region ${box.source} ${displayTier} ${showFocus ? 'active' : ''}`}
+                aria-hidden={!showFocus}
+                style={{
+                  left: `${focusRect[0]}%`,
+                  top: `${focusRect[1]}%`,
+                  width: `${focusRect[2]}%`,
+                  height: `${focusRect[3]}%`,
+                  opacity: showFocus ? displayedFocusStrength : 0,
+                }}
+              />
+            )}
           </div>
         )}
         {attention !== undefined && (
@@ -668,7 +798,7 @@ export default function MultiviewReviewPage() {
                       {window && (
                         <>
                           <span
-                            className={`mv-temporal-window ${window.source}`}
+                            className={`mv-temporal-window ${window.source} ${box?.display_tier ?? (box?.reliable === false ? 'hidden' : 'normal')}`}
                             style={{ left: `${windowLeft}%`, width: `${Math.max(0.8, windowRight - windowLeft)}%` }}
                           />
                           <em className="mv-temporal-peak" style={{ left: `${peakLeft}%` }} />

@@ -21,7 +21,12 @@ import numpy as np
 
 from app.constants.paths import REPO_ROOT_DIR, WEIGHTS_DIR
 from app.multiview.labels import ACTION_LABELS, CARDS, DECISIONS, DECISIONS_ZH, SEVERITY_LABELS
-from app.multiview.localization import event_prior_window, gradcam_boxes, optical_flow_box
+from app.multiview.localization import (
+    attention_gate,
+    event_prior_window,
+    gradcam_boxes,
+    optical_flow_box,
+)
 
 DEFAULT_MODEL_DIR = REPO_ROOT_DIR / "third_party" / "sn-mvfoul" / "VARS model"
 DEFAULT_WEIGHTS_PATH = WEIGHTS_DIR / "14_model.pth.tar"
@@ -279,6 +284,10 @@ class FoulInferenceService:
             reverse=True,
         )[:3]
 
+        view_attention: list[float] = []
+        if attention is not None and getattr(attention, "dim", lambda: 0)() == 2:
+            view_attention = [round(float(item), 4) for item in attention[0].detach().float().cpu()]
+
         localization_started = time.perf_counter()
         localization_source: str | None = None
         temporal_diagnostics: dict[str, Any]
@@ -294,6 +303,9 @@ class FoulInferenceService:
                         offence_index,
                         frame_sizes,
                         [(timing.window_start_s, timing.window_end_s) for timing in timings],
+                        action_index=action_index,
+                        view_attention=view_attention,
+                        event_time_s=event_time_s,
                     )
                 for index, box in localization.items():
                     if box.get("active_start_s") is None:
@@ -317,6 +329,17 @@ class FoulInferenceService:
                         continue
                     flow_box = optical_flow_box(path, self.start_frame, self.end_frame)
                     if flow_box:
+                        _reliable, reliability_score, reliability_reasons = attention_gate(
+                            index, view_attention
+                        )
+                        flow_box.update(
+                            display_tier="hidden",
+                            reliable=False,
+                            reliability_score=round(min(reliability_score, 0.25), 4),
+                            reliability_reasons=list(dict.fromkeys(
+                                [*reliability_reasons, "optical_flow_not_contact_evidence"]
+                            )),
+                        )
                         flow_box.update(event_prior_window(event_time_s, timings[index].duration_s))
                         localization[index] = flow_box
                         fallback_views.append(index)
@@ -336,6 +359,17 @@ class FoulInferenceService:
                 for index, path in enumerate(views):
                     box = optical_flow_box(path, self.start_frame, self.end_frame)
                     if box:
+                        _reliable, reliability_score, reliability_reasons = attention_gate(
+                            index, view_attention
+                        )
+                        box.update(
+                            display_tier="hidden",
+                            reliable=False,
+                            reliability_score=round(min(reliability_score, 0.25), 4),
+                            reliability_reasons=list(dict.fromkeys(
+                                [*reliability_reasons, "optical_flow_not_contact_evidence"]
+                            )),
+                        )
                         box.update(event_prior_window(event_time_s, timings[index].duration_s))
                         localization[index] = box
                         temporal_diagnostics["views"][str(index)] = {
@@ -345,9 +379,6 @@ class FoulInferenceService:
                 localization_source = "optical_flow" if localization else None
         gradcam_ms = (time.perf_counter() - localization_started) * 1000
 
-        view_attention: list[float] = []
-        if attention is not None and getattr(attention, "dim", lambda: 0)() == 2:
-            view_attention = [round(float(item), 4) for item in attention[0].detach().float().cpu()]
         return {
             "action": ACTION_LABELS[action_index],
             "severity": SEVERITY_LABELS[offence_index],

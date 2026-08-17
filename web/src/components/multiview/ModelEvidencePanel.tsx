@@ -21,7 +21,7 @@ export default function ModelEvidencePanel({ decision }: { decision: MultiviewDe
   }
   return (
     <div className="mv-model-evidence">
-      <div className="mv-model-warning">模型建议不是规则结论；Grad-CAM 仅表示模型关注区域。</div>
+      <div className="mv-model-warning">模型建议不是规则结论；Grad-CAM 以扩张渐变热区显示，空间与时间边缘表示不确定性。</div>
       <CandidateList title="动作 Top-K" candidates={decision.action_candidates} />
       <CandidateList title="犯规 / 牌级 Top-K" candidates={decision.severity_candidates} />
       <dl className="mv-record-grid">

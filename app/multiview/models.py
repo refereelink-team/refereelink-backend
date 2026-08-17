@@ -212,6 +212,10 @@ class LocalizationBox(BaseModel):
     peak_s: float | None = Field(default=None, ge=0.0)
     temporal_bins: list[TemporalBin] = Field(default_factory=list)
     temporal_source: Literal["gradcam", "event_prior"] | None = None
+    display_tier: Literal["normal", "caution", "hidden"] = "normal"
+    reliable: bool = True
+    reliability_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    reliability_reasons: list[str] = Field(default_factory=list)
 
 
 class ScriptedResult(BaseModel):

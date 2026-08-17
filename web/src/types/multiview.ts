@@ -124,6 +124,10 @@ export interface LocalizationBox {
   peak_s?: number | null;
   temporal_bins?: TemporalBin[];
   temporal_source?: 'gradcam' | 'event_prior' | null;
+  display_tier?: 'normal' | 'caution' | 'hidden';
+  reliable?: boolean;
+  reliability_score?: number;
+  reliability_reasons?: string[];
 }
 
 export interface MultiviewDecision {
