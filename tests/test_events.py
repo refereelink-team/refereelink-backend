@@ -2,14 +2,26 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.events.contact import ContactTrigger, ContactTriggerConfig, format_player_identity
 from app.events.engine import EventEngine, EventEngineConfig, FoulEventAdapter
-from app.state.models import BallState, BallStatus, FrameState, PlayerRole, PlayerState
+from app.state.models import BallState, BallStatus, FrameState, PlayerRole, PlayerState, TeamLabel
 
 
-def _player(track_id: int, team_id: int, x: float, y: float = 3000.0) -> PlayerState:
+def _player(
+    track_id: int,
+    team_id: int,
+    x: float,
+    y: float = 3000.0,
+    *,
+    velocity_x: float | None = None,
+    velocity_y: float | None = None,
+) -> PlayerState:
+    team = TeamLabel.HOME if team_id == 0 else TeamLabel.AWAY if team_id == 1 else TeamLabel.UNKNOWN
     return PlayerState(
         track_id=track_id,
         role=PlayerRole.PLAYER,
+        team=team,
+        team_label=team,
         team_id=team_id,
         field_x=x,
         field_y=y,
@@ -17,6 +29,9 @@ def _player(track_id: int, team_id: int, x: float, y: float = 3000.0) -> PlayerS
         team_confidence=0.9,
         role_confidence=0.9,
         semantic_status="stable",
+        velocity_x=velocity_x,
+        velocity_y=velocity_y,
+        bbox=(float(track_id), 10.0, float(track_id) + 40.0, 80.0),
     )
 
 
@@ -80,9 +95,69 @@ def test_foul_adapter_preserves_explainable_details() -> None:
         frame_id=12,
         timestamp=2.4,
         field_xy=(4000.0, 2500.0),
+        involved_track_ids=[7, 19],
+        label_a="Home T7",
+        label_b="Away T19",
     )
 
     assert event is not None
     assert event.event_type == "foul_candidate"
-    assert event.foul_details == {"offence": "high", "action": "pushing"}
+    assert event.foul_details["offence"] == "high"
+    assert event.foul_details["action"] == "pushing"
+    assert event.foul_details["summary"] == "Home T7 · pushing · Away T19"
+    assert event.involved_track_ids == [7, 19]
     assert event.evidence["source"] == "mvfoul"
+
+
+def test_format_player_identity() -> None:
+    assert format_player_identity(_player(12, 0, 100.0)) == "Home T12"
+    assert format_player_identity(_player(34, 1, 100.0)) == "Away T34"
+
+
+def test_contact_trigger_emits_geometry_foul_candidate() -> None:
+    trigger = ContactTrigger(
+        ContactTriggerConfig(
+            max_distance_mm=2000.0,
+            closing_speed_mm_s=1000.0,
+            cooldown_s=2.0,
+        )
+    )
+    frame = FrameState(
+        frame_id=5,
+        capture_timestamp_ms=1000.0,
+        players=[
+            _player(10, 0, 5000.0, 3500.0, velocity_x=2000.0, velocity_y=0.0),
+            _player(20, 1, 5600.0, 3500.0, velocity_x=-2000.0, velocity_y=0.0),
+            _player(30, 0, 1000.0, 1000.0),
+        ],
+    )
+    events = trigger.update(frame)
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type == "foul_candidate"
+    assert event.evidence["source"] == "geometry"
+    assert set(event.involved_track_ids) == {10, 20}
+    assert "Home T10" in event.foul_details["summary"]
+    assert "Away T20" in event.foul_details["summary"]
+
+
+def test_contact_trigger_respects_cooldown() -> None:
+    trigger = ContactTrigger(ContactTriggerConfig(max_distance_mm=2000.0, closing_speed_mm_s=500.0))
+    frame_a = FrameState(
+        frame_id=1,
+        capture_timestamp_ms=0.0,
+        players=[
+            _player(1, 0, 5000.0, 3000.0, velocity_x=1500.0),
+            _player(2, 1, 5400.0, 3000.0, velocity_x=-1500.0),
+        ],
+    )
+    frame_b = FrameState(
+        frame_id=2,
+        capture_timestamp_ms=500.0,
+        players=[
+            _player(1, 0, 5050.0, 3000.0, velocity_x=1500.0),
+            _player(2, 1, 5350.0, 3000.0, velocity_x=-1500.0),
+        ],
+    )
+    assert trigger.update(frame_a)
+    assert trigger.update(frame_b) == []

@@ -27,6 +27,13 @@ const StatusCards: React.FC = () => {
       ? [{ label: 'GPU Mem', value: metrics.gpu_memory_mb.toFixed(0), unit: 'MB' }]
       : []),
     { label: 'Queue', value: metrics.queue_length, unit: '' },
+    { label: 'Foul Inf', value: metrics.foul_inference_count, unit: '' },
+    { label: 'Foul Q', value: metrics.foul_queue_length ?? 0, unit: '' },
+    {
+      label: 'Foul Lat',
+      value: (metrics.foul_classify_latency_ms ?? 0).toFixed(0),
+      unit: 'ms',
+    },
     { label: 'WS', value: wsConnected ? 'ON' : 'OFF', unit: '' },
     { label: 'Homo', value: frameState?.homography_status ?? '—', unit: '' },
   ];

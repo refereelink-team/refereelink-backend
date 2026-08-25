@@ -142,6 +142,8 @@ class MetricsSnapshot(BaseModel):
     jpeg_frames_encoded: int = 0
     jpeg_encode_latency_ms: float = 0.0
     foul_inference_count: int = 0
+    foul_queue_length: int = 0
+    foul_classify_latency_ms: float = 0.0
 
 
 class PipelineConfig(BaseModel):

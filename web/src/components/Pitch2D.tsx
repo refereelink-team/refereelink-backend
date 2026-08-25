@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 
 const PITCH_W = 12000;
@@ -57,9 +57,15 @@ const Pitch2D: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const players = useDashboardStore((s) => s.frameState?.players ?? []);
   const ball = useDashboardStore((s) => s.frameState?.ball ?? null);
+  const events = useDashboardStore((s) => s.events);
   const homographyStatus = useDashboardStore(
     (s) => s.frameState?.homography_status ?? 'unavailable'
   );
+
+  const highlightIds = useMemo(() => {
+    const latestFoul = events.find((e) => e.event_type === 'foul_candidate');
+    return new Set(latestFoul?.involved_track_ids ?? []);
+  }, [events]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -76,6 +82,15 @@ const Pitch2D: React.FC = () => {
       if (p.field_x == null || p.field_y == null) continue;
       const [sx, sy] = worldToCanvas(p.field_x, p.field_y, w, h);
       const color = TEAM_COLORS[p.team] ?? TEAM_COLORS[String(p.team_id)] ?? '#888';
+      const highlighted = highlightIds.has(p.track_id);
+
+      if (highlighted) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 12, 0, Math.PI * 2);
+        ctx.strokeStyle = '#FFD60A';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      }
 
       ctx.beginPath();
       ctx.arc(sx, sy, 7, 0, Math.PI * 2);
@@ -85,10 +100,10 @@ const Pitch2D: React.FC = () => {
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = highlighted ? '#FFD60A' : '#fff';
       ctx.font = '9px monospace';
       ctx.textAlign = 'center';
-    ctx.fillText(`${p.entity_id ?? p.track_id}`, sx, sy - 11);
+      ctx.fillText(`${p.entity_id ?? p.track_id}`, sx, sy - 11);
     }
 
     if (ball?.field_x != null && ball.field_y != null) {
@@ -100,7 +115,7 @@ const Pitch2D: React.FC = () => {
       ctx.strokeStyle = '#111';
       ctx.stroke();
     }
-  }, [players, ball]);
+  }, [players, ball, highlightIds]);
 
   return (
     <div className="panel pitch-panel">

@@ -183,6 +183,11 @@ class FoulEventAdapter:
         frame_id: int,
         timestamp: float,
         field_xy: Optional[tuple[float, float]] = None,
+        involved_track_ids: Optional[list[int]] = None,
+        label_a: Optional[str] = None,
+        label_b: Optional[str] = None,
+        source: str = "mvfoul",
+        parent_event_id: Optional[str] = None,
     ) -> Optional[GameEvent]:
         if prediction is None:
             return None
@@ -190,6 +195,18 @@ class FoulEventAdapter:
         if confidence < self.confidence_threshold:
             return None
         details = _prediction_details(prediction)
+        action = str(details.get("action") or details.get("label") or "foul")
+        left = label_a or "T?"
+        right = label_b or "T?"
+        summary = f"{left} · {action} · {right}"
+        details["summary"] = summary
+        if label_a:
+            details["label_a"] = label_a
+        if label_b:
+            details["label_b"] = label_b
+        evidence: dict[str, Any] = {"source": source, "summary": summary}
+        if parent_event_id:
+            evidence["parent_event_id"] = parent_event_id
         return GameEvent(
             event_type="foul_candidate",
             confidence=confidence,
@@ -198,8 +215,9 @@ class FoulEventAdapter:
             frame_id=frame_id,
             field_x=field_xy[0] if field_xy else None,
             field_y=field_xy[1] if field_xy else None,
+            involved_track_ids=list(involved_track_ids or []),
             foul_details=details,
-            evidence={"source": "mvfoul"},
+            evidence=evidence,
         )
 
 

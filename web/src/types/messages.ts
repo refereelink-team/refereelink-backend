@@ -104,6 +104,8 @@ export interface MetricsSnapshot {
   jpeg_frames_encoded: number;
   jpeg_encode_latency_ms: number;
   foul_inference_count: number;
+  foul_queue_length?: number;
+  foul_classify_latency_ms?: number;
 }
 
 export type CalibrationState =

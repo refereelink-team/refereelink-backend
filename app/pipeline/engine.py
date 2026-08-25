@@ -19,7 +19,9 @@ from app.constants.paths import (
     TEAM_CLASSIFIER_PATH,
     FOUL_MODEL_PATH,
 )
+from app.events.contact import ContactTrigger
 from app.events.engine import EventEngine, FoulEventAdapter
+from app.foul_detection.worker import AsyncFoulWorker
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
 from app.pipeline.recorder import VideoRecorder
 from app.pipeline.source import VideoSource
@@ -309,7 +311,11 @@ class InferencePipeline:
         self._event_engine = EventEngine()
         self._foul_detector = foul_detector
         self._foul_adapter = FoulEventAdapter(confidence_threshold=foul_confidence_threshold)
+        self._contact_trigger = ContactTrigger()
+        self._foul_worker: Optional[AsyncFoulWorker] = None
         self.foul_inference_count = 0
+        self.foul_queue_length = 0
+        self.foul_classify_latency_ms = 0.0
         self._previous_ball_field_xy: Optional[np.ndarray] = None
         self._previous_ball_timestamp_s: Optional[float] = None
 
@@ -334,6 +340,10 @@ class InferencePipeline:
         recorder = getattr(self, "_recorder", None)
         if recorder is not None:
             recorder.stop()
+        foul_worker = getattr(self, "_foul_worker", None)
+        if foul_worker is not None:
+            foul_worker.stop()
+            self._foul_worker = None
         logger.info("InferencePipeline stopped")
 
     @staticmethod
@@ -444,7 +454,25 @@ class InferencePipeline:
                 inference_backend=self._inference_backend,
             )
             self._ball_processor.load_model()
-        if self._enable_foul_detection and self._foul_detector is None:
+        if self._enable_foul_detection and self._foul_worker is None:
+            try:
+                self._foul_worker = AsyncFoulWorker(
+                    checkpoint_path=self._foul_checkpoint_path,
+                    device=self._device,
+                    confidence_threshold=self._foul_confidence_threshold,
+                )
+                self._foul_worker.start()
+                logger.info(
+                    "Async foul worker started (geometry always on; MVFoul optional)"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Foul worker unavailable; geometry candidates only: %s", exc
+                )
+                self._foul_worker = None
+        # Legacy injected sync detector (tests) is kept but not used on the
+        # live critical path when the async worker is available.
+        if self._enable_foul_detection and self._foul_detector is None and self._foul_worker is None:
             try:
                 from app.foul_detection.detector import FoulDetector
 
@@ -519,12 +547,6 @@ class InferencePipeline:
             frame_index=self._source.frame_count,
             projection=projection,
             timestamp_s=capture_timestamp_ms / 1000.0,
-        )
-        foul_event = self._process_foul(
-            frame=vision_frame.undistorted_frame,
-            frame_id=self._source.frame_count,
-            timestamp_s=capture_timestamp_ms / 1000.0,
-            ball_state=ball_state,
         )
 
         player_states: list[PlayerState] = []
@@ -688,8 +710,13 @@ class InferencePipeline:
         event_engine = getattr(self, "_event_engine", None)
         if event_engine is not None:
             frame_state.events = event_engine.update(frame_state)
-        if foul_event is not None:
-            frame_state.events.append(foul_event)
+        if getattr(self, "_enable_foul_detection", False):
+            frame_state.events.extend(
+                self._process_foul_live(
+                    frame=vision_frame.undistorted_frame,
+                    frame_state=frame_state,
+                )
+            )
         for event in frame_state.events:
             self._store.add_event(event)
 
@@ -711,6 +738,64 @@ class InferencePipeline:
                 logger.warning("Frame sink failed; continuing pipeline: %s", exc)
         return frame_state
 
+    def _process_foul_live(
+        self,
+        *,
+        frame: np.ndarray,
+        frame_state: FrameState,
+    ) -> list:
+        """Geometry contact on the hot path; MVFoul classification stays async."""
+        events = []
+        contact_trigger = getattr(self, "_contact_trigger", None)
+        if contact_trigger is not None:
+            try:
+                geometry_events = contact_trigger.update(frame_state)
+            except Exception as exc:
+                logger.warning("Contact trigger failed; skipping: %s", exc)
+                geometry_events = []
+            events.extend(geometry_events)
+        else:
+            geometry_events = []
+
+        foul_worker = getattr(self, "_foul_worker", None)
+        if foul_worker is not None:
+            try:
+                foul_worker.push_frame(frame)
+                for event in geometry_events:
+                    foul_worker.enqueue_from_event(event)
+                classified = foul_worker.drain_results()
+                events.extend(classified)
+                self.foul_inference_count = foul_worker.inference_count
+                self.foul_queue_length = foul_worker.queue_length
+                self.foul_classify_latency_ms = foul_worker.last_latency_ms
+            except Exception as exc:
+                logger.warning("Async foul worker failed; geometry only: %s", exc)
+        elif getattr(self, "_foul_detector", None) is not None:
+            # Test / legacy sync path when no async worker was started.
+            try:
+                prediction = self._foul_detector.update(frame)
+                self.foul_inference_count += 1
+                foul_adapter = getattr(self, "_foul_adapter", FoulEventAdapter())
+                ball_state = frame_state.ball
+                field_xy = (
+                    (ball_state.field_x, ball_state.field_y)
+                    if ball_state is not None
+                    and ball_state.field_x is not None
+                    and ball_state.field_y is not None
+                    else None
+                )
+                sync_event = foul_adapter.update(
+                    prediction,
+                    frame_id=frame_state.frame_id,
+                    timestamp=float(frame_state.capture_timestamp_ms) / 1000.0,
+                    field_xy=field_xy,
+                )
+                if sync_event is not None:
+                    events.append(sync_event)
+            except Exception as exc:
+                logger.warning("Foul prediction failed; skipping event: %s", exc)
+        return events
+
     def _process_foul(
         self,
         *,
@@ -719,6 +804,7 @@ class InferencePipeline:
         timestamp_s: float,
         ball_state: BallState,
     ):
+        """Deprecated sync hook retained for older callers/tests."""
         foul_detector = getattr(self, "_foul_detector", None)
         if foul_detector is None:
             return None
@@ -1016,6 +1102,10 @@ class InferencePipeline:
                 float(getattr(self._store, "jpeg_encode_latency_ms", 0.0)), 3
             ),
             foul_inference_count=self.foul_inference_count,
+            foul_queue_length=int(getattr(self, "foul_queue_length", 0)),
+            foul_classify_latency_ms=round(
+                float(getattr(self, "foul_classify_latency_ms", 0.0)), 1
+            ),
         )
         self._store.metrics = metrics
 

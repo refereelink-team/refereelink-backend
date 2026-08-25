@@ -39,7 +39,19 @@ mkdir -p assets/weights
 | 旧版角色球员检测 | https://drive.google.com/uc?id=17PXFNlx-jI7VjVo_vQnB1sONjRyvoB-q | `assets/weights/football-player-detection.pt` |
 | 球场检测 | https://drive.google.com/uc?id=1Ma5Kt86tgpdjCTKfum79YMgNnSjcoOyf | `assets/weights/football-pitch-detection.pt` |
 
-可选：犯规检测模型 `mvfoul.pth.tar` (需要 fouls_far 库支持)
+可选：犯规检测模型 `mvfoul.pth.tar`（需要 `fouls_far`/`offside` 支持）。**没有权重时仍可开启 Foul Detect**：管线会输出几何接触候选（`Home T{id} · contact · Away T{id}`）。详见 [docs/gitcode_and_foul_live.md](docs/gitcode_and_foul_live.md)。
+
+## 2.1 Git 远端（gitcode）
+
+日常开发只使用 gitcode：
+
+```bash
+git remote -v   # origin → https://gitcode.com/linshengyin/SC.git
+git checkout dev
+git push -u origin dev
+```
+
+不要向 GitHub push。若 push 返回「image repository」403，说明远端暂为只读镜像，本地继续在 `dev` 提交即可。
 
 ## 3.1 固定广角相机标定
 

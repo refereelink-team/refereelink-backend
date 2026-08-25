@@ -297,6 +297,27 @@ body {
   border-left-color: var(--accent-red);
 }
 
+.event-item.event-foul {
+  border-left-color: #ffd60a;
+  background: #2a2410;
+}
+
+.event-summary {
+  color: #ffe08a;
+  font-weight: 600;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.event-source {
+  background: #1a2a33;
+  color: #7ec8e3;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
 .event-header {
   display: flex;
   gap: 8px;
