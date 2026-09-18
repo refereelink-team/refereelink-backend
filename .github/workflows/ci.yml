@@ -77,7 +77,8 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked --dev
       - name: Python tests
-        run: uv run pytest tests/ -q
+        # jsonschema is locked in the dependency follow-up PR.
+        run: uv run --with 'jsonschema>=4.23,<5' pytest tests/ -q
 
   protocol-contract:
     runs-on: ubuntu-latest
