@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  python:
+  python-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,10 +21,79 @@ jobs:
           python-version: "3.11"
       - name: Install Python dependencies
         run: uv sync --locked --dev
-      - name: Ruff
+      - name: Ruff check
         run: uv run ruff check app tests tools experiments
+
+  python-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: uv sync --locked --dev
+      - name: Ruff format check for changed Python files
+        if: github.event_name == 'pull_request'
+        run: |
+          files="$(git diff --name-only --diff-filter=ACMR "origin/${GITHUB_BASE_REF}"...HEAD -- '*.py')"
+          if [ -z "$files" ]; then
+            echo "No changed Python files to format-check."
+          else
+            uv run ruff format --check $files
+          fi
+
+  python-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: uv sync --locked --dev
+      - name: Pyright
+        # Pyright is locked in the dependency follow-up PR.
+        run: uv run --with 'pyright==1.1.390' pyright app/state/models.py app/server/api/status.py app/server/ws/state.py app/services/publisher.py
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: uv sync --locked --dev
       - name: Python tests
         run: uv run pytest tests/ -q
+
+  protocol-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        run: uv sync --locked --dev
+      - name: Protocol contract tests
+        # jsonschema is locked in the dependency follow-up PR.
+        run: uv run --with 'jsonschema>=4.23,<5' pytest tests/test_protocol_contract.py -q
 
   frontend:
     runs-on: ubuntu-latest
