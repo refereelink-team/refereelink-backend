@@ -61,8 +61,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked --dev
       - name: Pyright
-        # Pyright is locked in the dependency follow-up PR.
-        run: uv run --with 'pyright==1.1.390' pyright app/state/models.py app/server/api/status.py app/server/ws/state.py app/services/publisher.py
+        run: uv run pyright app/state/models.py app/server/api/status.py app/server/ws/state.py app/services/publisher.py
 
   python-tests:
     runs-on: ubuntu-latest
@@ -77,8 +76,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked --dev
       - name: Python tests
-        # jsonschema is locked in the dependency follow-up PR.
-        run: uv run --with 'jsonschema>=4.23,<5' pytest tests/ -q
+        run: uv run pytest tests/ -q --cov=app --cov-report=term-missing --cov-report=xml
 
   protocol-contract:
     runs-on: ubuntu-latest
@@ -93,8 +91,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked --dev
       - name: Protocol contract tests
-        # jsonschema is locked in the dependency follow-up PR.
-        run: uv run --with 'jsonschema>=4.23,<5' pytest tests/test_protocol_contract.py -q
+        run: uv run pytest tests/test_protocol_contract.py -q
 
   frontend:
     runs-on: ubuntu-latest
