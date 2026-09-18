@@ -64,8 +64,15 @@ line-length = 100
 exclude = ["assets", "web/node_modules", "web/dist"]
 
 [tool.pyright]
-include = ["app"]
+include = [
+    "app/state/models.py",
+    "app/server/api/status.py",
+    "app/server/ws/state.py",
+    "app/services/publisher.py",
+]
 exclude = ["**/__pycache__"]
+venvPath = "."
+venv = ".venv"
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = "none"

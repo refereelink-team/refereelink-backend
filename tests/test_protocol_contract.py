@@ -85,14 +85,18 @@ def test_metrics_snapshot_json_contract_has_stable_disconnected_defaults() -> No
 
 
 def test_websocket_frame_payload_obeys_contract() -> None:
-    app.state.store.latest_frame_state = _sample_frame()
-
-    with TestClient(app).websocket_connect("/ws/state") as websocket:
-        for _ in range(5):
-            payload = json.loads(websocket.receive_text())
-            if payload.get("type") == "frame_state":
-                _validate_frame_payload(payload)
-                assert payload["frame_id"] == 42
-                break
-        else:
-            raise AssertionError("WebSocket did not publish a frame_state payload")
+    store = app.state.store
+    previous_frame_state = store.latest_frame_state
+    store.latest_frame_state = _sample_frame()
+    try:
+        with TestClient(app).websocket_connect("/ws/state") as websocket:
+            for _ in range(5):
+                payload = json.loads(websocket.receive_text())
+                if payload.get("type") == "frame_state":
+                    _validate_frame_payload(payload)
+                    assert payload["frame_id"] == 42
+                    break
+            else:
+                raise AssertionError("WebSocket did not publish a frame_state payload")
+    finally:
+        store.latest_frame_state = previous_frame_state

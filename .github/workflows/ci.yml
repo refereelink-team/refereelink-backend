@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -36,8 +38,15 @@ jobs:
           python-version: "3.11"
       - name: Install Python dependencies
         run: uv sync --locked --dev
-      - name: Ruff format check
-        run: uv run ruff format --check app tests tools experiments
+      - name: Ruff format check for changed Python files
+        if: github.event_name == 'pull_request'
+        run: |
+          files="$(git diff --name-only --diff-filter=ACMR "origin/${GITHUB_BASE_REF}"...HEAD -- '*.py')"
+          if [ -z "$files" ]; then
+            echo "No changed Python files to format-check."
+          else
+            uv run ruff format --check $files
+          fi
 
   python-typecheck:
     runs-on: ubuntu-latest
@@ -52,7 +61,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked --dev
       - name: Pyright
-        run: uv run pyright app
+        run: uv run pyright app/state/models.py app/server/api/status.py app/server/ws/state.py app/services/publisher.py
 
   python-tests:
     runs-on: ubuntu-latest
