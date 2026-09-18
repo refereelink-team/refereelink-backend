@@ -1,0 +1,13 @@
+# Repository governance and CI
+/.github/ @caysonyin
+/pyproject.toml @caysonyin
+/uv.lock @caysonyin
+
+# Public state and transport contracts
+/app/state/ @caysonyin
+/app/server/ @caysonyin
+/app/services/publisher.py @caysonyin
+/web/src/types/ @caysonyin
+
+# Critical real-time pipeline
+/app/pipeline/ @caysonyin

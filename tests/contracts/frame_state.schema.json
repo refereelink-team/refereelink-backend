@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/refereelink-team/refereelink-backend/contracts/frame-state.schema.json",
+  "title": "RefereeLink FrameState WebSocket payload",
+  "type": "object",
+  "required": [
+    "type",
+    "frame_id",
+    "capture_timestamp_ms",
+    "processed_timestamp_ms",
+    "processing_fps",
+    "homography_status",
+    "players",
+    "ball",
+    "possession_track_id",
+    "events"
+  ],
+  "properties": {
+    "type": { "const": "frame_state" },
+    "frame_id": { "type": "integer" },
+    "capture_timestamp_ms": { "type": "number" },
+    "processed_timestamp_ms": { "type": "number" },
+    "processing_fps": { "type": "number" },
+    "homography_status": {
+      "type": "string",
+      "enum": ["fresh", "reused", "stale", "unavailable"]
+    },
+    "players": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/player" }
+    },
+    "ball": {
+      "anyOf": [
+        { "$ref": "#/$defs/ball" },
+        { "type": "null" }
+      ]
+    },
+    "possession_track_id": { "type": ["integer", "null"] },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/event" }
+    }
+  },
+  "$defs": {
+    "player": {
+      "type": "object",
+      "required": ["track_id", "role", "team", "team_label", "team_id", "confidence"],
+      "properties": {
+        "track_id": { "type": "integer" },
+        "role": { "type": "string" },
+        "team": { "type": "string", "enum": ["home", "away", "none", "unknown"] },
+        "team_label": { "type": "string", "enum": ["home", "away", "none", "unknown"] },
+        "team_id": { "type": "integer" },
+        "confidence": { "type": "number" },
+        "field_x": { "type": ["number", "null"] },
+        "field_y": { "type": ["number", "null"] }
+      }
+    },
+    "ball": {
+      "type": "object",
+      "required": ["status", "confidence", "age_frames"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["fresh", "predicted", "stale", "unavailable"]
+        },
+        "confidence": { "type": "number" },
+        "age_frames": { "type": "integer" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["id", "event_type", "confidence", "severity", "timestamp", "frame_id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "event_type": { "type": "string", "minLength": 1 },
+        "confidence": { "type": "number" },
+        "severity": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "frame_id": { "type": "integer" }
+      }
+    }
+  }
+}

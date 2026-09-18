@@ -1,0 +1,67 @@
+name: PR policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate pull request policy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title || '';
+            const body = context.payload.pull_request.body || '';
+            const conventionalCommit = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^\)]+\))?!?: .+/;
+            const linkedIssue = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#\d+\b/i;
+            const errors = [];
+
+            if (!conventionalCommit.test(title)) {
+              errors.push('PR title must use Conventional Commits, for example `feat(api): add state endpoint`.');
+            }
+            if (!body.trim()) {
+              errors.push('PR body must not be empty.');
+            }
+            if (!linkedIssue.test(body)) {
+              errors.push('PR body must link a GitHub issue with `Closes #123`, `Fixes #123`, or `Resolves #123`.');
+            }
+            if (!/^##\s+Validation\b/im.test(body)) {
+              errors.push('PR body must include a `## Validation` section.');
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            const forbidden = files
+              .map(file => file.filename)
+              .filter(path => {
+                const lower = path.toLowerCase();
+                const basename = lower.split('/').pop() || lower;
+                if (basename === '.env.example') return false;
+                return /(^|\/)\.env(?:\.|$)/.test(lower)
+                  || /\.(pt|pth|onnx|engine|weights|mp4|avi|mov|mkv|webm|sqlite|sqlite3|db)$/.test(lower)
+                  || /(^|\/)(weights|recordings|checkpoints|videos?)(\/|$)/.test(lower);
+              });
+            if (forbidden.length) {
+              errors.push(`Forbidden secrets or runtime assets detected: ${forbidden.join(', ')}`);
+            }
+
+            const changedLines = files.reduce((sum, file) => sum + file.additions + file.deletions, 0);
+            if (changedLines > 800) {
+              errors.push(`PR is ${changedLines} changed lines; split it into reviewable pieces (limit: 800).`);
+            }
+
+            if (errors.length) {
+              core.setFailed(errors.join('\n'));
+            } else {
+              core.info(`PR policy passed for ${files.length} files and ${changedLines} changed lines.`);
+            }
