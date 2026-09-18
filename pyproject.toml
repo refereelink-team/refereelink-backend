@@ -33,7 +33,7 @@ test = [
     "pytest-asyncio>=0.23",
 ]
 desktop = [
-    "PySide6==6.10.2",
+    "PySide6==6.11.2",
 ]
 
 [dependency-groups]
