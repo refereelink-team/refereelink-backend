@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://refereelink.team/schemas/field-telemetry-1.0.json",
+  "title": "RefereeLink field telemetry batch",
+  "type": "object",
+  "required": ["type", "schema_version", "session_id", "stream_epoch", "client_sequence", "items"],
+  "properties": {
+    "type": {"const": "telemetry_batch"},
+    "schema_version": {"const": "1.0"},
+    "session_id": {"type": "string", "format": "uuid"},
+    "stream_epoch": {"type": "integer", "minimum": 0},
+    "client_sequence": {"type": "integer", "minimum": 0},
+    "items": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {"enum": ["frame", "camera_motion", "dock"]},
+          "session_id": {"type": "string", "format": "uuid"},
+          "frame_id": {"type": "integer", "minimum": 0},
+          "sample_id": {"type": "integer", "minimum": 0},
+          "t_us": {"type": "integer"},
+          "transport_pts90k": {"type": "integer"},
+          "pose_missing_reason": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -4,6 +4,7 @@ import argparse
 import logging
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -16,6 +17,8 @@ from fastapi.responses import StreamingResponse
 from app.pipeline.buffer import PipelineMode
 from app.pipeline.engine import InferencePipeline
 from app.pipeline.source import create_video_source
+from app.field_ingest.api import create_router as create_field_ingest_router
+from app.field_ingest.service import FieldIngestService
 from app.constants.paths import (
     BALL_DETECTION_MODEL_PATH,
     CAMERA_CALIBRATION_PATH,
@@ -65,7 +68,7 @@ def _put_placeholder(text: str) -> None:
     _store.publish_raw_frame(frame)
 
 
-def _generate_mjpeg() -> iter:
+def _generate_mjpeg() -> Iterator[bytes]:
     while True:
         jpeg = _store.latest_jpeg_frame
         if jpeg is None:
@@ -224,6 +227,7 @@ app.state.multiview_service = MultiviewAnalysisService()
 app.state.create_pipeline = create_pipeline
 app.state.attach_and_start_pipeline = attach_and_start_pipeline
 app.state.stop_and_clear_pipeline = stop_and_clear_pipeline
+app.state.field_ingest = FieldIngestService()
 
 app.include_router(health_router)
 app.include_router(status_router)
@@ -232,6 +236,7 @@ app.include_router(multiview_router)
 app.include_router(pipeline_router)
 app.include_router(team_calibration_router)
 app.include_router(ws_router)
+app.include_router(create_field_ingest_router(app.state.field_ingest))
 
 
 @app.get("/video/stream")
