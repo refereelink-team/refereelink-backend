@@ -111,9 +111,7 @@ class FrameJoiner:
         self._frame_order: deque[int] = deque()
         self._expired_pts: set[int] = set()
         self._expired_pts_order: deque[int] = deque()
-        self._motion_samples: deque[tuple[int, dict[str, Any]]] = deque(
-            maxlen=self._max_samples
-        )
+        self._motion_samples: deque[tuple[int, dict[str, Any]]] = deque(maxlen=self._max_samples)
         self._pending: deque[tuple[DecodedVideoFrame, float]] = deque(maxlen=max_pending)
         self._max_wait_s = max_wait_ms / 1000.0
         self._max_pts_delta90k = max_pts_delta90k

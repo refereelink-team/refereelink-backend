@@ -213,7 +213,10 @@ class SRTReceiver:
                     if return_code not in (None, 0):
                         self.metrics.last_error = f"ffmpeg exited with code {return_code}"
                 self._pts_condition.notify_all()
-            if self._stdout_thread is not None and self._stdout_thread is not threading.current_thread():
+            if (
+                self._stdout_thread is not None
+                and self._stdout_thread is not threading.current_thread()
+            ):
                 self._stdout_thread.join(timeout=1)
             if self.on_end is not None:
                 self.on_end()
@@ -229,9 +232,11 @@ class SRTReceiver:
                 payload = _read_exact(process.stdout, frame_size)
                 if not payload:
                     break
-                image = np.frombuffer(payload, dtype=np.uint8).reshape(
-                    (self.height, self.width, 3)
-                ).copy()
+                image = (
+                    np.frombuffer(payload, dtype=np.uint8)
+                    .reshape((self.height, self.width, 3))
+                    .copy()
+                )
                 pts = self._wait_for_pts(decode_index)
                 with self._lock:
                     self.metrics.raw_frame_count += 1

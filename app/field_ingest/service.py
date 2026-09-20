@@ -293,9 +293,7 @@ class FieldIngestService:
             self._enqueue_captured(runtime, runtime.frame_joiner.flush())
             runtime.frame_queue.close()
 
-    def _enqueue_captured(
-        self, runtime: EpochRuntime, frames: list[CapturedFrame]
-    ) -> None:
+    def _enqueue_captured(self, runtime: EpochRuntime, frames: list[CapturedFrame]) -> None:
         for frame in frames:
             runtime.joined_frame_count += 1
             if frame.pose_missing_reason is not None:
@@ -314,7 +312,9 @@ class FieldIngestService:
                 raise PermissionError("live epoch already has an inference consumer")
             runtime.consumer_attached = True
             profile = self.store.get_epoch(session_id, epoch) or {}
-            dimensions = VIDEO_PROFILES.get(profile.get("profile", "720p30"), VIDEO_PROFILES["720p30"])
+            dimensions = VIDEO_PROFILES.get(
+                profile.get("profile", "720p30"), VIDEO_PROFILES["720p30"]
+            )
             return FieldIngestSource(
                 runtime.frame_queue,
                 session_id=str(session_id),
