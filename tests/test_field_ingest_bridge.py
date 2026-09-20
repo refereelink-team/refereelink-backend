@@ -105,9 +105,7 @@ def test_frame_joiner_does_not_match_metadata_after_deadline() -> None:
 
 def test_latest_frame_queue_drops_old_frames() -> None:
     queue = LatestFrameQueue(maxsize=2)
-    frames = [
-        _decoded(pts).image for pts in (1, 2, 3)
-    ]
+    frames = [_decoded(pts).image for pts in (1, 2, 3)]
     from app.field_ingest.frames import CapturedFrame
 
     for index, image in enumerate(frames):
@@ -223,9 +221,7 @@ def test_srt_receiver_delivers_raw_frame_with_showinfo_pts(tmp_path: Path) -> No
 
         def __init__(self) -> None:
             self.stdout = io.BytesIO(bytes([1, 2, 3, 4, 5, 6]))
-            self.stderr = io.BytesIO(
-                b"[Parsed_showinfo_0] n:   0 pts:      0 pts_time:0.000000\n"
-            )
+            self.stderr = io.BytesIO(b"[Parsed_showinfo_0] n:   0 pts:      0 pts_time:0.000000\n")
 
         def poll(self):
             return 0
