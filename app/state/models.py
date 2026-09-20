@@ -74,6 +74,18 @@ class BallState(BaseModel):
     age_frames: int = 0
 
 
+class CaptureSourceMetadata(BaseModel):
+    kind: str = "unknown"
+    session_id: Optional[str] = None
+    stream_epoch: Optional[int] = None
+    source_frame_id: Optional[int] = None
+    t_us: Optional[int] = None
+    transport_pts90k: Optional[int] = None
+    camera_motion: Optional[dict[str, Any]] = None
+    pose_missing_reason: Optional[str] = None
+    backend_received_at_ms: Optional[float] = None
+
+
 class GameEvent(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     event_type: str
@@ -100,6 +112,7 @@ class FrameState(BaseModel):
     ball: Optional[BallState] = None
     possession_track_id: Optional[int] = None
     events: list[GameEvent] = Field(default_factory=list)
+    capture_source: Optional[CaptureSourceMetadata] = None
 
 
 class MetricsSnapshot(BaseModel):
@@ -142,6 +155,14 @@ class MetricsSnapshot(BaseModel):
     jpeg_frames_encoded: int = 0
     jpeg_encode_latency_ms: float = 0.0
     foul_inference_count: int = 0
+    decoded_frames: int = 0
+    decode_dropped_frames: int = 0
+    join_missing_frames: int = 0
+    inference_dropped_frames: int = 0
+    field_session_id: Optional[str] = None
+    field_stream_epoch: Optional[int] = None
+    decode_latency_ms: float = 0.0
+    join_latency_ms: float = 0.0
 
 
 class PipelineConfig(BaseModel):

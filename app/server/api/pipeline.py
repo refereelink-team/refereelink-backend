@@ -29,6 +29,8 @@ class PipelineStartPayload(BaseModel):
     the call falls back to the existing pipeline (if any).
     """
     video_source: Optional[str] = None
+    field_session_id: Optional[str] = None
+    field_stream_epoch: Optional[int] = None
     device: Optional[str] = None
     inference_backend: Optional[str] = None
     enable_foul_detection: Optional[bool] = None
@@ -116,11 +118,15 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             payload.enable_foul_detection,
             payload.foul_checkpoint_path,
             payload.foul_confidence_threshold,
+            payload.field_session_id,
+            payload.field_stream_epoch,
         )
     )
 
     if current is not None and (
         payload.video_source is None
+        and payload.field_session_id is None
+        and payload.field_stream_epoch is None
         and payload.device is None
         and payload.inference_backend is None
         and payload.enable_foul_detection is None
@@ -165,18 +171,34 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             "recording": current.recording_status,
         }
 
-    requested_source = payload.video_source or store.config.video_source
-    if requested_source and (
-        current is None
-        or payload.video_source != store.config.video_source
-        or config_requested
+    field_requested = payload.field_session_id is not None or payload.field_stream_epoch is not None
+    if field_requested and (
+        payload.field_session_id is None
+        or payload.field_stream_epoch is None
+        or payload.video_source is not None
     ):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "choose either video_source or field session/epoch"},
+        )
+    requested_source = None if field_requested else (payload.video_source or store.config.video_source)
+    should_create = (
+        (field_requested and (current is None or config_requested))
+        or (
+            not field_requested
+            and bool(requested_source)
+            and (current is None or payload.video_source != store.config.video_source or config_requested)
+        )
+    )
+    if should_create:
         # Build a new pipeline with the requested source.
         try:
             if create_pipeline is None or attach_and_start is None:
                 return {"status": "error", "detail": "pipeline factory not registered"}
             pipeline = create_pipeline(
                 requested_source,
+                field_session_id=payload.field_session_id,
+                field_stream_epoch=payload.field_stream_epoch,
                 device=device,
                 inference_backend=payload.inference_backend or store.config.inference_backend,
                 enable_foul_detection=(
@@ -303,7 +325,7 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             )
             attach_and_start(pipeline)
             store.update_config({
-                "video_source": requested_source,
+                "video_source": requested_source or "",
                 "device": device,
                 "inference_backend": payload.inference_backend or store.config.inference_backend,
                 "foul_confidence_threshold": (
@@ -427,11 +449,25 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                 "status": "started",
                 "mode": "new",
                 "video_source": requested_source,
+                "field_session_id": payload.field_session_id,
+                "field_stream_epoch": payload.field_stream_epoch,
                 "recording": pipeline.recording_status,
             }
         except FileNotFoundError as exc:
             store.source_status = SourceStatus.ERROR
             return {"status": "error", "detail": f"video source not found: {exc}"}
+        except (KeyError, PermissionError) as exc:
+            # A field epoch is an explicitly allocated, single-consumer live
+            # resource.  Make stale, released, or already-bound epochs a
+            # client-visible conflict instead of returning a 200 error body.
+            if field_requested:
+                store.source_status = SourceStatus.ERROR
+                return JSONResponse(
+                    status_code=409,
+                    content={"status": "error", "detail": str(exc)},
+                )
+            store.source_status = SourceStatus.ERROR
+            return {"status": "error", "detail": str(exc)}
         except Exception as exc:
             logger.exception("Failed to start pipeline with source=%s", requested_source)
             store.source_status = SourceStatus.ERROR
