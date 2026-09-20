@@ -59,9 +59,10 @@ def _capture_source_metadata(captured: CapturedFrame | None):
         return None
     received_ms: float | None = None
     try:
-        received_ms = datetime.fromisoformat(
-            captured.backend_received_at.replace("Z", "+00:00")
-        ).timestamp() * 1000.0
+        received_ms = (
+            datetime.fromisoformat(captured.backend_received_at.replace("Z", "+00:00")).timestamp()
+            * 1000.0
+        )
     except (TypeError, ValueError, AttributeError):
         pass
     from app.state.models import CaptureSourceMetadata
@@ -409,7 +410,9 @@ class InferencePipeline:
         )
         self._vision_core.load_models()
         if self._semantic_manager is None:
-            from app.classification.team_calibration.appearance_features import AppearanceFeatureExtractor
+            from app.classification.team_calibration.appearance_features import (
+                AppearanceFeatureExtractor,
+            )
             from app.classification.team_calibration.bundle import CalibrationBundle
             from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
             from app.classification.team_calibration.role_predictor import CalibratedRoleClassifier
@@ -576,9 +579,7 @@ class InferencePipeline:
         )
         for idx in range(len(detections)):
             tracker_id = (
-                int(detections.tracker_id[idx])
-                if detections.tracker_id is not None
-                else idx
+                int(detections.tracker_id[idx]) if detections.tracker_id is not None else idx
             )
             entity_id = vision_frame.entity_ids.get(tracker_id, tracker_id)
             track_status = vision_frame.track_status.get(tracker_id, "detected")
@@ -679,17 +680,13 @@ class InferencePipeline:
             )
 
         if ball_state.image_x is not None and ball_state.image_y is not None:
-            image_point = np.asarray(
-                [ball_state.image_x, ball_state.image_y], dtype=np.float64
-            )
+            image_point = np.asarray([ball_state.image_x, ball_state.image_y], dtype=np.float64)
             frame_height, frame_width = annotated_frame.shape[:2]
             if np.isfinite(image_point).all():
                 ball_center = tuple(np.rint(image_point).astype(np.int64).tolist())
                 if 0 <= ball_center[0] < frame_width and 0 <= ball_center[1] < frame_height:
                     ball_color = (
-                        (0, 215, 255)
-                        if ball_state.status == BallStatus.FRESH
-                        else (180, 180, 180)
+                        (0, 215, 255) if ball_state.status == BallStatus.FRESH else (180, 180, 180)
                     )
                     cv2.circle(annotated_frame, ball_center, 7, ball_color, 2)
                     cv2.putText(
@@ -812,10 +809,11 @@ class InferencePipeline:
                 self._semantic_last_frame = frame_index
             except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
                 logger.warning("Semantic prediction failed; using previous state: %s", exc)
-        current_ids = {
-            int(track_id)
-            for track_id in detections.tracker_id
-        } if detections.tracker_id is not None else set()
+        current_ids = (
+            {int(track_id) for track_id in detections.tracker_id}
+            if detections.tracker_id is not None
+            else set()
+        )
         return {
             track_id: result
             for track_id, result in self._semantic_results.items()
@@ -908,9 +906,7 @@ class InferencePipeline:
         )
 
     @staticmethod
-    def _find_possession_track_id(
-        players: list[PlayerState], ball: BallState
-    ) -> Optional[int]:
+    def _find_possession_track_id(players: list[PlayerState], ball: BallState) -> Optional[int]:
         if ball.field_x is None or ball.field_y is None:
             return None
         ball_xy = np.array([ball.field_x, ball.field_y], dtype=np.float32)
@@ -926,7 +922,11 @@ class InferencePipeline:
             for p in candidates
         ]
         best_index = int(np.argmin(distances))
-        return candidates[best_index].track_id if distances[best_index] <= POSSESSION_DISTANCE_MM else None
+        return (
+            candidates[best_index].track_id
+            if distances[best_index] <= POSSESSION_DISTANCE_MM
+            else None
+        )
 
     def _emit_metrics(self) -> None:
         elapsed = time.monotonic() - self._metrics_start
@@ -937,6 +937,7 @@ class InferencePipeline:
         memory_mb = 0.0
         try:
             import psutil
+
             memory_mb = psutil.Process().memory_info().rss / (1024 * 1024)
         except Exception:
             pass
@@ -944,6 +945,7 @@ class InferencePipeline:
         gpu_mem_mb = None
         try:
             import pynvml
+
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
@@ -962,9 +964,7 @@ class InferencePipeline:
         player_calls = vision_core.player_inference_count if vision_core is not None else 0
         player_time = vision_core.player_inference_time_ms if vision_core is not None else 0.0
         pitch_time = vision_core.pitch_inference_time_ms if vision_core is not None else 0.0
-        track_interruptions = (
-            vision_core.track_id_interruptions if vision_core is not None else 0
-        )
+        track_interruptions = vision_core.track_id_interruptions if vision_core is not None else 0
         track_occlusion_events = (
             vision_core.track_occlusion_events if vision_core is not None else 0
         )
@@ -974,28 +974,18 @@ class InferencePipeline:
         track_reactivated_count = (
             vision_core.track_reactivated_count if vision_core is not None else 0
         )
-        track_id_switches = (
-            vision_core.track_id_switches if vision_core is not None else 0
-        )
-        track_recovered_count = (
-            vision_core.track_recovered_count if vision_core is not None else 0
-        )
-        track_fragmentations = (
-            vision_core.track_fragmentations if vision_core is not None else 0
-        )
+        track_id_switches = vision_core.track_id_switches if vision_core is not None else 0
+        track_recovered_count = vision_core.track_recovered_count if vision_core is not None else 0
+        track_fragmentations = vision_core.track_fragmentations if vision_core is not None else 0
         track_max_missing_frames = (
             vision_core.track_max_missing_frames if vision_core is not None else 0
         )
-        track_entity_rebinds = (
-            vision_core.track_entity_rebinds if vision_core is not None else 0
-        )
+        track_entity_rebinds = vision_core.track_entity_rebinds if vision_core is not None else 0
         track_entity_fragmentations = (
             vision_core.track_entity_fragmentations if vision_core is not None else 0
         )
         track_lifecycle_counts = (
-            dict(vision_core.track_lifecycle_counts)
-            if vision_core is not None
-            else {}
+            dict(vision_core.track_lifecycle_counts) if vision_core is not None else {}
         )
         ball_processor = self._ball_processor
         ball_calls = ball_processor.detection_count if ball_processor is not None else 0
@@ -1023,7 +1013,8 @@ class InferencePipeline:
             dropped_frames=self._buffer.dropped_frames,
             queue_length=len(self._buffer),
             player_count=len(self._store.latest_frame_state.players)
-            if self._store.latest_frame_state else 0,
+            if self._store.latest_frame_state
+            else 0,
             source_status=self._store.source_status,
             memory_mb=round(memory_mb, 1),
             gpu_memory_mb=round(gpu_mem_mb, 1) if gpu_mem_mb is not None else None,
@@ -1072,7 +1063,7 @@ class InferencePipeline:
 
 def detection_confidence(detection: Any) -> float:
     try:
-        if hasattr(detection, 'confidence') and len(detection) > 2:
+        if hasattr(detection, "confidence") and len(detection) > 2:
             return float(detection.confidence[0]) if detection.confidence is not None else 0.0
         return 0.0
     except (IndexError, TypeError):

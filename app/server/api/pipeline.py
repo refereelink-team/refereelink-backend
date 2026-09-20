@@ -28,6 +28,7 @@ class PipelineStartPayload(BaseModel):
     InferencePipeline bound to that source and starts it. When omitted,
     the call falls back to the existing pipeline (if any).
     """
+
     video_source: Optional[str] = None
     field_session_id: Optional[str] = None
     field_stream_epoch: Optional[int] = None
@@ -179,15 +180,19 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
     ):
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "detail": "choose either video_source or field session/epoch"},
+            content={
+                "status": "error",
+                "detail": "choose either video_source or field session/epoch",
+            },
         )
-    requested_source = None if field_requested else (payload.video_source or store.config.video_source)
-    should_create = (
-        (field_requested and (current is None or config_requested))
-        or (
-            not field_requested
-            and bool(requested_source)
-            and (current is None or payload.video_source != store.config.video_source or config_requested)
+    requested_source = (
+        None if field_requested else (payload.video_source or store.config.video_source)
+    )
+    should_create = (field_requested and (current is None or config_requested)) or (
+        not field_requested
+        and bool(requested_source)
+        and (
+            current is None or payload.video_source != store.config.video_source or config_requested
         )
     )
     if should_create:
@@ -324,127 +329,133 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
                 ),
             )
             attach_and_start(pipeline)
-            store.update_config({
-                "video_source": requested_source or "",
-                "device": device,
-                "inference_backend": payload.inference_backend or store.config.inference_backend,
-                "foul_confidence_threshold": (
-                    payload.foul_confidence_threshold
-                    if payload.foul_confidence_threshold is not None
-                    else store.config.foul_confidence_threshold
-                ),
-                "player_model_path": payload.player_model_path or store.config.player_model_path,
-                "pitch_model_path": payload.pitch_model_path or store.config.pitch_model_path,
-                "camera_calibration_path": (
-                    payload.camera_calibration_path
-                    if payload.camera_calibration_path is not None
-                    else store.config.camera_calibration_path
-                ),
-                "enable_undistortion": (
-                    payload.enable_undistortion
-                    if payload.enable_undistortion is not None
-                    else store.config.enable_undistortion
-                ),
-                "calibration_alpha": (
-                    payload.calibration_alpha
-                    if payload.calibration_alpha is not None
-                    else store.config.calibration_alpha
-                ),
-                "pitch_detection_interval": (
-                    payload.pitch_detection_interval
-                    if payload.pitch_detection_interval is not None
-                    else store.config.pitch_detection_interval
-                ),
-                "imgsz": payload.imgsz if payload.imgsz is not None else store.config.imgsz,
-                "player_confidence": (
-                    payload.player_confidence
-                    if payload.player_confidence is not None
-                    else store.config.player_confidence
-                ),
-                "player_iou": (
-                    payload.player_iou
-                    if payload.player_iou is not None
-                    else store.config.player_iou
-                ),
-                "max_prediction_gap_frames": (
-                    payload.max_prediction_gap_frames
-                    if payload.max_prediction_gap_frames is not None
-                    else store.config.max_prediction_gap_frames
-                ),
-                "track_reactivation_window_frames": (
-                    payload.track_reactivation_window_frames
-                    if payload.track_reactivation_window_frames is not None
-                    else store.config.track_reactivation_window_frames
-                ),
-                "ball_model_path": payload.ball_model_path or store.config.ball_model_path,
-                "enable_ball": (
-                    payload.enable_ball
-                    if payload.enable_ball is not None
-                    else store.config.enable_ball
-                ),
-                "ball_detection_interval": (
-                    payload.ball_detection_interval
-                    if payload.ball_detection_interval is not None
-                    else store.config.ball_detection_interval
-                ),
-                "ball_max_prediction_frames": (
-                    payload.ball_max_prediction_frames
-                    if payload.ball_max_prediction_frames is not None
-                    else store.config.ball_max_prediction_frames
-                ),
-                "role_model_path": payload.role_model_path or store.config.role_model_path,
-                "team_classifier_path": (
-                    payload.team_classifier_path
-                    if payload.team_classifier_path is not None
-                    else store.config.team_classifier_path
-                ),
-                "team_calibration_path": (
-                    payload.team_calibration_path
-                    if payload.team_calibration_path is not None
-                    else store.config.team_calibration_path
-                ),
-                "role_detection_interval": (
-                    payload.role_detection_interval
-                    if payload.role_detection_interval is not None
-                    else store.config.role_detection_interval
-                ),
-                "team_classification_interval": (
-                    payload.team_classification_interval
-                    if payload.team_classification_interval is not None
-                    else store.config.team_classification_interval
-                ),
-                "track_activation_threshold": (
-                    payload.track_activation_threshold
-                    if payload.track_activation_threshold is not None
-                    else store.config.track_activation_threshold
-                ),
-                "track_lost_buffer": (
-                    payload.track_lost_buffer
-                    if payload.track_lost_buffer is not None
-                    else store.config.track_lost_buffer
-                ),
-                "track_matching_threshold": (
-                    payload.track_matching_threshold
-                    if payload.track_matching_threshold is not None
-                    else store.config.track_matching_threshold
-                ),
-                "track_minimum_consecutive_frames": (
-                    payload.track_minimum_consecutive_frames
-                    if payload.track_minimum_consecutive_frames is not None
-                    else store.config.track_minimum_consecutive_frames
-                ),
-                "enable_recording": (
-                    payload.enable_recording
-                    if payload.enable_recording is not None
-                    else store.config.enable_recording
-                ),
-                "target_video_path": (
-                    payload.target_video_path
-                    if payload.target_video_path is not None
-                    else store.config.target_video_path
-                ),
-                "enable_foul_detection": bool(payload.enable_foul_detection) if payload.enable_foul_detection is not None else store.config.enable_foul_detection,
-            })
+            store.update_config(
+                {
+                    "video_source": requested_source or "",
+                    "device": device,
+                    "inference_backend": payload.inference_backend
+                    or store.config.inference_backend,
+                    "foul_confidence_threshold": (
+                        payload.foul_confidence_threshold
+                        if payload.foul_confidence_threshold is not None
+                        else store.config.foul_confidence_threshold
+                    ),
+                    "player_model_path": payload.player_model_path
+                    or store.config.player_model_path,
+                    "pitch_model_path": payload.pitch_model_path or store.config.pitch_model_path,
+                    "camera_calibration_path": (
+                        payload.camera_calibration_path
+                        if payload.camera_calibration_path is not None
+                        else store.config.camera_calibration_path
+                    ),
+                    "enable_undistortion": (
+                        payload.enable_undistortion
+                        if payload.enable_undistortion is not None
+                        else store.config.enable_undistortion
+                    ),
+                    "calibration_alpha": (
+                        payload.calibration_alpha
+                        if payload.calibration_alpha is not None
+                        else store.config.calibration_alpha
+                    ),
+                    "pitch_detection_interval": (
+                        payload.pitch_detection_interval
+                        if payload.pitch_detection_interval is not None
+                        else store.config.pitch_detection_interval
+                    ),
+                    "imgsz": payload.imgsz if payload.imgsz is not None else store.config.imgsz,
+                    "player_confidence": (
+                        payload.player_confidence
+                        if payload.player_confidence is not None
+                        else store.config.player_confidence
+                    ),
+                    "player_iou": (
+                        payload.player_iou
+                        if payload.player_iou is not None
+                        else store.config.player_iou
+                    ),
+                    "max_prediction_gap_frames": (
+                        payload.max_prediction_gap_frames
+                        if payload.max_prediction_gap_frames is not None
+                        else store.config.max_prediction_gap_frames
+                    ),
+                    "track_reactivation_window_frames": (
+                        payload.track_reactivation_window_frames
+                        if payload.track_reactivation_window_frames is not None
+                        else store.config.track_reactivation_window_frames
+                    ),
+                    "ball_model_path": payload.ball_model_path or store.config.ball_model_path,
+                    "enable_ball": (
+                        payload.enable_ball
+                        if payload.enable_ball is not None
+                        else store.config.enable_ball
+                    ),
+                    "ball_detection_interval": (
+                        payload.ball_detection_interval
+                        if payload.ball_detection_interval is not None
+                        else store.config.ball_detection_interval
+                    ),
+                    "ball_max_prediction_frames": (
+                        payload.ball_max_prediction_frames
+                        if payload.ball_max_prediction_frames is not None
+                        else store.config.ball_max_prediction_frames
+                    ),
+                    "role_model_path": payload.role_model_path or store.config.role_model_path,
+                    "team_classifier_path": (
+                        payload.team_classifier_path
+                        if payload.team_classifier_path is not None
+                        else store.config.team_classifier_path
+                    ),
+                    "team_calibration_path": (
+                        payload.team_calibration_path
+                        if payload.team_calibration_path is not None
+                        else store.config.team_calibration_path
+                    ),
+                    "role_detection_interval": (
+                        payload.role_detection_interval
+                        if payload.role_detection_interval is not None
+                        else store.config.role_detection_interval
+                    ),
+                    "team_classification_interval": (
+                        payload.team_classification_interval
+                        if payload.team_classification_interval is not None
+                        else store.config.team_classification_interval
+                    ),
+                    "track_activation_threshold": (
+                        payload.track_activation_threshold
+                        if payload.track_activation_threshold is not None
+                        else store.config.track_activation_threshold
+                    ),
+                    "track_lost_buffer": (
+                        payload.track_lost_buffer
+                        if payload.track_lost_buffer is not None
+                        else store.config.track_lost_buffer
+                    ),
+                    "track_matching_threshold": (
+                        payload.track_matching_threshold
+                        if payload.track_matching_threshold is not None
+                        else store.config.track_matching_threshold
+                    ),
+                    "track_minimum_consecutive_frames": (
+                        payload.track_minimum_consecutive_frames
+                        if payload.track_minimum_consecutive_frames is not None
+                        else store.config.track_minimum_consecutive_frames
+                    ),
+                    "enable_recording": (
+                        payload.enable_recording
+                        if payload.enable_recording is not None
+                        else store.config.enable_recording
+                    ),
+                    "target_video_path": (
+                        payload.target_video_path
+                        if payload.target_video_path is not None
+                        else store.config.target_video_path
+                    ),
+                    "enable_foul_detection": bool(payload.enable_foul_detection)
+                    if payload.enable_foul_detection is not None
+                    else store.config.enable_foul_detection,
+                }
+            )
             return {
                 "status": "started",
                 "mode": "new",
@@ -481,7 +492,10 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             pass
         return {"status": "started", "mode": "resume"}
 
-    return {"status": "error", "detail": "no video_source provided and no existing pipeline to resume"}
+    return {
+        "status": "error",
+        "detail": "no video_source provided and no existing pipeline to resume",
+    }
 
 
 @router.post("/api/pipeline/stop")

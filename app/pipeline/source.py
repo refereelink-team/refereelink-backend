@@ -29,16 +29,13 @@ class VideoSource(ABC):
         self._start_time: Optional[float] = None
 
     @abstractmethod
-    def read(self) -> tuple[bool, Optional[np.ndarray]]:
-        ...
+    def read(self) -> tuple[bool, Optional[np.ndarray]]: ...
 
     @abstractmethod
-    def release(self) -> None:
-        ...
+    def release(self) -> None: ...
 
     @abstractmethod
-    def is_opened(self) -> bool:
-        ...
+    def is_opened(self) -> bool: ...
 
     @property
     def fps(self) -> float:
@@ -96,8 +93,13 @@ class LocalFileSource(VideoSource):
         self._frame_height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self._finished = False
         self._update_source_status(SourceStatus.CONNECTED)
-        logger.info("LocalFileSource opened: %s (%.1f fps, %dx%d)",
-                     resolved, self._fps, self._frame_width, self._frame_height)
+        logger.info(
+            "LocalFileSource opened: %s (%.1f fps, %dx%d)",
+            resolved,
+            self._fps,
+            self._frame_width,
+            self._frame_height,
+        )
 
     def read(self) -> tuple[bool, Optional[np.ndarray]]:
         if self._finished:
@@ -180,10 +182,13 @@ class RTSPSource(VideoSource):
                 self._cap.set(cv2.CAP_PROP_BUFFERSIZE, self._buffer_size)
                 # FFmpeg low-latency flags
                 import os
-                os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS",
-                                      "rtsp_transport;tcp|analyzeduration;100000|"
-                                      "probesize;32768|fflags;nobuffer|"
-                                      "flags;low_delay|max_delay;0")
+
+                os.environ.setdefault(
+                    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+                    "rtsp_transport;tcp|analyzeduration;100000|"
+                    "probesize;32768|fflags;nobuffer|"
+                    "flags;low_delay|max_delay;0",
+                )
 
             self._fps = self._cap.get(cv2.CAP_PROP_FPS)
             if self._fps <= 0:
@@ -228,8 +233,9 @@ class RTSPSource(VideoSource):
 
         self._reconnect_attempts += 1
         self._update_source_status(SourceStatus.RECONNECTING)
-        logger.warning("RTSP reconnecting (attempt %d/%d)...",
-                       self._reconnect_attempts, MAX_RECONNECT_ATTEMPTS)
+        logger.warning(
+            "RTSP reconnecting (attempt %d/%d)...", self._reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+        )
         time.sleep(self._reconnect_delay)
         self._open_capture()
 
