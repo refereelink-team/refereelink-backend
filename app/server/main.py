@@ -94,7 +94,9 @@ def _generate_mjpeg() -> Iterator[bytes]:
 
 
 def create_pipeline(
-    video_source: str,
+    video_source: Optional[str] = None,
+    field_session_id: Optional[str] = None,
+    field_stream_epoch: Optional[int] = None,
     device: str = "cpu",
     inference_backend: str = "auto",
     enable_foul_detection: bool = False,
@@ -130,8 +132,20 @@ def create_pipeline(
 ) -> InferencePipeline:
     """Factory used by both CLI startup and the REST API to build a
     pipeline bound to the shared store."""
+    if field_session_id is not None or field_stream_epoch is not None:
+        if field_session_id is None or field_stream_epoch is None or video_source is not None:
+            raise ValueError("choose either video_source or field session/epoch")
+        source = app.state.field_ingest.open_frame_source(
+            field_session_id,
+            field_stream_epoch,
+            store=_store,
+        )
+    else:
+        if not video_source:
+            raise ValueError("video_source or field session/epoch is required")
+        source = create_video_source(video_source, store=_store)
     return InferencePipeline(
-        source=create_video_source(video_source, store=_store),
+        source=source,
         store=_store,
         device=device,
         inference_backend=inference_backend,

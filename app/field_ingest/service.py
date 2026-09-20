@@ -12,6 +12,12 @@ from typing import Any, Callable
 from uuid import UUID
 
 from app.field_ingest.config import FieldIngestSettings
+from app.field_ingest.frames import (
+    CapturedFrame,
+    DecodedVideoFrame,
+    FrameJoiner,
+    LatestFrameQueue,
+)
 from app.field_ingest.models import (
     CapabilityResponse,
     FieldSessionRegistration,
@@ -25,6 +31,12 @@ from app.field_ingest.receiver import SRTReceiver, probe_srt_support
 from app.field_ingest.store import FieldSessionStore
 
 logger = logging.getLogger(__name__)
+
+VIDEO_PROFILES: dict[str, dict[str, int]] = {
+    "720p30": {"width": 1280, "height": 720, "fps": 30},
+    "540p24": {"width": 960, "height": 540, "fps": 24},
+    "360p15": {"width": 640, "height": 360, "fps": 15},
+}
 
 
 @dataclass
@@ -49,8 +61,15 @@ class EpochRuntime:
         default_factory=lambda: deque(maxlen=512)
     )
     join_file: Any = None
+    frame_joiner: FrameJoiner | None = None
+    frame_queue: LatestFrameQueue = field(default_factory=LatestFrameQueue)
+    consumer_attached: bool = False
+    decoded_frame_count: int = 0
+    joined_frame_count: int = 0
+    join_missing_count: int = 0
 
     def close(self) -> None:
+        self.frame_queue.close()
         for handle in (self.telemetry_file, self.join_file):
             try:
                 handle.close()
@@ -137,6 +156,11 @@ class FieldIngestService:
             join_file=joined_path.open("a", encoding="utf-8"),
             motion_samples=deque(maxlen=self.settings.max_joiner_samples),
         )
+        runtime.frame_joiner = FrameJoiner(
+            session_id,
+            epoch,
+            max_samples=self.settings.max_joiner_samples,
+        )
         self._epochs[(session_id, epoch)] = runtime
         return runtime
 
@@ -145,6 +169,9 @@ class FieldIngestService:
     ) -> LiveAllocationResponse:
         if self.store.get_session(session_id) is None:
             raise KeyError("session not found")
+        profile = VIDEO_PROFILES.get(request.profile)
+        if profile is None:
+            raise ValueError(f"unsupported video profile: {request.profile}")
         capabilities = self.capabilities()
         if not capabilities.receiver_available:
             raise RuntimeError(
@@ -198,6 +225,11 @@ class FieldIngestService:
                 join_file=join_file,
                 motion_samples=deque(maxlen=self.settings.max_joiner_samples),
             )
+            runtime.frame_joiner = FrameJoiner(
+                str(session_id),
+                epoch,
+                max_samples=self.settings.max_joiner_samples,
+            )
             receiver = self._receiver_factory(
                 ffmpeg_bin=self.settings.ffmpeg_bin,
                 host=bind_host,
@@ -207,7 +239,13 @@ class FieldIngestService:
                 stream_token=token,
                 output_path=epoch_dir / "capture.ts",
                 latency_ms=request.latency_ms,
-                on_frame=lambda pts: self._record_decoded_frame(str(session_id), epoch, pts),
+                width=profile["width"],
+                height=profile["height"],
+                on_frame=lambda pts: self._record_decoded_pts(str(session_id), epoch, pts),
+                on_decoded_frame=lambda decoded: self._record_decoded_frame(
+                    str(session_id), epoch, decoded
+                ),
+                on_end=lambda: self._record_receiver_end(str(session_id), epoch),
             )
             runtime.receiver = receiver
             self._epochs[(str(session_id), epoch)] = runtime
@@ -228,17 +266,99 @@ class FieldIngestService:
             profile=request.profile,
         )
 
-    def _record_decoded_frame(self, session_id: str, epoch: int, pts90k: int) -> None:
+    def _record_decoded_pts(self, session_id: str, epoch: int, pts90k: int) -> None:
         with self._lock:
             runtime = self._epochs.get((session_id, epoch))
             if runtime is None:
                 return
             runtime.last_received_at = utc_now()
 
+    def _record_decoded_frame(
+        self, session_id: str, epoch: int, decoded: DecodedVideoFrame
+    ) -> None:
+        with self._lock:
+            runtime = self._epochs.get((session_id, epoch))
+            if runtime is None or runtime.frame_joiner is None:
+                return
+            runtime.last_received_at = decoded.received_at
+            runtime.decoded_frame_count += 1
+            ready = runtime.frame_joiner.ingest_decoded(decoded)
+            self._enqueue_captured(runtime, ready)
+
+    def _record_receiver_end(self, session_id: str, epoch: int) -> None:
+        with self._lock:
+            runtime = self._epochs.get((session_id, epoch))
+            if runtime is None or runtime.frame_joiner is None:
+                return
+            self._enqueue_captured(runtime, runtime.frame_joiner.flush())
+            runtime.frame_queue.close()
+
+    def _enqueue_captured(
+        self, runtime: EpochRuntime, frames: list[CapturedFrame]
+    ) -> None:
+        for frame in frames:
+            runtime.joined_frame_count += 1
+            if frame.pose_missing_reason is not None:
+                runtime.join_missing_count += 1
+            runtime.frame_queue.put(frame)
+
+    def open_frame_source(self, session_id: UUID | str, epoch: int, store=None):
+        from app.pipeline.source import FieldIngestSource
+
+        key = (str(session_id), epoch)
+        with self._lock:
+            runtime = self._epochs.get(key)
+            if runtime is None or runtime.receiver is None:
+                raise KeyError("live epoch not found")
+            if runtime.consumer_attached:
+                raise PermissionError("live epoch already has an inference consumer")
+            runtime.consumer_attached = True
+            profile = self.store.get_epoch(session_id, epoch) or {}
+            dimensions = VIDEO_PROFILES.get(profile.get("profile", "720p30"), VIDEO_PROFILES["720p30"])
+            return FieldIngestSource(
+                runtime.frame_queue,
+                session_id=str(session_id),
+                stream_epoch=epoch,
+                fps=float(dimensions["fps"]),
+                store=store,
+                release_callback=lambda: self.release_frame_source(session_id, epoch),
+                opened_callback=lambda: self._epoch_open(session_id, epoch),
+                metrics_callback=lambda: self.frame_stream_status(session_id, epoch),
+            )
+
+    def _epoch_open(self, session_id: UUID | str, epoch: int) -> bool:
+        with self._lock:
+            runtime = self._epochs.get((str(session_id), epoch))
+            if runtime is None or runtime.receiver is None:
+                return False
+            state = runtime.receiver.snapshot().get("state")
+            return state in {"starting", "listening"}
+
+    def release_frame_source(self, session_id: UUID | str, epoch: int) -> None:
+        self.release_live(UUID(str(session_id)), epoch)
+
+    def frame_stream_status(self, session_id: UUID | str, epoch: int) -> dict[str, Any]:
+        with self._lock:
+            runtime = self._epochs.get((str(session_id), epoch))
+            if runtime is None:
+                raise KeyError("live epoch not found")
+            return {
+                "session_id": str(session_id),
+                "stream_epoch": epoch,
+                "consumer_attached": runtime.consumer_attached,
+                "decoded_frame_count": runtime.decoded_frame_count,
+                "joined_frame_count": runtime.joined_frame_count,
+                "join_missing_count": runtime.join_missing_count,
+                "decode_dropped_frames": runtime.frame_queue.dropped,
+                "queue_length": runtime.frame_queue.length,
+                "queue_closed": runtime.frame_queue.closed,
+            }
+
     def release_live(self, session_id: UUID, epoch: int) -> None:
         with self._lock:
             runtime = self._epochs.pop((str(session_id), epoch), None)
             if runtime is not None:
+                runtime.consumer_attached = False
                 if runtime.receiver is not None:
                     runtime.receiver.stop()
                 runtime.close()
@@ -384,6 +504,9 @@ class FieldIngestService:
                 runtime.motion_samples.append((t_us, item))
         elif item_type == "dock":
             runtime.dock_count += 1
+        if runtime.frame_joiner is not None:
+            ready = runtime.frame_joiner.ingest_item(item, item["received_at"])
+            self._enqueue_captured(runtime, ready)
 
     def artifacts(self, session_id: UUID) -> list[dict[str, Any]]:
         if self.store.get_session(session_id) is None:
@@ -444,6 +567,12 @@ class FieldIngestService:
                         "status": "active",
                         "received_message_count": runtime.received_message_count,
                         "frame_count": runtime.frame_count,
+                        "decoded_frame_count": runtime.decoded_frame_count,
+                        "joined_frame_count": runtime.joined_frame_count,
+                        "join_missing_count": runtime.join_missing_count,
+                        "decode_dropped_frames": runtime.frame_queue.dropped,
+                        "queue_length": runtime.frame_queue.length,
+                        "consumer_attached": runtime.consumer_attached,
                         "motion_count": runtime.motion_count,
                         "dock_count": runtime.dock_count,
                         "last_client_sequence": runtime.last_client_sequence,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -21,6 +22,7 @@ from app.constants.paths import (
 )
 from app.events.engine import EventEngine, FoulEventAdapter
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
+from app.field_ingest.frames import CapturedFrame
 from app.pipeline.recorder import VideoRecorder
 from app.pipeline.source import VideoSource
 from app.state.models import (
@@ -50,6 +52,31 @@ HOME_OVERLAY_COLOR = (147, 20, 255)  # pink / magenta
 AWAY_OVERLAY_COLOR = (255, 191, 0)  # cyan / blue
 REFEREE_OVERLAY_COLOR = (0, 215, 255)  # yellow
 UNKNOWN_OVERLAY_COLOR = (170, 170, 170)
+
+
+def _capture_source_metadata(captured: CapturedFrame | None):
+    if captured is None or not captured.session_id:
+        return None
+    received_ms: float | None = None
+    try:
+        received_ms = datetime.fromisoformat(
+            captured.backend_received_at.replace("Z", "+00:00")
+        ).timestamp() * 1000.0
+    except (TypeError, ValueError, AttributeError):
+        pass
+    from app.state.models import CaptureSourceMetadata
+
+    return CaptureSourceMetadata(
+        kind="field",
+        session_id=captured.session_id,
+        stream_epoch=captured.stream_epoch,
+        source_frame_id=captured.source_frame_id,
+        t_us=captured.t_us,
+        transport_pts90k=captured.transport_pts90k,
+        camera_motion=captured.camera_motion,
+        pose_missing_reason=captured.pose_missing_reason,
+        backend_received_at_ms=received_ms,
+    )
 
 
 def _map_homography_status(status: str) -> HomographyStatus:
@@ -329,8 +356,10 @@ class InferencePipeline:
         self._running = False
         self._store.pipeline_running = False
         self._buffer.close()
-        if self._source.is_opened():
-            self._source.release()
+        # Release every source, including a field source whose queue already
+        # reached EOF.  FieldIngestSource uses release() to detach the epoch
+        # and stop the receiver; checking is_opened() first would leak it.
+        self._source.release()
         recorder = getattr(self, "_recorder", None)
         if recorder is not None:
             recorder.stop()
@@ -463,10 +492,9 @@ class InferencePipeline:
 
         try:
             while self._running:
-                capture_ts = self._source.capture_timestamp_ms()
-                ret, frame = self._source.read()
+                ret, captured = self._source.read_packet()
 
-                if not ret or frame is None:
+                if not ret or captured is None:
                     if not self._source.is_opened():
                         logger.info("Video source ended")
                         self._store.source_status = SourceStatus.DISCONNECTED
@@ -474,8 +502,15 @@ class InferencePipeline:
                     time.sleep(0.01)
                     continue
 
+                frame = captured.image
+                capture_ts = (
+                    captured.capture_unix_us / 1000.0
+                    if captured.capture_unix_us is not None
+                    else self._source.capture_timestamp_ms()
+                )
+
                 inference_start = time.monotonic()
-                frame_state = self._process_frame(frame, capture_ts)
+                frame_state = self._process_frame(frame, capture_ts, captured)
                 inference_end = time.monotonic()
 
                 if frame_state is not None:
@@ -495,15 +530,20 @@ class InferencePipeline:
                     self._last_metrics_emit = now
         finally:
             # A local file can finish without an explicit stop() call.  Reflect
-            # that terminal state and always finalize the optional debug video.
+            # that terminal state, release the source, and finalize the
+            # optional debug video.  release() is idempotent for live sources.
             self._running = False
             self._store.pipeline_running = False
+            self._source.release()
             recorder = getattr(self, "_recorder", None)
             if recorder is not None:
                 recorder.stop()
 
     def _process_frame(
-        self, frame: np.ndarray, capture_timestamp_ms: float
+        self,
+        frame: np.ndarray,
+        capture_timestamp_ms: float,
+        captured: CapturedFrame | None = None,
     ) -> Optional[FrameState]:
         if self._vision_core is None:
             raise RuntimeError("VisionCore is not loaded")
@@ -684,6 +724,7 @@ class InferencePipeline:
             ball=ball_state,
             possession_track_id=self._find_possession_track_id(player_states, ball_state),
             events=[],
+            capture_source=_capture_source_metadata(captured),
         )
         event_engine = getattr(self, "_event_engine", None)
         if event_engine is not None:
@@ -970,6 +1011,9 @@ class InferencePipeline:
             if self._semantic_manager is not None
             else 0
         )
+        stream_metrics = getattr(self._source, "stream_metrics", {})
+        field_session_id = stream_metrics.get("session_id")
+        field_stream_epoch = stream_metrics.get("stream_epoch")
 
         metrics = MetricsSnapshot(
             processing_fps=round(fps, 1),
@@ -1016,6 +1060,12 @@ class InferencePipeline:
                 float(getattr(self._store, "jpeg_encode_latency_ms", 0.0)), 3
             ),
             foul_inference_count=self.foul_inference_count,
+            decoded_frames=int(stream_metrics.get("decoded_frame_count", 0)),
+            decode_dropped_frames=int(stream_metrics.get("decode_dropped_frames", 0)),
+            join_missing_frames=int(stream_metrics.get("join_missing_count", 0)),
+            inference_dropped_frames=self._buffer.dropped_frames,
+            field_session_id=field_session_id,
+            field_stream_epoch=field_stream_epoch,
         )
         self._store.metrics = metrics
 

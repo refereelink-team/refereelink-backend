@@ -5,11 +5,12 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
 
+from app.field_ingest.frames import CapturedFrame, LatestFrameQueue, utc_timestamp
 from app.state.models import SourceStatus
 from app.state.store import StateStore
 
@@ -58,6 +59,23 @@ class VideoSource(ABC):
 
     def capture_timestamp_ms(self) -> float:
         return time.time() * 1000
+
+    def read_packet(self) -> tuple[bool, CapturedFrame | None]:
+        ret, frame = self.read()
+        if not ret or frame is None:
+            return False, None
+        return True, CapturedFrame(
+            image=frame,
+            session_id="",
+            stream_epoch=0,
+            source_frame_id=self.frame_count,
+            t_us=None,
+            transport_pts90k=None,
+            capture_unix_us=int(time.time() * 1_000_000),
+            camera_motion=None,
+            pose_missing_reason=None,
+            backend_received_at=utc_timestamp(),
+        )
 
 
 class LocalFileSource(VideoSource):
@@ -233,6 +251,89 @@ class RTSPSource(VideoSource):
     @property
     def reconnect_attempts(self) -> int:
         return self._reconnect_attempts
+
+
+class FieldIngestSource(VideoSource):
+    """VideoSource adapter for one explicitly bound live field epoch."""
+
+    def __init__(
+        self,
+        queue: LatestFrameQueue,
+        *,
+        session_id: str,
+        stream_epoch: int,
+        fps: float,
+        store: Optional[StateStore] = None,
+        release_callback: Optional[Callable[[], None]] = None,
+        opened_callback: Optional[Callable[[], bool]] = None,
+        metrics_callback: Optional[Callable[[], dict]] = None,
+    ) -> None:
+        super().__init__(store)
+        self._queue = queue
+        self.session_id = session_id
+        self.stream_epoch = stream_epoch
+        self._fps = fps
+        self._release_callback = release_callback
+        self._opened_callback = opened_callback
+        self._metrics_callback = metrics_callback
+        self._released = False
+        self._last_packet: CapturedFrame | None = None
+        self._update_source_status(SourceStatus.RECONNECTING)
+
+    def read(self) -> tuple[bool, Optional[np.ndarray]]:
+        ret, packet = self.read_packet()
+        return ret, packet.image if packet is not None else None
+
+    def read_packet(self) -> tuple[bool, CapturedFrame | None]:
+        if self._released:
+            return False, None
+        packet = self._queue.get(timeout=0.5)
+        if packet is None:
+            if not self.is_opened():
+                self._update_source_status(SourceStatus.DISCONNECTED)
+            return False, None
+        self._last_packet = packet
+        self._increment_frame()
+        self._update_source_status(SourceStatus.CONNECTED)
+        return True, packet
+
+    def is_opened(self) -> bool:
+        if self._released or self._queue.closed:
+            return False
+        if self._opened_callback is None:
+            return True
+        return bool(self._opened_callback())
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        if self._release_callback is not None:
+            self._release_callback()
+        else:
+            self._queue.close()
+        self._update_source_status(SourceStatus.DISCONNECTED)
+
+    def capture_timestamp_ms(self) -> float:
+        if self._last_packet is not None and self._last_packet.capture_unix_us is not None:
+            return self._last_packet.capture_unix_us / 1000.0
+        return super().capture_timestamp_ms()
+
+    @property
+    def stream_metrics(self) -> dict:
+        if self._metrics_callback is None:
+            return {}
+        try:
+            return self._metrics_callback()
+        except KeyError:
+            # The service removes the epoch as soon as the pipeline releases
+            # it.  Metrics emission may race with that cleanup; retain the
+            # source identity without resurrecting the runtime.
+            return {
+                "session_id": self.session_id,
+                "stream_epoch": self.stream_epoch,
+                "queue_closed": True,
+            }
 
 
 def create_video_source(
