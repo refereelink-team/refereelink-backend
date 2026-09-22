@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -195,41 +196,26 @@ def test_prune_waits_for_concurrent_freeze_window(tmp_path: Path, monkeypatch) -
         return original_window_segments(*args, **kwargs)
 
     monkeypatch.setattr(index, "_window_segments", paused_window_segments)
-    snapshots: dict[str, list[IndexedSegment]] = {}
-    pruned: list[Path] = []
-    errors: list[Exception] = []
 
-    def freeze() -> None:
-        try:
-            snapshots.update(
-                index.freeze_window(
-                    (camera.camera_id for camera in config.cameras),
-                    end_time_s=4.0,
-                    window_seconds=3.0,
-                    max_gap_s=1.5,
-                )
-            )
-        except Exception as exc:  # pragma: no cover - assertion below verifies no error
-            errors.append(exc)
+    def freeze() -> dict[str, list[IndexedSegment]]:
+        return index.freeze_window(
+            (camera.camera_id for camera in config.cameras),
+            end_time_s=4.0,
+            window_seconds=3.0,
+            max_gap_s=1.5,
+        )
 
-    def prune() -> None:
-        try:
-            pruned.extend(index.prune(older_than_s=10.0))
-        except Exception as exc:  # pragma: no cover - assertion below verifies no error
-            errors.append(exc)
+    def prune() -> list[Path]:
+        return index.prune(older_than_s=10.0)
 
-    freeze_thread = threading.Thread(target=freeze)
-    freeze_thread.start()
-    assert entered_freeze.wait(timeout=5)
-    prune_thread = threading.Thread(target=prune)
-    prune_thread.start()
-    release_freeze.set()
-    freeze_thread.join(timeout=5)
-    prune_thread.join(timeout=5)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        freeze_future = executor.submit(freeze)
+        assert entered_freeze.wait(timeout=5)
+        prune_future = executor.submit(prune)
+        release_freeze.set()
+        snapshots = freeze_future.result(timeout=5)
+        pruned = prune_future.result(timeout=5)
 
-    assert not freeze_thread.is_alive()
-    assert not prune_thread.is_alive()
-    assert errors == []
     frozen_paths = {segment.path for snapshot in snapshots.values() for segment in snapshot}
     assert set(pruned) == set(paths) - frozen_paths
 
