@@ -132,6 +132,11 @@ class SegmentIndex:
             float(row["latest_end"]) if row is not None and row["latest_end"] is not None else None
         )
 
+    def segment_paths(self) -> set[Path]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT path FROM live_segments").fetchall()
+        return {Path(row["path"]) for row in rows}
+
     def buffer_seconds(self, camera_id: str, *, max_gap_s: float) -> float:
         segments = self._segments_for_camera(camera_id)
         if not segments:

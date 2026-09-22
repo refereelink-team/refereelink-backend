@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from app.multiview.live_ingest.config import LiveCameraConfig, LiveIngestConfig
@@ -32,6 +33,7 @@ class LiveIngestSupervisor:
         self.ffprobe_bin = ffprobe_bin
         self.poll_seconds = poll_seconds
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
+        self._capture_dirs: dict[str, Path] = {}
         self._seen_paths: set[Path] = set()
         self._next_restart_at: dict[str, float] = {}
 
@@ -103,6 +105,7 @@ class LiveIngestSupervisor:
             return
         if existing is not None:
             self._processes.pop(camera.camera_id, None)
+            self._capture_dirs.pop(camera.camera_id, None)
             self.segment_index.set_camera_error(camera.camera_id, "FFmpeg 采集进程已退出，正在重连")
             self.segment_index.increment_reconnect(camera.camera_id)
             self._next_restart_at[camera.camera_id] = now_s + 2.0
@@ -110,16 +113,17 @@ class LiveIngestSupervisor:
             return
 
         capture_dir = self.config.ring_root / camera.camera_id / f"capture-{uuid.uuid4().hex}"
-        capture_dir.mkdir(parents=True, exist_ok=False)
         try:
+            capture_dir.mkdir(parents=True, exist_ok=False)
             self._processes[camera.camera_id] = subprocess.Popen(
                 self.ffmpeg_command(camera, output_dir=capture_dir),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            self._capture_dirs[camera.camera_id] = capture_dir
         except OSError:
-            capture_dir.rmdir()
+            self._remove_empty_capture_dir(capture_dir)
             self.segment_index.set_camera_error(camera.camera_id, "无法启动 FFmpeg 采集进程")
             self._next_restart_at[camera.camera_id] = now_s + 5.0
 
@@ -177,3 +181,32 @@ class LiveIngestSupervisor:
                 self._seen_paths.discard(path.resolve())
             except OSError:
                 logger.warning("Unable to delete expired multiview segment: %s", path.name)
+        self._prune_capture_artifacts(older_than_s=now_s - retention_s)
+
+    def _prune_capture_artifacts(self, *, older_than_s: float) -> None:
+        indexed_paths = self.segment_index.segment_paths()
+        active_dirs = set(self._capture_dirs.values())
+        for camera in self.config.cameras:
+            camera_dir = self.config.ring_root / camera.camera_id
+            if not camera_dir.is_dir():
+                continue
+            for capture_dir in camera_dir.glob("capture-*"):
+                if not capture_dir.is_dir():
+                    continue
+                for path in capture_dir.glob("*.ts"):
+                    resolved = path.resolve()
+                    if resolved in indexed_paths:
+                        continue
+                    try:
+                        if path.stat().st_mtime < older_than_s:
+                            path.unlink()
+                            self._seen_paths.discard(resolved)
+                    except OSError:
+                        logger.warning("Unable to delete stale multiview segment: %s", path.name)
+                if capture_dir not in active_dirs:
+                    self._remove_empty_capture_dir(capture_dir)
+
+    @staticmethod
+    def _remove_empty_capture_dir(capture_dir: Path) -> None:
+        with suppress(OSError):
+            capture_dir.rmdir()

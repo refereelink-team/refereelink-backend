@@ -133,6 +133,57 @@ def test_reconnect_reindexes_new_capture_directory(tmp_path: Path, monkeypatch) 
     }
 
 
+def test_capture_directory_failure_uses_camera_backoff(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    index = SegmentIndex(config.database_path)
+    supervisor = LiveIngestSupervisor(config, segment_index=index)
+    camera = config.cameras[0]
+    original_mkdir = Path.mkdir
+
+    def fail_capture_mkdir(path: Path, *args, **kwargs) -> None:
+        if path.name.startswith("capture-"):
+            raise OSError("no space left on device")
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(supervisor_module.Path, "mkdir", fail_capture_mkdir)
+    supervisor._ensure_camera_process(camera, now_s=100.0)
+
+    assert camera.camera_id not in supervisor._processes
+    assert supervisor._next_restart_at[camera.camera_id] == 105.0
+    assert index.camera_health(camera.camera_id).last_error == "无法启动 FFmpeg 采集进程"
+
+
+def test_prune_removes_stale_unindexed_segments_and_capture_dirs(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    supervisor = LiveIngestSupervisor(config)
+    camera = config.cameras[0]
+    camera_dir = config.ring_root / camera.camera_id
+    stale_capture_dir = camera_dir / "capture-stale"
+    stale_capture_dir.mkdir(parents=True)
+    stale_segment = stale_capture_dir / "segment-0000000000.ts"
+    stale_segment.write_bytes(b"x" * 2048)
+    active_capture_dir = camera_dir / "capture-active"
+    active_capture_dir.mkdir()
+    active_stale_segment = active_capture_dir / "segment-0000000000.ts"
+    active_stale_segment.write_bytes(b"x" * 2048)
+    empty_capture_dir = camera_dir / "capture-empty"
+    empty_capture_dir.mkdir()
+    now_s = time.time()
+    for path in (stale_segment, active_stale_segment):
+        os.utime(path, (now_s - 10.0, now_s - 10.0))
+        supervisor._seen_paths.add(path.resolve())
+    supervisor._capture_dirs[camera.camera_id] = active_capture_dir
+
+    supervisor._prune(now_s)
+
+    assert not stale_segment.exists()
+    assert not stale_capture_dir.exists()
+    assert not active_stale_segment.exists()
+    assert active_capture_dir.exists()
+    assert not empty_capture_dir.exists()
+    assert not (supervisor._seen_paths & {stale_segment.resolve(), active_stale_segment.resolve()})
+
+
 def test_segment_ring_pruning_respects_frozen_window(tmp_path: Path) -> None:
     config = _config(tmp_path)
     index = SegmentIndex(config.database_path)
