@@ -337,6 +337,49 @@
   font-size: 12px;
 }
 
+.mv-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+
+.mv-live-buffer {
+  min-width: 0;
+  max-width: 250px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0 6px;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: rgba(255, 214, 10, 0.08);
+  color: var(--mv-amber);
+  font-size: 10px;
+}
+
+.mv-live-buffer.ready { color: var(--mv-green); background: rgba(48, 209, 88, 0.1); }
+.mv-live-buffer strong { color: var(--mv-text); font-size: 11px; font-weight: 600; }
+.mv-live-buffer span { color: currentColor; font: 10px/1.4 var(--mv-mono); white-space: nowrap; }
+.mv-live-buffer small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mv-muted);
+  font-size: 10px;
+}
+
+.mv-enter-review {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 13px;
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  background: var(--mv-green);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.mv-enter-review:hover:not(:disabled) { background: #48df71; }
+.mv-enter-review:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .mv-heading-tags { display: flex; align-items: center; gap: 6px; }
 
 .mv-heading-tags .risk.high { color: var(--mv-red); background: rgba(255, 69, 58, 0.14); }
@@ -981,6 +1024,8 @@
   .mv-top-stats .mv-stat { display: none; }
   .mv-workspace { display: grid; grid-template-columns: 230px minmax(500px, 1fr); min-height: calc(100vh - 76px); }
   .mv-right-column { grid-column: 1 / 3; display: grid; grid-template-columns: 1fr 1.25fr 1fr; align-items: start; }
+  .mv-heading-actions { max-width: 58%; }
+  .mv-live-buffer { max-width: 180px; }
 }
 
 @media (max-width: 760px) {
@@ -994,6 +1039,9 @@
   .mv-event-list { flex-direction: row; overflow-x: auto; }
   .mv-event-card { min-width: 220px; }
   .mv-center-column { display: flex; flex-direction: column; }
+  .mv-event-heading { align-items: flex-start; flex-direction: column; }
+  .mv-heading-actions { width: 100%; max-width: none; justify-content: flex-start; flex-wrap: wrap; }
+  .mv-live-buffer { flex: 1 1 190px; }
   .mv-camera-grid { min-height: 460px; grid-template-columns: 1fr; grid-template-rows: 290px 160px; }
   .mv-side-cameras { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
   .mv-timeline-controls { flex-wrap: wrap; }

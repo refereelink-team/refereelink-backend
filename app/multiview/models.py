@@ -20,6 +20,11 @@ class ReviewState(str, Enum):
     UNCERTAIN = "uncertain"
 
 
+class CaptureState(str, Enum):
+    READY = "capture_ready"
+    FAILED = "capture_failed"
+
+
 class RiskLevel(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
@@ -243,6 +248,7 @@ class MultiviewCase(BaseModel):
     videos: list[EvidenceView] = Field(min_length=1)
     scripted_result: ScriptedResult | None = None
     evidence_notes: list[str] = Field(default_factory=list)
+    capture_state: CaptureState | None = None
 
 
 class MultiviewAnalyzeRequest(BaseModel):

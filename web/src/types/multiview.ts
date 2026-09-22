@@ -24,6 +24,7 @@ export interface MultiviewCase {
   videos: EvidenceView[];
   evidence_notes: string[];
   review_revision: number;
+  capture_state?: 'capture_ready' | 'capture_failed';
 }
 
 export type EvidenceSource = 'model' | 'human' | 'geometry' | 'rule';
@@ -180,4 +181,25 @@ export interface MultiviewStatus {
   missing: string[];
   mode: 'model' | 'scripted_fallback';
   fallback_available: boolean;
+}
+
+export interface LiveCameraStatus {
+  camera_id: string;
+  display_name: string;
+  role: EvidenceView['role'];
+  online: boolean;
+  latest_segment_age_s: number | null;
+  buffer_seconds: number;
+  reconnect_count: number;
+  last_error: string | null;
+}
+
+export interface LiveMultiviewStatus {
+  configured: boolean;
+  ready: boolean;
+  trigger_ready: boolean;
+  buffer_target_s: number;
+  min_buffer_s: number;
+  cameras: LiveCameraStatus[];
+  message: string;
 }

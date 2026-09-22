@@ -3,8 +3,10 @@ import {
   analyzeMultiviewCase,
   explainMultiviewReview,
   fetchMultiviewCases,
+  fetchLiveMultiviewStatus,
   fetchMultiviewReview,
   fetchMultiviewStatus,
+  triggerLiveMultiviewReview,
   updateMultiviewReview,
 } from '../api/multiview';
 import FoulFactsPanel from '../components/multiview/FoulFactsPanel';
@@ -15,6 +17,7 @@ import type {
   EvidenceView,
   ExplanationResponse,
   FoulFacts,
+  LiveMultiviewStatus,
   LocalizationBox,
   MultiviewCase,
   MultiviewDecision,
@@ -340,6 +343,9 @@ export default function MultiviewReviewPage() {
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [status, setStatus] = useState<MultiviewStatus | null>(null);
+  const [liveStatus, setLiveStatus] = useState<LiveMultiviewStatus | null>(null);
+  const [triggeringLiveReview, setTriggeringLiveReview] = useState(false);
+  const [liveCaptureMessage, setLiveCaptureMessage] = useState<string | null>(null);
   const [decision, setDecision] = useState<MultiviewDecision | null>(null);
   const [review, setReview] = useState<ReviewRecord | null>(null);
   const [facts, setFacts] = useState<FoulFacts>(() => emptyFacts());
@@ -371,16 +377,33 @@ export default function MultiviewReviewPage() {
   }, [playing]);
 
   useEffect(() => {
-    Promise.all([fetchMultiviewCases(), fetchMultiviewStatus()])
-      .then(([loadedCases, loadedStatus]) => {
+    Promise.all([fetchMultiviewCases(), fetchMultiviewStatus(), fetchLiveMultiviewStatus()])
+      .then(([loadedCases, loadedStatus, loadedLiveStatus]) => {
         setCases(loadedCases);
         setStatus(loadedStatus);
+        setLiveStatus(loadedLiveStatus);
         if (loadedCases[0]) {
           setSelectedId(loadedCases[0].case_id);
           setSelectedCameraId(loadedCases[0].videos[0]?.camera_id ?? null);
         }
       })
       .catch((error) => setLoadError(String(error)));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshLiveStatus = () => {
+      fetchLiveMultiviewStatus()
+        .then((nextStatus) => {
+          if (!cancelled) setLiveStatus(nextStatus);
+        })
+        .catch(() => undefined);
+    };
+    const interval = window.setInterval(refreshLiveStatus, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -575,6 +598,34 @@ export default function MultiviewReviewPage() {
     setPlaying(false);
   }
 
+  async function triggerLiveReview() {
+    if (!liveStatus?.trigger_ready || triggeringLiveReview) return;
+    setTriggeringLiveReview(true);
+    setLiveCaptureMessage('正在冻结三路 GOP 缓冲并封装 MP4…');
+    try {
+      const triggered = await triggerLiveMultiviewReview();
+      const [loadedCases, refreshedLiveStatus] = await Promise.all([
+        fetchMultiviewCases(),
+        fetchLiveMultiviewStatus(),
+      ]);
+      setCases(loadedCases);
+      setLiveStatus(refreshedLiveStatus);
+      const liveCase = loadedCases.find((item) => item.case_id === triggered.case_id);
+      if (!liveCase) throw new Error('新复核案例未出现在队列中');
+      selectCase(liveCase);
+      setLiveCaptureMessage('三路回放已就绪，已进入新复核案例');
+    } catch (error) {
+      setLiveCaptureMessage(`进入复核失败：${String(error)}`);
+      try {
+        setLiveStatus(await fetchLiveMultiviewStatus());
+      } catch {
+        // Preserve the original capture error when status refresh also fails.
+      }
+    } finally {
+      setTriggeringLiveReview(false);
+    }
+  }
+
   async function runAnalysis() {
     if (!activeCase || analyzing) return;
     const requestedCaseId = activeCase.case_id;
@@ -737,11 +788,35 @@ export default function MultiviewReviewPage() {
               <h2>{activeCase ? `${activeCase.match_clock} · ${activeCase.title}` : '等待案例'}</h2>
               <span>{activeCase ? `${activeCase.videos.length} 机位 · ${activeCase.zone}` : ''}</span>
             </div>
-            <div className="mv-heading-tags">
-              <span className={`risk ${activeCase?.risk_level ?? 'low'}`}>{activeCase?.risk_level === 'high' ? '高风险' : '常规复核'}</span>
-              <span className={reviewState ?? activeCase?.review_state ?? 'pending'}>
-                {stateLabels[reviewState ?? activeCase?.review_state ?? 'pending']}
-              </span>
+            <div className="mv-heading-actions">
+              <div
+                className={`mv-live-buffer ${liveStatus?.trigger_ready ? 'ready' : 'waiting'}`}
+                title={liveCaptureMessage ?? liveStatus?.message ?? '正在读取实时缓冲状态'}
+              >
+                <strong>实时三机位</strong>
+                <span>
+                  {liveStatus?.configured
+                    ? `${liveStatus.cameras.filter((camera) => camera.online).length}/3 在线 · ${liveStatus.min_buffer_s.toFixed(1)} / ${liveStatus.buffer_target_s.toFixed(0)} 秒`
+                    : '未配置'}
+                </span>
+                <small>
+                  {liveCaptureMessage ?? liveStatus?.message ?? '正在读取缓冲状态'}
+                </small>
+              </div>
+              <button
+                className="mv-enter-review"
+                disabled={!liveStatus?.trigger_ready || triggeringLiveReview}
+                onClick={triggerLiveReview}
+                title={liveStatus?.message}
+              >
+                {triggeringLiveReview ? '正在进入复核…' : '进入复核'}
+              </button>
+              <div className="mv-heading-tags">
+                <span className={`risk ${activeCase?.risk_level ?? 'low'}`}>{activeCase?.risk_level === 'high' ? '高风险' : '常规复核'}</span>
+                <span className={reviewState ?? activeCase?.review_state ?? 'pending'}>
+                  {stateLabels[reviewState ?? activeCase?.review_state ?? 'pending']}
+                </span>
+              </div>
             </div>
           </div>
 

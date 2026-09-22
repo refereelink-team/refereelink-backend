@@ -35,6 +35,8 @@ from app.server.api.pipeline import router as pipeline_router
 from app.server.api.team_calibration import router as team_calibration_router
 from app.server.ws.state import router as ws_router
 from app.services.publisher import WebSocketPublisher
+from app.multiview.live_ingest.service import LiveMultiviewService
+from app.multiview.repository import MultiviewCaseRepository
 from app.multiview.service import MultiviewAnalysisService
 from app.state.models import SourceStatus
 from app.state.store import StateStore
@@ -230,7 +232,12 @@ app.add_middleware(
 app.state.store = _store
 app.state.publisher = _publisher
 app.state.pipeline = None
-app.state.multiview_service = MultiviewAnalysisService()
+app.state.live_multiview_service = LiveMultiviewService.from_environment()
+app.state.multiview_service = MultiviewAnalysisService(
+    repository=MultiviewCaseRepository(
+        live_case_store=app.state.live_multiview_service.case_store
+    )
+)
 app.state.create_pipeline = create_pipeline
 app.state.attach_and_start_pipeline = attach_and_start_pipeline
 app.state.stop_and_clear_pipeline = stop_and_clear_pipeline

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from app.multiview.live_ingest.coordinator import LiveCaptureFailed, LiveCaptureUnavailable
 from app.multiview.models import ExplanationRequest, MultiviewAnalyzeRequest, ReviewUpdateRequest
 from app.multiview.review_store import ReviewRevisionConflict
 from app.multiview.service import MultiviewAnalysisService
@@ -14,9 +15,15 @@ def _service(request: Request) -> MultiviewAnalysisService:
     return request.app.state.multiview_service  # type: ignore[attr-defined]
 
 
+def _live_service(request: Request):
+    return request.app.state.live_multiview_service  # type: ignore[attr-defined]
+
+
 def _case_payload(service: MultiviewAnalysisService, case) -> dict:
     payload = case.model_dump(mode="json")
     payload.pop("scripted_result", None)
+    if payload.get("capture_state") is None:
+        payload.pop("capture_state", None)
     for view_payload, view in zip(payload["videos"], case.videos):
         resolved = service.repository.resolve_view_media(case.case_id, view.camera_id)
         view_payload.pop("path", None)
@@ -66,6 +73,27 @@ def get_case_media(case_id: str, camera_id: str, request: Request) -> FileRespon
 @router.get("/status")
 def get_status(request: Request) -> dict:
     return _service(request).status()
+
+
+@router.get("/live/status")
+def get_live_status(request: Request) -> dict:
+    return _live_service(request).status()
+
+
+@router.post("/live/trigger")
+def trigger_live_review(request: Request) -> dict:
+    try:
+        case = _live_service(request).trigger()
+    except LiveCaptureUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LiveCaptureFailed as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "LIVE_CAPTURE_FAILED", "case_id": exc.case_id, "message": str(exc)},
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"case_id": case.case_id, "capture_state": case.capture_state}
 
 
 @router.post("/analyze")
