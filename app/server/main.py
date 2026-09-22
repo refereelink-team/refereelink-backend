@@ -234,9 +234,7 @@ app.state.publisher = _publisher
 app.state.pipeline = None
 app.state.live_multiview_service = LiveMultiviewService.from_environment()
 app.state.multiview_service = MultiviewAnalysisService(
-    repository=MultiviewCaseRepository(
-        live_case_store=app.state.live_multiview_service.case_store
-    )
+    repository=MultiviewCaseRepository(live_case_store=app.state.live_multiview_service.case_store)
 )
 app.state.create_pipeline = create_pipeline
 app.state.attach_and_start_pipeline = attach_and_start_pipeline

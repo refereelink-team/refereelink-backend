@@ -30,7 +30,9 @@ def _config(tmp_path: Path, *, buffer_seconds: float = 3.0) -> LiveIngestConfig:
         cameras=(
             LiveCameraConfig("cam_main", "主机位", CameraRole.MAIN, "rtsp://camera-main/live"),
             LiveCameraConfig("cam_side", "侧机位", CameraRole.SIDE, "rtsp://camera-side/live"),
-            LiveCameraConfig("cam_replay", "端线机位", CameraRole.REPLAY, "rtsp://camera-replay/live"),
+            LiveCameraConfig(
+                "cam_replay", "端线机位", CameraRole.REPLAY, "rtsp://camera-replay/live"
+            ),
         ),
         output_root=tmp_path / "live",
         buffer_seconds=buffer_seconds,

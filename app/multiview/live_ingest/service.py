@@ -27,7 +27,9 @@ class LiveMultiviewService:
     ) -> None:
         self.config = config
         self.config_error = config_error
-        database_path = config.database_path if config is not None else DEFAULT_OUTPUT_ROOT / "live.sqlite3"
+        database_path = (
+            config.database_path if config is not None else DEFAULT_OUTPUT_ROOT / "live.sqlite3"
+        )
         self.segment_index = segment_index or SegmentIndex(database_path)
         self.case_store = case_store or LiveMultiviewCaseStore(database_path)
         self.coordinator = coordinator or (

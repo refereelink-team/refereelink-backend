@@ -128,7 +128,9 @@ class SegmentIndex:
                 "SELECT MAX(end_time_s) AS latest_end FROM live_segments WHERE camera_id = ?",
                 (camera_id,),
             ).fetchone()
-        return float(row["latest_end"]) if row is not None and row["latest_end"] is not None else None
+        return (
+            float(row["latest_end"]) if row is not None and row["latest_end"] is not None else None
+        )
 
     def buffer_seconds(self, camera_id: str, *, max_gap_s: float) -> float:
         segments = self._segments_for_camera(camera_id)

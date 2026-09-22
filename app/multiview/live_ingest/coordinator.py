@@ -58,7 +58,12 @@ def probe_media(path: str | Path, *, ffprobe_bin: str = "ffprobe") -> dict[str, 
             timeout=20,
         )
         payload = json.loads(result.stdout)
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ) as exc:
         raise RuntimeError("无法探测媒体参数") from exc
     streams = [stream for stream in payload.get("streams", []) if stream.get("codec_name")]
     if not streams:

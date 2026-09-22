@@ -98,7 +98,9 @@ def load_live_ingest_config(path: str | Path | None = None) -> LiveIngestConfig:
     )
 
 
-def try_load_live_ingest_config(path: str | Path | None = None) -> tuple[LiveIngestConfig | None, str | None]:
+def try_load_live_ingest_config(
+    path: str | Path | None = None,
+) -> tuple[LiveIngestConfig | None, str | None]:
     try:
         return load_live_ingest_config(path), None
     except LiveIngestConfigError as exc:
