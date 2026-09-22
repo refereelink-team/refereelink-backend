@@ -6,6 +6,8 @@ import logging
 from app.multiview.live_ingest.config import LiveIngestConfigError, load_live_ingest_config
 from app.multiview.live_ingest.supervisor import LiveIngestSupervisor
 
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -20,7 +22,7 @@ def main() -> None:
         config = load_live_ingest_config(args.config)
     except LiveIngestConfigError as exc:
         parser.error(str(exc))
-    logging.info("Starting isolated live multiview ingest for %d cameras", len(config.cameras))
+    logger.info("Starting isolated live multiview ingest for %d cameras", len(config.cameras))
     LiveIngestSupervisor(config).run_forever()
 
 

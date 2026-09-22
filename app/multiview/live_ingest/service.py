@@ -37,7 +37,7 @@ class LiveMultiviewService:
         )
 
     @classmethod
-    def from_environment(cls, path: str | Path | None = None) -> "LiveMultiviewService":
+    def from_environment(cls, path: str | Path | None = None) -> LiveMultiviewService:
         config, config_error = try_load_live_ingest_config(path)
         return cls(config, config_error=config_error)
 

@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.multiview.live_ingest.config import LiveCameraConfig, LiveIngestConfig
@@ -21,7 +22,7 @@ from app.multiview.models import CameraRole, CaptureState, EvidenceView, Multivi
 from app.multiview.repository import MultiviewCaseRepository
 from app.multiview.review_store import MultiviewReviewStore
 from app.multiview.service import MultiviewAnalysisService
-from app.server.main import app
+from app.server.api.multiview import router as multiview_router
 
 
 def _config(tmp_path: Path, *, buffer_seconds: float = 3.0) -> LiveIngestConfig:
@@ -136,30 +137,26 @@ def test_live_status_trigger_and_dynamic_case_api(tmp_path: Path) -> None:
         repository=MultiviewCaseRepository(live_case_store=case_store),
         review_store=MultiviewReviewStore(tmp_path / "reviews.sqlite3"),
     )
-    previous_live = app.state.live_multiview_service
-    previous_analysis = app.state.multiview_service
-    app.state.live_multiview_service = live_service
-    app.state.multiview_service = analysis_service
-    try:
-        with TestClient(app) as client:
-            status = client.get("/api/multiview/live/status")
-            assert status.status_code == 200
-            assert status.json()["configured"] is True
-            assert status.json()["trigger_ready"] is False
+    api = FastAPI()
+    api.state.live_multiview_service = live_service
+    api.state.multiview_service = analysis_service
+    api.include_router(multiview_router)
+    with TestClient(api) as client:
+        status = client.get("/api/multiview/live/status")
+        assert status.status_code == 200
+        assert status.json()["configured"] is True
+        assert status.json()["trigger_ready"] is False
 
-            triggered = client.post("/api/multiview/live/trigger")
-            assert triggered.status_code == 200
-            assert triggered.json() == {
-                "case_id": "live-api-case",
-                "capture_state": "capture_ready",
-            }
-            case = client.get("/api/multiview/cases/live-api-case")
-            assert case.status_code == 200
-            assert case.json()["capture_state"] == "capture_ready"
-            assert all("path" not in view for view in case.json()["videos"])
-    finally:
-        app.state.live_multiview_service = previous_live
-        app.state.multiview_service = previous_analysis
+        triggered = client.post("/api/multiview/live/trigger")
+        assert triggered.status_code == 200
+        assert triggered.json() == {
+            "case_id": "live-api-case",
+            "capture_state": "capture_ready",
+        }
+        case = client.get("/api/multiview/cases/live-api-case")
+        assert case.status_code == 200
+        assert case.json()["capture_state"] == "capture_ready"
+        assert all("path" not in view for view in case.json()["videos"])
 
 
 @pytest.mark.skipif(
