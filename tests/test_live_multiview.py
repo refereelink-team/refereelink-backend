@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.multiview.live_ingest import supervisor as supervisor_module
 from app.multiview.live_ingest.config import LiveCameraConfig, LiveIngestConfig
 from app.multiview.live_ingest.coordinator import LiveSliceCoordinator, probe_media
 from app.multiview.live_ingest.service import LiveMultiviewService
@@ -70,6 +74,64 @@ def test_ingest_uses_isolated_rtsp_tcp_h264_stream_copy(tmp_path: Path) -> None:
     assert command[command.index("-segment_time") + 1] == "1.0"
 
 
+def test_reconnect_reindexes_new_capture_directory(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    index = SegmentIndex(config.database_path)
+    supervisor = LiveIngestSupervisor(config, segment_index=index)
+    camera = config.cameras[0]
+    commands: list[list[str]] = []
+
+    class ExitedProcess:
+        def poll(self) -> int:
+            return 1
+
+    monkeypatch.setattr(
+        supervisor_module.subprocess,
+        "Popen",
+        lambda command, **_: commands.append(command) or ExitedProcess(),
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "probe_media",
+        lambda *_args, **_kwargs: {
+            "codec_name": "h264",
+            "profile": "Main",
+            "width": 64,
+            "height": 48,
+            "fps": 10.0,
+            "has_b_frames": 0,
+            "duration_s": 1.0,
+            "pts_start_s": 0.0,
+        },
+    )
+
+    supervisor._ensure_camera_process(camera, now_s=0.0)
+    first_path = Path(commands[-1][-1]).with_name("segment-0000000000.ts")
+    first_path.write_bytes(b"x" * 2048)
+    now_s = time.time()
+    os.utime(first_path, (now_s - 2.0, now_s - 2.0))
+    supervisor._reconcile_camera(camera)
+
+    supervisor._ensure_camera_process(camera, now_s=2.0)
+    supervisor._ensure_camera_process(camera, now_s=4.0)
+    second_path = Path(commands[-1][-1]).with_name("segment-0000000000.ts")
+    second_path.write_bytes(b"x" * 2048)
+    os.utime(second_path, (now_s - 1.0, now_s - 1.0))
+    supervisor._reconcile_camera(camera)
+
+    assert first_path.parent != second_path.parent
+    snapshots = index.freeze_window(
+        (camera.camera_id,),
+        end_time_s=now_s - 1.0,
+        window_seconds=1.9,
+        max_gap_s=1.5,
+    )
+    assert {segment.path for segment in snapshots[camera.camera_id]} == {
+        first_path.resolve(),
+        second_path.resolve(),
+    }
+
+
 def test_segment_ring_pruning_respects_frozen_window(tmp_path: Path) -> None:
     config = _config(tmp_path)
     index = SegmentIndex(config.database_path)
@@ -102,6 +164,113 @@ def test_segment_ring_pruning_respects_frozen_window(tmp_path: Path) -> None:
     index.release_window(snapshots)
     expired = index.prune(older_than_s=10.0)
     assert set(expired) == frozen_paths
+
+
+def test_prune_waits_for_concurrent_freeze_window(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    index = SegmentIndex(config.database_path)
+    paths: list[Path] = []
+    for camera in config.cameras:
+        for second in range(4):
+            path = tmp_path / f"concurrent-{camera.camera_id}-{second}.ts"
+            path.write_bytes(b"segment")
+            paths.append(path)
+            index.record_segment(
+                IndexedSegment(
+                    camera_id=camera.camera_id,
+                    path=path,
+                    start_time_s=float(second),
+                    end_time_s=float(second + 1),
+                    duration_s=1.0,
+                )
+            )
+
+    entered_freeze = threading.Event()
+    release_freeze = threading.Event()
+    original_window_segments = index._window_segments
+
+    def paused_window_segments(*args, **kwargs):
+        entered_freeze.set()
+        assert release_freeze.wait(timeout=5)
+        return original_window_segments(*args, **kwargs)
+
+    monkeypatch.setattr(index, "_window_segments", paused_window_segments)
+    snapshots: dict[str, list[IndexedSegment]] = {}
+    pruned: list[Path] = []
+    errors: list[Exception] = []
+
+    def freeze() -> None:
+        try:
+            snapshots.update(
+                index.freeze_window(
+                    (camera.camera_id for camera in config.cameras),
+                    end_time_s=4.0,
+                    window_seconds=3.0,
+                    max_gap_s=1.5,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - assertion below verifies no error
+            errors.append(exc)
+
+    def prune() -> None:
+        try:
+            pruned.extend(index.prune(older_than_s=10.0))
+        except Exception as exc:  # pragma: no cover - assertion below verifies no error
+            errors.append(exc)
+
+    freeze_thread = threading.Thread(target=freeze)
+    freeze_thread.start()
+    assert entered_freeze.wait(timeout=5)
+    prune_thread = threading.Thread(target=prune)
+    prune_thread.start()
+    release_freeze.set()
+    freeze_thread.join(timeout=5)
+    prune_thread.join(timeout=5)
+
+    assert not freeze_thread.is_alive()
+    assert not prune_thread.is_alive()
+    assert errors == []
+    frozen_paths = {segment.path for snapshot in snapshots.values() for segment in snapshot}
+    assert set(pruned) == set(paths) - frozen_paths
+
+
+def test_live_status_requires_a_shared_trigger_window(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    index = SegmentIndex(config.database_path)
+    now_s = time.time()
+
+    def add_segments(
+        camera: LiveCameraConfig,
+        starts: list[float],
+        *,
+        prefix: str = "",
+    ) -> None:
+        for sequence, start_time_s in enumerate(starts):
+            path = tmp_path / "shared" / camera.camera_id / f"{prefix}{sequence}.ts"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"segment")
+            index.record_segment(
+                IndexedSegment(
+                    camera_id=camera.camera_id,
+                    path=path,
+                    start_time_s=start_time_s,
+                    end_time_s=start_time_s + 1.0,
+                    duration_s=1.0,
+                )
+            )
+
+    main, side, replay = config.cameras
+    add_segments(main, [now_s - 3.0, now_s - 2.0, now_s - 1.0])
+    add_segments(side, [now_s - 4.0, now_s - 3.0, now_s - 2.0])
+    add_segments(replay, [now_s - 4.0, now_s - 3.0, now_s - 2.0])
+    service = LiveMultiviewService(config, segment_index=index)
+
+    skewed = service.status()
+    assert skewed["min_buffer_s"] >= config.buffer_seconds
+    assert skewed["trigger_ready"] is False
+
+    add_segments(main, [now_s - 4.0], prefix="older-")
+    assert service.status()["trigger_ready"] is True
 
 
 def test_dynamic_cases_merge_without_mutating_static_json(tmp_path: Path) -> None:

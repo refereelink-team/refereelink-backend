@@ -4,6 +4,7 @@ import logging
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from app.multiview.live_ingest.config import LiveCameraConfig, LiveIngestConfig
@@ -61,8 +62,13 @@ class LiveIngestSupervisor:
                 process.kill()
         self._processes.clear()
 
-    def ffmpeg_command(self, camera: LiveCameraConfig) -> list[str]:
-        camera_dir = self.config.ring_root / camera.camera_id
+    def ffmpeg_command(
+        self,
+        camera: LiveCameraConfig,
+        *,
+        output_dir: Path | None = None,
+    ) -> list[str]:
+        camera_dir = output_dir or self.config.ring_root / camera.camera_id
         return [
             self.ffmpeg_bin,
             "-nostdin",
@@ -103,16 +109,17 @@ class LiveIngestSupervisor:
         if now_s < self._next_restart_at.get(camera.camera_id, 0.0):
             return
 
-        camera_dir = self.config.ring_root / camera.camera_id
-        camera_dir.mkdir(parents=True, exist_ok=True)
+        capture_dir = self.config.ring_root / camera.camera_id / f"capture-{uuid.uuid4().hex}"
+        capture_dir.mkdir(parents=True, exist_ok=False)
         try:
             self._processes[camera.camera_id] = subprocess.Popen(
-                self.ffmpeg_command(camera),
+                self.ffmpeg_command(camera, output_dir=capture_dir),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         except OSError:
+            capture_dir.rmdir()
             self.segment_index.set_camera_error(camera.camera_id, "无法启动 FFmpeg 采集进程")
             self._next_restart_at[camera.camera_id] = now_s + 5.0
 
@@ -122,7 +129,7 @@ class LiveIngestSupervisor:
             return
         minimum_size = 1024
         minimum_age_s = max(0.1, self.config.segment_seconds * 0.1)
-        for path in sorted(camera_dir.glob("*.ts")):
+        for path in sorted(camera_dir.rglob("*.ts")):
             resolved = path.resolve()
             if resolved in self._seen_paths:
                 continue

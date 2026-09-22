@@ -181,6 +181,34 @@ class SegmentIndex:
                 raise
         return snapshots
 
+    def shared_window_ready(
+        self,
+        camera_ids: Iterable[str],
+        *,
+        end_time_s: float,
+        window_seconds: float,
+        max_gap_s: float,
+    ) -> bool:
+        """Check the exact shared window a trigger would later pin."""
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            try:
+                ready = all(
+                    self._window_segments(
+                        connection,
+                        camera_id=camera_id,
+                        end_time_s=end_time_s,
+                        window_seconds=window_seconds,
+                        max_gap_s=max_gap_s,
+                    )
+                    for camera_id in camera_ids
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return ready
+
     def release_window(self, snapshots: dict[str, list[IndexedSegment]]) -> None:
         paths = [str(segment.path) for items in snapshots.values() for segment in items]
         if not paths:
@@ -197,18 +225,28 @@ class SegmentIndex:
 
     def prune(self, *, older_than_s: float) -> list[Path]:
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT path FROM live_segments
-                WHERE end_time_s < ? AND ref_count = 0
-                """,
-                (older_than_s,),
-            ).fetchall()
-            connection.executemany(
-                "DELETE FROM live_segments WHERE path = ?",
-                ((row["path"],) for row in rows),
-            )
-        return [Path(row["path"]) for row in rows]
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT path FROM live_segments
+                    WHERE end_time_s < ? AND ref_count = 0
+                    """,
+                    (older_than_s,),
+                ).fetchall()
+                pruned_paths = []
+                for row in rows:
+                    deleted = connection.execute(
+                        "DELETE FROM live_segments WHERE path = ? AND ref_count = 0",
+                        (row["path"],),
+                    )
+                    if deleted.rowcount:
+                        pruned_paths.append(Path(row["path"]))
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return pruned_paths
 
     def _segments_for_camera(self, camera_id: str) -> list[IndexedSegment]:
         with self._connect() as connection:
@@ -303,8 +341,8 @@ class SegmentIndex:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.database_path, timeout=10, isolation_level=None)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA busy_timeout=10000")
+        connection.execute("PRAGMA journal_mode=WAL")
         return connection
 
     def _ensure_schema(self) -> None:

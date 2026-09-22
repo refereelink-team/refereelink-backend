@@ -58,8 +58,10 @@ class LiveMultiviewService:
         now_s = time.time()
         cameras = []
         buffers = []
+        latest_ends_s = []
         for camera in self.config.cameras:
             health = self.segment_index.camera_health(camera.camera_id)
+            latest_end_s = self.segment_index.latest_segment_end(camera.camera_id)
             latest_age_s = (
                 max(0.0, now_s - health.latest_segment_at_s)
                 if health.latest_segment_at_s is not None
@@ -75,6 +77,8 @@ class LiveMultiviewService:
                 max_gap_s=self.config.segment_seconds * 1.5,
             )
             buffers.append(buffer_s)
+            if online and latest_end_s is not None:
+                latest_ends_s.append(latest_end_s)
             cameras.append(
                 {
                     "camera_id": camera.camera_id,
@@ -91,7 +95,17 @@ class LiveMultiviewService:
             )
         min_buffer_s = min(buffers, default=0.0)
         ready = all(camera["online"] for camera in cameras)
-        trigger_ready = ready and min_buffer_s >= self.config.buffer_seconds
+        capture_end_s = min(latest_ends_s) if len(latest_ends_s) == len(cameras) else None
+        trigger_ready = bool(
+            ready
+            and capture_end_s is not None
+            and self.segment_index.shared_window_ready(
+                (camera.camera_id for camera in self.config.cameras),
+                end_time_s=capture_end_s,
+                window_seconds=self.config.buffer_seconds,
+                max_gap_s=self.config.segment_seconds * 1.5,
+            )
+        )
         if trigger_ready:
             message = "三路缓冲已就绪，可进入复核"
         elif not ready:
