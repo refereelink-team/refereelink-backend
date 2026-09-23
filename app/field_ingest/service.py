@@ -355,12 +355,20 @@ class FieldIngestService:
             }
 
     def release_live(self, session_id: UUID, epoch: int) -> None:
+        key = (str(session_id), epoch)
         with self._lock:
-            runtime = self._epochs.pop((str(session_id), epoch), None)
+            runtime = self._epochs.get(key)
+            receiver = runtime.receiver if runtime is not None else None
+        # Reader threads call back into this service. Joining them while the
+        # service lock is held deadlocks teardown until the join times out.
+        if receiver is not None:
+            receiver.stop()
+        with self._lock:
+            runtime = self._epochs.pop(key, None)
             if runtime is not None:
                 runtime.consumer_attached = False
-                if runtime.receiver is not None:
-                    runtime.receiver.stop()
+                if runtime.frame_joiner is not None:
+                    self._enqueue_captured(runtime, runtime.frame_joiner.flush())
                 runtime.close()
             self.store.release_epoch(session_id, epoch)
 
@@ -595,9 +603,17 @@ class FieldIngestService:
 
     def close(self) -> None:
         with self._lock:
+            receivers = [
+                runtime.receiver
+                for runtime in self._epochs.values()
+                if runtime.receiver is not None
+            ]
+        for receiver in receivers:
+            receiver.stop()
+        with self._lock:
             for runtime in self._epochs.values():
-                if runtime.receiver:
-                    runtime.receiver.stop()
+                if runtime.frame_joiner is not None:
+                    self._enqueue_captured(runtime, runtime.frame_joiner.flush())
                 runtime.close()
             self._epochs.clear()
         self.store.close()

@@ -162,12 +162,16 @@ class FrameJoiner:
             return ready
         if len(self._pending) == self._pending.maxlen:
             expired, _ = self._pending.popleft()
+            self._remember_expired(expired.transport_pts90k)
             ready.append(self._build(expired, None, expired.received_at))
         self._pending.append((decoded, self._clock() + self._max_wait_s))
         return ready
 
     def flush(self) -> list[CapturedFrame]:
-        ready = [self._build(decoded, None, decoded.received_at) for decoded, _ in self._pending]
+        ready: list[CapturedFrame] = []
+        for decoded, _ in self._pending:
+            self._remember_expired(decoded.transport_pts90k)
+            ready.append(self._build(decoded, None, decoded.received_at))
         self._pending.clear()
         return ready
 
@@ -176,13 +180,17 @@ class FrameJoiner:
         ready: list[CapturedFrame] = []
         while self._pending and self._pending[0][1] <= now:
             decoded, _ = self._pending.popleft()
-            if decoded.transport_pts90k is not None:
-                self._expired_pts.add(decoded.transport_pts90k)
-                self._expired_pts_order.append(decoded.transport_pts90k)
-                while len(self._expired_pts_order) > self._max_samples:
-                    self._expired_pts.discard(self._expired_pts_order.popleft())
+            self._remember_expired(decoded.transport_pts90k)
             ready.append(self._build(decoded, None, received_at))
         return ready
+
+    def _remember_expired(self, pts: int | None) -> None:
+        if pts is None:
+            return
+        self._expired_pts.add(pts)
+        self._expired_pts_order.append(pts)
+        while len(self._expired_pts_order) > self._max_samples:
+            self._expired_pts.discard(self._expired_pts_order.popleft())
 
     def _take_metadata(self, pts: int | None) -> dict[str, Any] | None:
         if pts is None:

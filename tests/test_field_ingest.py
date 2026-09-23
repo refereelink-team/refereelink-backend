@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+import numpy as np
 from fastapi.testclient import TestClient
 from jsonschema import validate
 
 from app.field_ingest.config import FieldIngestSettings
+from app.field_ingest.frames import DecodedVideoFrame, FrameJoiner
+from app.field_ingest.models import FieldSessionRegistration, LiveAllocationRequest
 from app.field_ingest.receiver import SRTReceiver
 from app.field_ingest.server import create_receiver_app
 from app.field_ingest.service import FieldIngestService
@@ -268,6 +273,112 @@ def test_telemetry_fixture_schema_accepts_canonical_batch():
         },
         schema,
     )
+
+
+def test_pending_eviction_does_not_reuse_late_metadata_as_prior_pts():
+    now = [0.0]
+    joiner = FrameJoiner(
+        "session",
+        1,
+        max_pending=1,
+        max_wait_ms=50_000,
+        clock=lambda: now[0],
+    )
+    image = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    def decoded(pts: int, index: int) -> DecodedVideoFrame:
+        return DecodedVideoFrame(image, pts, index, "2026-01-01T00:00:00Z")
+
+    assert joiner.ingest_decoded(decoded(1_000, 0)) == []
+    evicted = joiner.ingest_decoded(decoded(10_000, 1))
+    assert evicted[0].transport_pts90k == 1_000
+    assert evicted[0].source_frame_id is None
+
+    joiner.ingest_item(
+        {"type": "frame", "frame_id": 7, "t_us": 1_000, "transport_pts90k": 1_000},
+        "2026-01-01T00:00:01Z",
+    )
+    result = joiner.ingest_decoded(decoded(2_000, 2))
+    stolen = [frame for frame in result if frame.source_frame_id == 7]
+    assert stolen == []
+
+
+def test_release_live_stops_receiver_without_holding_service_lock(tmp_path):
+    callback_finished = threading.Event()
+
+    class CallbackReceiver:
+        def __init__(self, **kwargs):
+            self.on_decoded_frame = kwargs["on_decoded_frame"]
+            self.on_end = kwargs["on_end"]
+
+        def start(self):
+            return None
+
+        def snapshot(self):
+            return {
+                "state": "listening",
+                "decoded_frame_count": 0,
+                "first_pts90k": None,
+                "last_pts90k": None,
+                "last_error": None,
+                "exit_code": None,
+                "log_tail": [],
+            }
+
+        def stop(self):
+            def _run() -> None:
+                self.on_end()
+                image = np.zeros((2, 2, 3), dtype=np.uint8)
+                self.on_decoded_frame(DecodedVideoFrame(image, 50_000, 1, "2026-01-01T00:00:00Z"))
+                callback_finished.set()
+
+            thread = threading.Thread(target=_run)
+            thread.start()
+            thread.join(timeout=0.4)
+
+    settings = FieldIngestSettings(
+        auth_token="test-token",
+        root=tmp_path / "field",
+        srt_bind_host="100.64.0.2",
+        srt_advertise_host="100.64.0.2",
+        srt_port=10000,
+        ffmpeg_bin="ffmpeg",
+        ffprobe_bin="ffprobe",
+    )
+    service = FieldIngestService(
+        settings,
+        ffmpeg_probe=lambda _: (True, ""),
+        receiver_factory=CallbackReceiver,
+    )
+    registration = FieldSessionRegistration(
+        session_id=uuid4(),
+        device_id=uuid4(),
+        device_name="Test iPhone",
+        capabilities=["srt", "wss", "core_motion"],
+    )
+    service.register(registration)
+    allocation = service.allocate_live(
+        registration.session_id, LiveAllocationRequest(profile="720p30", latency_ms=200)
+    )
+    key = (str(registration.session_id), allocation.stream_epoch)
+    queue = service._epochs[key].frame_queue
+    image = np.zeros((2, 2, 3), dtype=np.uint8)
+    service._record_decoded_frame(
+        key[0],
+        key[1],
+        DecodedVideoFrame(image, 1_000, 0, "2026-01-01T00:00:00Z"),
+    )
+
+    started = time.monotonic()
+    service.release_live(UUID(str(registration.session_id)), allocation.stream_epoch)
+    elapsed = time.monotonic() - started
+    frame = queue.get(timeout=0)
+
+    assert elapsed < 0.2
+    assert callback_finished.is_set()
+    assert frame is not None
+    assert frame.transport_pts90k == 1_000
+    service.close()
 
 
 def test_artifact_hash_and_duplicate_upload(tmp_path):
