@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from jsonschema import validate
 
@@ -379,6 +381,84 @@ def test_release_live_stops_receiver_without_holding_service_lock(tmp_path):
     assert frame is not None
     assert frame.transport_pts90k == 1_000
     service.close()
+
+
+class _StopRaisesReceiver(FakeReceiver):
+    def stop(self):
+        super().stop()
+        raise RuntimeError("receiver stop failed")
+
+
+def _registered_live(tmp_path: Path, receiver_factory):
+    settings = FieldIngestSettings(
+        auth_token="test-token",
+        root=tmp_path / "field",
+        srt_bind_host="100.64.0.2",
+        srt_advertise_host="100.64.0.2",
+        srt_port=10000,
+        ffmpeg_bin="ffmpeg",
+        ffprobe_bin="ffprobe",
+    )
+    service = FieldIngestService(
+        settings,
+        ffmpeg_probe=lambda _: (True, ""),
+        receiver_factory=receiver_factory,
+    )
+    registration = FieldSessionRegistration(
+        session_id=uuid4(),
+        device_id=uuid4(),
+        device_name="Test iPhone",
+        capabilities=["srt", "wss", "core_motion"],
+    )
+    service.register(registration)
+    allocation = service.allocate_live(
+        registration.session_id, LiveAllocationRequest(profile="720p30", latency_ms=200)
+    )
+    return service, registration, allocation
+
+
+def test_release_live_releases_epoch_when_receiver_stop_raises(tmp_path):
+    service, registration, allocation = _registered_live(tmp_path, _StopRaisesReceiver)
+    key = (str(registration.session_id), allocation.stream_epoch)
+    runtime = service._epochs[key]
+    assert service.store.has_active_epoch() is True
+    assert runtime.telemetry_file.closed is False
+    assert runtime.join_file.closed is False
+
+    with pytest.raises(RuntimeError, match="receiver stop failed"):
+        service.release_live(registration.session_id, allocation.stream_epoch)
+
+    assert key not in service._epochs
+    assert runtime.telemetry_file.closed is True
+    assert runtime.join_file.closed is True
+    assert service.store.has_active_epoch() is False
+    assert service.store.get_epoch(registration.session_id, allocation.stream_epoch)["status"] == (
+        "released"
+    )
+    replacement = service.allocate_live(
+        registration.session_id, LiveAllocationRequest(profile="720p30", latency_ms=200)
+    )
+    assert replacement.stream_epoch != allocation.stream_epoch
+    with pytest.raises(RuntimeError, match="receiver stop failed"):
+        service.release_live(registration.session_id, replacement.stream_epoch)
+    assert service.store.has_active_epoch() is False
+    service.close()
+
+
+def test_close_drops_epochs_when_receiver_stop_raises(tmp_path):
+    service, registration, allocation = _registered_live(tmp_path, _StopRaisesReceiver)
+    key = (str(registration.session_id), allocation.stream_epoch)
+    runtime = service._epochs[key]
+    assert runtime.telemetry_file.closed is False
+
+    with pytest.raises(RuntimeError, match="receiver stop failed"):
+        service.close()
+
+    assert service._epochs == {}
+    assert runtime.telemetry_file.closed is True
+    assert runtime.join_file.closed is True
+    with pytest.raises(sqlite3.ProgrammingError):
+        service.store.has_active_epoch()
 
 
 def test_artifact_hash_and_duplicate_upload(tmp_path):

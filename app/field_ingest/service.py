@@ -361,16 +361,20 @@ class FieldIngestService:
             receiver = runtime.receiver if runtime is not None else None
         # Reader threads call back into this service. Joining them while the
         # service lock is held deadlocks teardown until the join times out.
-        if receiver is not None:
-            receiver.stop()
-        with self._lock:
-            runtime = self._epochs.pop(key, None)
-            if runtime is not None:
-                runtime.consumer_attached = False
-                if runtime.frame_joiner is not None:
-                    self._enqueue_captured(runtime, runtime.frame_joiner.flush())
-                runtime.close()
-            self.store.release_epoch(session_id, epoch)
+        # stop() can still fail after the process is signaled; epoch state has
+        # to be dropped anyway or has_active_epoch() blocks the next allocation.
+        try:
+            if receiver is not None:
+                receiver.stop()
+        finally:
+            with self._lock:
+                runtime = self._epochs.pop(key, None)
+                if runtime is not None:
+                    runtime.consumer_attached = False
+                    if runtime.frame_joiner is not None:
+                        self._enqueue_captured(runtime, runtime.frame_joiner.flush())
+                    runtime.close()
+                self.store.release_epoch(session_id, epoch)
 
     def release_telemetry(self, session_id: UUID, epoch: int) -> None:
         with self._lock:
@@ -608,15 +612,27 @@ class FieldIngestService:
                 for runtime in self._epochs.values()
                 if runtime.receiver is not None
             ]
-        for receiver in receivers:
-            receiver.stop()
-        with self._lock:
-            for runtime in self._epochs.values():
-                if runtime.frame_joiner is not None:
-                    self._enqueue_captured(runtime, runtime.frame_joiner.flush())
-                runtime.close()
-            self._epochs.clear()
-        self.store.close()
+        # Reader threads call back into this service. Joining them while the
+        # service lock is held deadlocks teardown until the join times out.
+        # A stop() failure must not skip closing files or the session store.
+        stop_error: Exception | None = None
+        try:
+            for receiver in receivers:
+                try:
+                    receiver.stop()
+                except Exception as exc:
+                    if stop_error is None:
+                        stop_error = exc
+            if stop_error is not None:
+                raise stop_error
+        finally:
+            with self._lock:
+                for runtime in self._epochs.values():
+                    if runtime.frame_joiner is not None:
+                        self._enqueue_captured(runtime, runtime.frame_joiner.flush())
+                    runtime.close()
+                self._epochs.clear()
+            self.store.close()
 
 
 def _wall_clock_us() -> int:
