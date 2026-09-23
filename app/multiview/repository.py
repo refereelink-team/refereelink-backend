@@ -5,17 +5,33 @@ import os
 from pathlib import Path
 
 from app.constants.paths import REPO_ROOT_DIR
+from app.multiview.live_ingest.store import LiveMultiviewCaseStore
 from app.multiview.models import MultiviewCase
 
 DEFAULT_CASES_PATH = REPO_ROOT_DIR / "assets" / "multiview" / "cases.json"
 
 
 class MultiviewCaseRepository:
-    def __init__(self, cases_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        cases_path: str | Path | None = None,
+        *,
+        live_case_store: LiveMultiviewCaseStore | None = None,
+    ) -> None:
         configured = cases_path or os.environ.get("SC_MULTIVIEW_CASES_PATH")
         self.cases_path = Path(configured).expanduser() if configured else DEFAULT_CASES_PATH
+        self.live_case_store = live_case_store
 
     def list_cases(self) -> list[MultiviewCase]:
+        static_cases = self._list_static_cases()
+        if self.live_case_store is None:
+            return static_cases
+        merged = {case.case_id: case for case in static_cases}
+        for case in self.live_case_store.list_cases():
+            merged[case.case_id] = case
+        return list(merged.values())
+
+    def _list_static_cases(self) -> list[MultiviewCase]:
         if not self.cases_path.is_file():
             return []
         payload = json.loads(self.cases_path.read_text(encoding="utf-8"))
@@ -23,7 +39,11 @@ class MultiviewCaseRepository:
         return [MultiviewCase.model_validate(item) for item in raw_cases]
 
     def get_case(self, case_id: str) -> MultiviewCase | None:
-        return next((case for case in self.list_cases() if case.case_id == case_id), None)
+        if self.live_case_store is not None:
+            live_case = self.live_case_store.get_case(case_id)
+            if live_case is not None:
+                return live_case
+        return next((case for case in self._list_static_cases() if case.case_id == case_id), None)
 
     @staticmethod
     def resolve_path(raw_path: str | None) -> Path | None:

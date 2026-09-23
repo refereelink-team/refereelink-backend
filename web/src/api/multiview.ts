@@ -3,6 +3,7 @@ import type {
   FoulFacts,
   MultiviewCase,
   MultiviewDecision,
+  LiveMultiviewStatus,
   MultiviewStatus,
   ReviewRecord,
   ReviewState,
@@ -68,6 +69,21 @@ export async function fetchMultiviewCases(): Promise<MultiviewCase[]> {
 
 export async function fetchMultiviewStatus(): Promise<MultiviewStatus> {
   return readJson<MultiviewStatus>(await fetch('/api/multiview/status'));
+}
+
+export async function fetchLiveMultiviewStatus(): Promise<LiveMultiviewStatus> {
+  return readJson<LiveMultiviewStatus>(await fetch('/api/multiview/live/status'));
+}
+
+export async function triggerLiveMultiviewReview(): Promise<{
+  case_id: string;
+  capture_state: 'capture_ready' | 'capture_failed';
+}> {
+  return readJson(
+    await fetch('/api/multiview/live/trigger', {
+      method: 'POST',
+    }),
+  );
 }
 
 export async function analyzeMultiviewCase(

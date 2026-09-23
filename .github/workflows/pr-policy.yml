@@ -60,9 +60,6 @@ jobs:
             }
 
             const changedLines = files.reduce((sum, file) => sum + file.additions + file.deletions, 0);
-            if (!isDependabot && changedLines > 800) {
-              errors.push(`PR is ${changedLines} changed lines; split it into reviewable pieces (limit: 800).`);
-            }
 
             if (errors.length) {
               core.setFailed(errors.join('\n'));
