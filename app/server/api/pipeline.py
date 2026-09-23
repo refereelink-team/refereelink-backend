@@ -471,14 +471,20 @@ async def pipeline_start(request: Request, payload: PipelineStartPayload) -> dic
             # A field epoch is an explicitly allocated, single-consumer live
             # resource.  Make stale, released, or already-bound epochs a
             # client-visible conflict instead of returning a 200 error body.
+            # The detail is a fixed string so the exception text stays in logs.
+            logger.info("Rejected pipeline start: %s", exc)
+            detail = (
+                "live epoch not found"
+                if isinstance(exc, KeyError)
+                else "live epoch already has an inference consumer"
+            )
+            store.source_status = SourceStatus.ERROR
             if field_requested:
-                store.source_status = SourceStatus.ERROR
                 return JSONResponse(
                     status_code=409,
-                    content={"status": "error", "detail": str(exc)},
+                    content={"status": "error", "detail": detail},
                 )
-            store.source_status = SourceStatus.ERROR
-            return {"status": "error", "detail": str(exc)}
+            return {"status": "error", "detail": detail}
         except Exception as exc:
             logger.exception("Failed to start pipeline with source=%s", requested_source)
             store.source_status = SourceStatus.ERROR

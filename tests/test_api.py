@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -55,6 +57,23 @@ def test_get_events(client):
     assert "total" in data
 
 
+def test_missing_field_epoch_returns_stable_conflict(client):
+    store = client.app.state.store
+    previous = store.config.require_team_calibration
+    store.config.require_team_calibration = False
+    try:
+        response = client.post(
+            "/api/pipeline/start",
+            json={"field_session_id": str(uuid4()), "field_stream_epoch": 1},
+        )
+    finally:
+        store.config.require_team_calibration = previous
+    assert response.status_code == 409
+    assert response.json()["detail"] == "live epoch not found"
+    assert "KeyError" not in response.text
+    assert "Traceback" not in response.text
+
+
 def test_pipeline_start_stop(client):
     r = client.post("/api/pipeline/start", json={})
     assert r.status_code == 409
@@ -71,6 +90,7 @@ def test_video_stream_endpoint_exists(client):
     # call it here because the MJPEG generator is an infinite loop and
     # the test client would block.
     from app.server.main import app
+
     paths = {r.path for r in app.routes if hasattr(r, "path")}
     assert "/video/stream" in paths
     recording = client.get("/api/pipeline/recording")

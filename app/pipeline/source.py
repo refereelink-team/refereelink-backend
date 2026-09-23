@@ -271,7 +271,6 @@ class FieldIngestSource(VideoSource):
         fps: float,
         store: Optional[StateStore] = None,
         release_callback: Optional[Callable[[], None]] = None,
-        opened_callback: Optional[Callable[[], bool]] = None,
         metrics_callback: Optional[Callable[[], dict]] = None,
     ) -> None:
         super().__init__(store)
@@ -280,7 +279,6 @@ class FieldIngestSource(VideoSource):
         self.stream_epoch = stream_epoch
         self._fps = fps
         self._release_callback = release_callback
-        self._opened_callback = opened_callback
         self._metrics_callback = metrics_callback
         self._released = False
         self._last_packet: CapturedFrame | None = None
@@ -304,11 +302,10 @@ class FieldIngestSource(VideoSource):
         return True, packet
 
     def is_opened(self) -> bool:
-        if self._released or self._queue.closed:
-            return False
-        if self._opened_callback is None:
-            return True
-        return bool(self._opened_callback())
+        # The receiver leaves "listening" before the joiner flush is queued.
+        # EOF is the queue close that follows that flush, so tail frames are
+        # still readable after the listener itself has stopped.
+        return not self._released and not self._queue.closed
 
     def release(self) -> None:
         if self._released:
