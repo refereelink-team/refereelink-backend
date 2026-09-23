@@ -6,10 +6,15 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
+
+import numpy as np
+
+from app.field_ingest.frames import DecodedVideoFrame, utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,7 @@ def probe_srt_support(ffmpeg_bin: str) -> tuple[bool, str]:
 class ReceiverMetrics:
     state: str = "starting"
     decoded_frame_count: int = 0
+    raw_frame_count: int = 0
     first_pts90k: int | None = None
     last_pts90k: int | None = None
     last_error: str | None = None
@@ -66,7 +72,11 @@ class SRTReceiver:
         stream_token: str,
         output_path: Path,
         latency_ms: int,
+        width: int = 1280,
+        height: int = 720,
         on_frame: Callable[[int], None] | None = None,
+        on_decoded_frame: Callable[[DecodedVideoFrame], None] | None = None,
+        on_end: Callable[[], None] | None = None,
         popen: Callable[..., subprocess.Popen] = subprocess.Popen,
     ) -> None:
         self.ffmpeg_bin = ffmpeg_bin
@@ -77,11 +87,18 @@ class SRTReceiver:
         self.stream_token = stream_token
         self.output_path = output_path
         self.latency_ms = latency_ms
+        self.width = width
+        self.height = height
         self.on_frame = on_frame
+        self.on_decoded_frame = on_decoded_frame
+        self.on_end = on_end
         self._popen = popen
         self._process: subprocess.Popen | None = None
-        self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        self._stdout_thread: threading.Thread | None = None
         self._lock = threading.RLock()
+        self._pts_condition = threading.Condition(self._lock)
+        self._pts_by_index: dict[int, int] = {}
         self.metrics = ReceiverMetrics()
 
     @property
@@ -98,10 +115,10 @@ class SRTReceiver:
             f"&tlpktdrop=1"
             f"&streamid={quote(stream_id, safe='')}"
             f"&passphrase={quote(self.stream_token, safe='')}"
+            f"&pbkeylen=16"
         )
         # First output preserves the original MPEG-TS/PTS.  The second output
-        # decodes frames through showinfo so a successful session proves that
-        # the backend can receive and decode, not merely accept UDP packets.
+        # decodes frames into a bounded rawvideo pipe for the inference bridge.
         return [
             self.ffmpeg_bin,
             "-hide_banner",
@@ -121,9 +138,13 @@ class SRTReceiver:
             "0:v:0",
             "-vf",
             "showinfo",
+            "-s",
+            f"{self.width}x{self.height}",
             "-f",
-            "null",
-            os.devnull,
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "pipe:1",
         ]
 
     def start(self) -> None:
@@ -135,10 +156,9 @@ class SRTReceiver:
                 self._process = self._popen(
                     self.command,
                     stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,
+                    bufsize=0,
                     start_new_session=True,
                 )
             except OSError as exc:
@@ -146,12 +166,18 @@ class SRTReceiver:
                 self.metrics.last_error = str(exc)
                 raise
             self.metrics.state = "listening"
-            self._reader_thread = threading.Thread(
+            self._stderr_thread = threading.Thread(
                 target=self._read_output,
-                name=f"srt-receiver-{self.stream_epoch}",
+                name=f"srt-receiver-stderr-{self.stream_epoch}",
                 daemon=True,
             )
-            self._reader_thread.start()
+            self._stdout_thread = threading.Thread(
+                target=self._read_frames,
+                name=f"srt-receiver-frames-{self.stream_epoch}",
+                daemon=True,
+            )
+            self._stderr_thread.start()
+            self._stdout_thread.start()
 
     def _read_output(self) -> None:
         process = self._process
@@ -159,7 +185,10 @@ class SRTReceiver:
             return
         try:
             for raw_line in process.stderr:
-                line = raw_line.strip()
+                if isinstance(raw_line, bytes):
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                else:
+                    line = raw_line.strip()
                 if not line:
                     continue
                 match = _SHOWINFO_RE.search(line)
@@ -171,6 +200,8 @@ class SRTReceiver:
                         if self.metrics.first_pts90k is None:
                             self.metrics.first_pts90k = pts
                         self.metrics.last_pts90k = pts
+                        self._pts_by_index[int(match.group("n"))] = pts
+                        self._pts_condition.notify_all()
                         if self.on_frame is not None:
                             self.on_frame(pts)
         finally:
@@ -181,6 +212,58 @@ class SRTReceiver:
                     self.metrics.state = "ended" if return_code == 0 else "failed"
                     if return_code not in (None, 0):
                         self.metrics.last_error = f"ffmpeg exited with code {return_code}"
+                self._pts_condition.notify_all()
+            if (
+                self._stdout_thread is not None
+                and self._stdout_thread is not threading.current_thread()
+            ):
+                self._stdout_thread.join(timeout=1)
+            if self.on_end is not None:
+                self.on_end()
+
+    def _read_frames(self) -> None:
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        frame_size = self.width * self.height * 3
+        decode_index = 0
+        try:
+            while True:
+                payload = _read_exact(process.stdout, frame_size)
+                if not payload:
+                    break
+                image = (
+                    np.frombuffer(payload, dtype=np.uint8)
+                    .reshape((self.height, self.width, 3))
+                    .copy()
+                )
+                pts = self._wait_for_pts(decode_index)
+                with self._lock:
+                    self.metrics.raw_frame_count += 1
+                if self.on_decoded_frame is not None:
+                    self.on_decoded_frame(
+                        DecodedVideoFrame(
+                            image=image,
+                            transport_pts90k=pts,
+                            decode_index=decode_index,
+                            received_at=utc_timestamp(),
+                        )
+                    )
+                decode_index += 1
+        except (EOFError, OSError, ValueError) as exc:
+            with self._lock:
+                self.metrics.last_error = f"rawvideo reader failed: {exc}"
+                self.metrics.state = "failed"
+        finally:
+            with self._lock:
+                self._pts_condition.notify_all()
+
+    def _wait_for_pts(self, decode_index: int) -> int | None:
+        end = time.monotonic() + 0.25
+        with self._pts_condition:
+            while decode_index not in self._pts_by_index and time.monotonic() < end:
+                self._pts_condition.wait(timeout=max(0.0, end - time.monotonic()))
+            return self._pts_by_index.pop(decode_index, None)
 
     def stop(self) -> None:
         with self._lock:
@@ -204,6 +287,15 @@ class SRTReceiver:
                         process.kill()
                     process.wait(timeout=3)
         finally:
+            for stream in (process.stdout, process.stderr):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except OSError:
+                    pass
+            for thread in (self._stderr_thread, self._stdout_thread):
+                if thread is not None and thread is not threading.current_thread():
+                    thread.join(timeout=1)
             with self._lock:
                 self.metrics.exit_code = process.returncode
                 self.metrics.state = "released"
@@ -213,9 +305,24 @@ class SRTReceiver:
             return {
                 "state": self.metrics.state,
                 "decoded_frame_count": self.metrics.decoded_frame_count,
+                "raw_frame_count": self.metrics.raw_frame_count,
                 "first_pts90k": self.metrics.first_pts90k,
                 "last_pts90k": self.metrics.last_pts90k,
                 "last_error": self.metrics.last_error,
                 "exit_code": self.metrics.exit_code,
                 "log_tail": list(self.metrics.log_tail),
             }
+
+
+def _read_exact(stream: object, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining > 0:
+        chunk = stream.read(remaining)  # type: ignore[attr-defined]
+        if not chunk:
+            if not chunks:
+                return b""
+            raise EOFError(f"rawvideo pipe ended with {remaining} bytes pending")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
