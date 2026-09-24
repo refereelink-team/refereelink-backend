@@ -6,6 +6,7 @@ import numpy as np
 import supervision as sv
 
 from app.geometry.pitch_projection import PitchProjectionResult
+from app.field_ingest.frames import CapturedFrame
 from app.pipeline.engine import InferencePipeline
 from app.pipeline.recorder import VideoRecorder
 from app.state.models import BallStatus, PlayerRole, TeamLabel
@@ -99,7 +100,19 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) ->
 
     pipeline._vision_core.process = lambda frame, frame_index: vision_frame
 
-    frame_state = pipeline._process_frame(np.zeros((100, 100, 3), dtype=np.uint8), 0.0)
+    captured = CapturedFrame(
+        image=np.zeros((100, 100, 3), dtype=np.uint8),
+        session_id="session",
+        stream_epoch=3,
+        source_frame_id=42,
+        t_us=1_200_000,
+        transport_pts90k=108_000,
+        capture_unix_us=1_000_000,
+        camera_motion={"pitch": 0.2},
+        pose_missing_reason=None,
+        backend_received_at="2026-09-20T00:00:00Z",
+    )
+    frame_state = pipeline._process_frame(captured.image, 1000.0, captured)
 
     assert frame_state is not None
     assert frame_state.players[0].role == PlayerRole.PLAYER
@@ -111,6 +124,10 @@ def test_pipeline_maps_semantics_ball_and_possession_to_frame_state(tmp_path) ->
     assert frame_state.ball.status == BallStatus.FRESH
     assert frame_state.ball.field_x == 10.0
     assert frame_state.possession_track_id == 7
+    assert frame_state.capture_source is not None
+    assert frame_state.capture_source.stream_epoch == 3
+    assert frame_state.capture_source.source_frame_id == 42
+    assert frame_state.capture_source.transport_pts90k == 108_000
     pipeline._recorder.stop()
     assert pipeline._recorder.frames_written == 1
     assert (tmp_path / "annotated.mp4").is_file()
