@@ -96,7 +96,9 @@ def _generate_mjpeg() -> Iterator[bytes]:
 
 
 def create_pipeline(
-    video_source: str,
+    video_source: Optional[str] = None,
+    field_session_id: Optional[str] = None,
+    field_stream_epoch: Optional[int] = None,
     device: str = "cpu",
     inference_backend: str = "auto",
     enable_foul_detection: bool = False,
@@ -132,47 +134,69 @@ def create_pipeline(
 ) -> InferencePipeline:
     """Factory used by both CLI startup and the REST API to build a
     pipeline bound to the shared store."""
-    return InferencePipeline(
-        source=create_video_source(video_source, store=_store),
-        store=_store,
-        device=device,
-        inference_backend=inference_backend,
-        enable_foul_detection=enable_foul_detection,
-        foul_checkpoint_path=foul_checkpoint_path,
-        foul_confidence_threshold=foul_confidence_threshold,
-        mode=PipelineMode.REALTIME,
-        player_model_path=player_model_path,
-        pitch_model_path=pitch_model_path,
-        camera_calibration_path=camera_calibration_path,
-        enable_undistortion=enable_undistortion,
-        calibration_alpha=calibration_alpha,
-        pitch_detection_interval=pitch_detection_interval,
-        imgsz=imgsz,
-        player_confidence=player_confidence,
-        player_iou=player_iou,
-        max_prediction_gap_frames=max_prediction_gap_frames,
-        track_reactivation_window_frames=track_reactivation_window_frames,
-        ball_model_path=ball_model_path,
-        enable_ball=enable_ball,
-        ball_detection_interval=ball_detection_interval,
-        ball_max_prediction_frames=ball_max_prediction_frames,
-        role_model_path=role_model_path,
-        team_classifier_path=team_classifier_path,
-        team_calibration_path=team_calibration_path,
-        role_detection_interval=role_detection_interval,
-        team_classification_interval=team_classification_interval,
-        track_activation_threshold=track_activation_threshold,
-        track_lost_buffer=track_lost_buffer,
-        track_matching_threshold=track_matching_threshold,
-        track_minimum_consecutive_frames=track_minimum_consecutive_frames,
-        enable_recording=enable_recording,
-        target_video_path=target_video_path,
-        frame_observer=(
-            getattr(calibration_session, "observe_frame", None)
-            if calibration_session is not None
-            else None
-        ),
-    )
+    if field_session_id is not None or field_stream_epoch is not None:
+        if field_session_id is None or field_stream_epoch is None or video_source is not None:
+            raise ValueError("choose either video_source or field session/epoch")
+        source = app.state.field_ingest.open_frame_source(
+            field_session_id,
+            field_stream_epoch,
+            store=_store,
+        )
+    else:
+        if not video_source:
+            raise ValueError("video_source or field session/epoch is required")
+        source = create_video_source(video_source, store=_store)
+    try:
+        return InferencePipeline(
+            source=source,
+            store=_store,
+            device=device,
+            inference_backend=inference_backend,
+            enable_foul_detection=enable_foul_detection,
+            foul_checkpoint_path=foul_checkpoint_path,
+            foul_confidence_threshold=foul_confidence_threshold,
+            mode=PipelineMode.REALTIME,
+            player_model_path=player_model_path,
+            pitch_model_path=pitch_model_path,
+            camera_calibration_path=camera_calibration_path,
+            enable_undistortion=enable_undistortion,
+            calibration_alpha=calibration_alpha,
+            pitch_detection_interval=pitch_detection_interval,
+            imgsz=imgsz,
+            player_confidence=player_confidence,
+            player_iou=player_iou,
+            max_prediction_gap_frames=max_prediction_gap_frames,
+            track_reactivation_window_frames=track_reactivation_window_frames,
+            ball_model_path=ball_model_path,
+            enable_ball=enable_ball,
+            ball_detection_interval=ball_detection_interval,
+            ball_max_prediction_frames=ball_max_prediction_frames,
+            role_model_path=role_model_path,
+            team_classifier_path=team_classifier_path,
+            team_calibration_path=team_calibration_path,
+            role_detection_interval=role_detection_interval,
+            team_classification_interval=team_classification_interval,
+            track_activation_threshold=track_activation_threshold,
+            track_lost_buffer=track_lost_buffer,
+            track_matching_threshold=track_matching_threshold,
+            track_minimum_consecutive_frames=track_minimum_consecutive_frames,
+            enable_recording=enable_recording,
+            target_video_path=target_video_path,
+            frame_observer=(
+                getattr(calibration_session, "observe_frame", None)
+                if calibration_session is not None
+                else None
+            ),
+        )
+    except Exception:
+        # open_frame_source already claimed the only inference consumer. A
+        # constructor failure leaves no pipeline for /api/pipeline/stop to
+        # release, which would block every later live allocation.
+        try:
+            source.release()
+        except Exception:
+            logger.exception("Failed to release source after pipeline construction error")
+        raise
 
 
 def attach_and_start_pipeline(pipeline: InferencePipeline) -> None:
@@ -190,6 +214,14 @@ def attach_and_start_pipeline(pipeline: InferencePipeline) -> None:
         pipeline.start()
     except Exception:
         _store.pipeline_running = False
+        try:
+            pipeline.stop()
+        except Exception:
+            logger.exception("Failed to release pipeline after start error")
+        with _pipeline_lock:
+            if _pipeline is pipeline:
+                _pipeline = None
+                app.state.pipeline = None
         raise
 
 

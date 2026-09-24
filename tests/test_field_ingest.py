@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from jsonschema import validate
 
 from app.field_ingest.config import FieldIngestSettings
-from app.field_ingest.frames import DecodedVideoFrame, FrameJoiner
+from app.field_ingest.frames import CapturedFrame, DecodedVideoFrame, FrameJoiner
 from app.field_ingest.models import FieldSessionRegistration, LiveAllocationRequest
 from app.field_ingest.receiver import SRTReceiver
 from app.field_ingest.server import create_receiver_app
@@ -496,3 +496,112 @@ def test_artifact_hash_and_duplicate_upload(tmp_path):
     assert second.status_code == 200
     assert second.json()["status"] == "already_exists"
     assert conflict.status_code == 409
+
+
+class _EndedReceiver(FakeReceiver):
+    def snapshot(self):
+        snap = super().snapshot()
+        snap["state"] = "ended"
+        return snap
+
+
+def _tail_frame(session_id: str, epoch: int) -> CapturedFrame:
+    return CapturedFrame(
+        image=np.zeros((2, 2, 3), dtype=np.uint8),
+        session_id=session_id,
+        stream_epoch=epoch,
+        source_frame_id=7,
+        t_us=1_000,
+        transport_pts90k=90_000,
+        capture_unix_us=1_000,
+        camera_motion=None,
+        pose_missing_reason=None,
+        backend_received_at="2026-01-01T00:00:00Z",
+    )
+
+
+def test_field_source_stays_open_until_queue_closes_after_receiver_ends(tmp_path):
+    service, registration, allocation = _registered_live(tmp_path, _EndedReceiver)
+    source = service.open_frame_source(registration.session_id, allocation.stream_epoch)
+    try:
+        assert source.is_opened() is True
+        key = (str(registration.session_id), allocation.stream_epoch)
+        service._epochs[key].frame_queue.put(
+            _tail_frame(str(registration.session_id), allocation.stream_epoch)
+        )
+        ret, packet = source.read_packet()
+        assert ret is True
+        assert packet is not None
+        assert packet.source_frame_id == 7
+        service._epochs[key].frame_queue.close()
+        assert source.is_opened() is False
+    finally:
+        source.release()
+        service.close()
+
+
+def test_failed_pipeline_constructor_releases_field_epoch(tmp_path, monkeypatch):
+    from app.server import main as server_main
+
+    service, registration, allocation = _registered_live(tmp_path, FakeReceiver)
+    previous_service = server_main.app.state.field_ingest
+    server_main.app.state.field_ingest = service
+
+    class _BoomPipeline:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("constructor failed")
+
+    monkeypatch.setattr(server_main, "InferencePipeline", _BoomPipeline)
+    try:
+        with pytest.raises(RuntimeError, match="constructor failed"):
+            server_main.create_pipeline(
+                None,
+                field_session_id=str(registration.session_id),
+                field_stream_epoch=allocation.stream_epoch,
+            )
+        assert (str(registration.session_id), allocation.stream_epoch) not in service._epochs
+        assert service.store.has_active_epoch() is False
+        replacement = service.allocate_live(
+            registration.session_id, LiveAllocationRequest(profile="720p30", latency_ms=200)
+        )
+        assert replacement.stream_epoch != allocation.stream_epoch
+    finally:
+        server_main.app.state.field_ingest = previous_service
+        service.close()
+
+
+def test_failed_pipeline_start_releases_field_epoch(tmp_path):
+    from app.server import main as server_main
+
+    service, registration, allocation = _registered_live(tmp_path, FakeReceiver)
+    previous_service = server_main.app.state.field_ingest
+    previous_pipeline = server_main.app.state.pipeline
+    previous_global = server_main._pipeline
+    server_main.app.state.field_ingest = service
+    server_main._pipeline = None
+    server_main.app.state.pipeline = None
+    source = service.open_frame_source(registration.session_id, allocation.stream_epoch)
+
+    class _FailStart:
+        def start(self) -> None:
+            raise RuntimeError("models failed")
+
+        def stop(self) -> None:
+            source.release()
+
+    try:
+        with pytest.raises(RuntimeError, match="models failed"):
+            server_main.attach_and_start_pipeline(_FailStart())  # type: ignore[arg-type]
+        assert server_main.app.state.pipeline is None
+        assert server_main._pipeline is None
+        assert service.store.has_active_epoch() is False
+        replacement = service.allocate_live(
+            registration.session_id, LiveAllocationRequest(profile="720p30", latency_ms=200)
+        )
+        assert replacement.stream_epoch != allocation.stream_epoch
+    finally:
+        server_main.app.state.field_ingest = previous_service
+        server_main.app.state.pipeline = previous_pipeline
+        server_main._pipeline = previous_global
+        server_main._store.pipeline_running = False
+        service.close()

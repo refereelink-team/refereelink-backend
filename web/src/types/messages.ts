@@ -37,6 +37,18 @@ export interface BallState {
   age_frames: number;
 }
 
+export interface CaptureSourceMetadata {
+  kind: string;
+  session_id: string | null;
+  stream_epoch: number | null;
+  source_frame_id: number | null;
+  t_us: number | null;
+  transport_pts90k: number | null;
+  camera_motion: Record<string, unknown> | null;
+  pose_missing_reason: string | null;
+  backend_received_at_ms: number | null;
+}
+
 export interface GameEvent {
   id: string;
   event_type: string;
@@ -63,6 +75,7 @@ export interface FrameState {
   ball: BallState | null;
   possession_track_id: number | null;
   events: GameEvent[];
+  capture_source?: CaptureSourceMetadata | null;
 }
 
 export interface MetricsSnapshot {
@@ -104,6 +117,14 @@ export interface MetricsSnapshot {
   jpeg_frames_encoded: number;
   jpeg_encode_latency_ms: number;
   foul_inference_count: number;
+  decoded_frames: number;
+  decode_dropped_frames: number;
+  join_missing_frames: number;
+  inference_dropped_frames: number;
+  field_session_id: string | null;
+  field_stream_epoch: number | null;
+  decode_latency_ms: number;
+  join_latency_ms: number;
 }
 
 export type CalibrationState =

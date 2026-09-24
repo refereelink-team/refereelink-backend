@@ -322,17 +322,8 @@ class FieldIngestService:
                 fps=float(dimensions["fps"]),
                 store=store,
                 release_callback=lambda: self.release_frame_source(session_id, epoch),
-                opened_callback=lambda: self._epoch_open(session_id, epoch),
                 metrics_callback=lambda: self.frame_stream_status(session_id, epoch),
             )
-
-    def _epoch_open(self, session_id: UUID | str, epoch: int) -> bool:
-        with self._lock:
-            runtime = self._epochs.get((str(session_id), epoch))
-            if runtime is None or runtime.receiver is None:
-                return False
-            state = runtime.receiver.snapshot().get("state")
-            return state in {"starting", "listening"}
 
     def release_frame_source(self, session_id: UUID | str, epoch: int) -> None:
         self.release_live(UUID(str(session_id)), epoch)

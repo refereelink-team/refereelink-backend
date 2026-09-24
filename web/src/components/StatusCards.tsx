@@ -29,6 +29,9 @@ const StatusCards: React.FC = () => {
     { label: 'Queue', value: metrics.queue_length, unit: '' },
     { label: 'WS', value: wsConnected ? 'ON' : 'OFF', unit: '' },
     { label: 'Homo', value: frameState?.homography_status ?? '—', unit: '' },
+    { label: 'Decode', value: metrics.decoded_frames, unit: 'frames' },
+    { label: 'Join Miss', value: metrics.join_missing_frames, unit: '' },
+    { label: 'Field', value: metrics.field_session_id ? 'ON' : 'OFF', unit: '' },
   ];
 
   return (

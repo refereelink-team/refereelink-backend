@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -21,6 +22,7 @@ from app.constants.paths import (
 )
 from app.events.engine import EventEngine, FoulEventAdapter
 from app.pipeline.buffer import BoundedFrameBuffer, PipelineMode
+from app.field_ingest.frames import CapturedFrame
 from app.pipeline.recorder import VideoRecorder
 from app.pipeline.source import VideoSource
 from app.state.models import (
@@ -50,6 +52,32 @@ HOME_OVERLAY_COLOR = (147, 20, 255)  # pink / magenta
 AWAY_OVERLAY_COLOR = (255, 191, 0)  # cyan / blue
 REFEREE_OVERLAY_COLOR = (0, 215, 255)  # yellow
 UNKNOWN_OVERLAY_COLOR = (170, 170, 170)
+
+
+def _capture_source_metadata(captured: CapturedFrame | None):
+    if captured is None or not captured.session_id:
+        return None
+    received_ms: float | None = None
+    try:
+        received_ms = (
+            datetime.fromisoformat(captured.backend_received_at.replace("Z", "+00:00")).timestamp()
+            * 1000.0
+        )
+    except (TypeError, ValueError, AttributeError):
+        pass
+    from app.state.models import CaptureSourceMetadata
+
+    return CaptureSourceMetadata(
+        kind="field",
+        session_id=captured.session_id,
+        stream_epoch=captured.stream_epoch,
+        source_frame_id=captured.source_frame_id,
+        t_us=captured.t_us,
+        transport_pts90k=captured.transport_pts90k,
+        camera_motion=captured.camera_motion,
+        pose_missing_reason=captured.pose_missing_reason,
+        backend_received_at_ms=received_ms,
+    )
 
 
 def _map_homography_status(status: str) -> HomographyStatus:
@@ -329,8 +357,10 @@ class InferencePipeline:
         self._running = False
         self._store.pipeline_running = False
         self._buffer.close()
-        if self._source.is_opened():
-            self._source.release()
+        # Release every source, including a field source whose queue already
+        # reached EOF.  FieldIngestSource uses release() to detach the epoch
+        # and stop the receiver; checking is_opened() first would leak it.
+        self._source.release()
         recorder = getattr(self, "_recorder", None)
         if recorder is not None:
             recorder.stop()
@@ -380,7 +410,9 @@ class InferencePipeline:
         )
         self._vision_core.load_models()
         if self._semantic_manager is None:
-            from app.classification.team_calibration.appearance_features import AppearanceFeatureExtractor
+            from app.classification.team_calibration.appearance_features import (
+                AppearanceFeatureExtractor,
+            )
             from app.classification.team_calibration.bundle import CalibrationBundle
             from app.classification.team_calibration.predictor import SupervisedPrototypeClassifier
             from app.classification.team_calibration.role_predictor import CalibratedRoleClassifier
@@ -463,10 +495,9 @@ class InferencePipeline:
 
         try:
             while self._running:
-                capture_ts = self._source.capture_timestamp_ms()
-                ret, frame = self._source.read()
+                ret, captured = self._source.read_packet()
 
-                if not ret or frame is None:
+                if not ret or captured is None:
                     if not self._source.is_opened():
                         logger.info("Video source ended")
                         self._store.source_status = SourceStatus.DISCONNECTED
@@ -474,8 +505,15 @@ class InferencePipeline:
                     time.sleep(0.01)
                     continue
 
+                frame = captured.image
+                capture_ts = (
+                    captured.capture_unix_us / 1000.0
+                    if captured.capture_unix_us is not None
+                    else self._source.capture_timestamp_ms()
+                )
+
                 inference_start = time.monotonic()
-                frame_state = self._process_frame(frame, capture_ts)
+                frame_state = self._process_frame(frame, capture_ts, captured)
                 inference_end = time.monotonic()
 
                 if frame_state is not None:
@@ -495,15 +533,20 @@ class InferencePipeline:
                     self._last_metrics_emit = now
         finally:
             # A local file can finish without an explicit stop() call.  Reflect
-            # that terminal state and always finalize the optional debug video.
+            # that terminal state, release the source, and finalize the
+            # optional debug video.  release() is idempotent for live sources.
             self._running = False
             self._store.pipeline_running = False
+            self._source.release()
             recorder = getattr(self, "_recorder", None)
             if recorder is not None:
                 recorder.stop()
 
     def _process_frame(
-        self, frame: np.ndarray, capture_timestamp_ms: float
+        self,
+        frame: np.ndarray,
+        capture_timestamp_ms: float,
+        captured: CapturedFrame | None = None,
     ) -> Optional[FrameState]:
         if self._vision_core is None:
             raise RuntimeError("VisionCore is not loaded")
@@ -536,9 +579,7 @@ class InferencePipeline:
         )
         for idx in range(len(detections)):
             tracker_id = (
-                int(detections.tracker_id[idx])
-                if detections.tracker_id is not None
-                else idx
+                int(detections.tracker_id[idx]) if detections.tracker_id is not None else idx
             )
             entity_id = vision_frame.entity_ids.get(tracker_id, tracker_id)
             track_status = vision_frame.track_status.get(tracker_id, "detected")
@@ -639,17 +680,13 @@ class InferencePipeline:
             )
 
         if ball_state.image_x is not None and ball_state.image_y is not None:
-            image_point = np.asarray(
-                [ball_state.image_x, ball_state.image_y], dtype=np.float64
-            )
+            image_point = np.asarray([ball_state.image_x, ball_state.image_y], dtype=np.float64)
             frame_height, frame_width = annotated_frame.shape[:2]
             if np.isfinite(image_point).all():
                 ball_center = tuple(np.rint(image_point).astype(np.int64).tolist())
                 if 0 <= ball_center[0] < frame_width and 0 <= ball_center[1] < frame_height:
                     ball_color = (
-                        (0, 215, 255)
-                        if ball_state.status == BallStatus.FRESH
-                        else (180, 180, 180)
+                        (0, 215, 255) if ball_state.status == BallStatus.FRESH else (180, 180, 180)
                     )
                     cv2.circle(annotated_frame, ball_center, 7, ball_color, 2)
                     cv2.putText(
@@ -684,6 +721,7 @@ class InferencePipeline:
             ball=ball_state,
             possession_track_id=self._find_possession_track_id(player_states, ball_state),
             events=[],
+            capture_source=_capture_source_metadata(captured),
         )
         event_engine = getattr(self, "_event_engine", None)
         if event_engine is not None:
@@ -771,10 +809,11 @@ class InferencePipeline:
                 self._semantic_last_frame = frame_index
             except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
                 logger.warning("Semantic prediction failed; using previous state: %s", exc)
-        current_ids = {
-            int(track_id)
-            for track_id in detections.tracker_id
-        } if detections.tracker_id is not None else set()
+        current_ids = (
+            {int(track_id) for track_id in detections.tracker_id}
+            if detections.tracker_id is not None
+            else set()
+        )
         return {
             track_id: result
             for track_id, result in self._semantic_results.items()
@@ -867,9 +906,7 @@ class InferencePipeline:
         )
 
     @staticmethod
-    def _find_possession_track_id(
-        players: list[PlayerState], ball: BallState
-    ) -> Optional[int]:
+    def _find_possession_track_id(players: list[PlayerState], ball: BallState) -> Optional[int]:
         if ball.field_x is None or ball.field_y is None:
             return None
         ball_xy = np.array([ball.field_x, ball.field_y], dtype=np.float32)
@@ -885,7 +922,11 @@ class InferencePipeline:
             for p in candidates
         ]
         best_index = int(np.argmin(distances))
-        return candidates[best_index].track_id if distances[best_index] <= POSSESSION_DISTANCE_MM else None
+        return (
+            candidates[best_index].track_id
+            if distances[best_index] <= POSSESSION_DISTANCE_MM
+            else None
+        )
 
     def _emit_metrics(self) -> None:
         elapsed = time.monotonic() - self._metrics_start
@@ -896,6 +937,7 @@ class InferencePipeline:
         memory_mb = 0.0
         try:
             import psutil
+
             memory_mb = psutil.Process().memory_info().rss / (1024 * 1024)
         except Exception:
             pass
@@ -903,6 +945,7 @@ class InferencePipeline:
         gpu_mem_mb = None
         try:
             import pynvml
+
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
@@ -921,9 +964,7 @@ class InferencePipeline:
         player_calls = vision_core.player_inference_count if vision_core is not None else 0
         player_time = vision_core.player_inference_time_ms if vision_core is not None else 0.0
         pitch_time = vision_core.pitch_inference_time_ms if vision_core is not None else 0.0
-        track_interruptions = (
-            vision_core.track_id_interruptions if vision_core is not None else 0
-        )
+        track_interruptions = vision_core.track_id_interruptions if vision_core is not None else 0
         track_occlusion_events = (
             vision_core.track_occlusion_events if vision_core is not None else 0
         )
@@ -933,28 +974,18 @@ class InferencePipeline:
         track_reactivated_count = (
             vision_core.track_reactivated_count if vision_core is not None else 0
         )
-        track_id_switches = (
-            vision_core.track_id_switches if vision_core is not None else 0
-        )
-        track_recovered_count = (
-            vision_core.track_recovered_count if vision_core is not None else 0
-        )
-        track_fragmentations = (
-            vision_core.track_fragmentations if vision_core is not None else 0
-        )
+        track_id_switches = vision_core.track_id_switches if vision_core is not None else 0
+        track_recovered_count = vision_core.track_recovered_count if vision_core is not None else 0
+        track_fragmentations = vision_core.track_fragmentations if vision_core is not None else 0
         track_max_missing_frames = (
             vision_core.track_max_missing_frames if vision_core is not None else 0
         )
-        track_entity_rebinds = (
-            vision_core.track_entity_rebinds if vision_core is not None else 0
-        )
+        track_entity_rebinds = vision_core.track_entity_rebinds if vision_core is not None else 0
         track_entity_fragmentations = (
             vision_core.track_entity_fragmentations if vision_core is not None else 0
         )
         track_lifecycle_counts = (
-            dict(vision_core.track_lifecycle_counts)
-            if vision_core is not None
-            else {}
+            dict(vision_core.track_lifecycle_counts) if vision_core is not None else {}
         )
         ball_processor = self._ball_processor
         ball_calls = ball_processor.detection_count if ball_processor is not None else 0
@@ -970,6 +1001,9 @@ class InferencePipeline:
             if self._semantic_manager is not None
             else 0
         )
+        stream_metrics = getattr(self._source, "stream_metrics", {})
+        field_session_id = stream_metrics.get("session_id")
+        field_stream_epoch = stream_metrics.get("stream_epoch")
 
         metrics = MetricsSnapshot(
             processing_fps=round(fps, 1),
@@ -979,7 +1013,8 @@ class InferencePipeline:
             dropped_frames=self._buffer.dropped_frames,
             queue_length=len(self._buffer),
             player_count=len(self._store.latest_frame_state.players)
-            if self._store.latest_frame_state else 0,
+            if self._store.latest_frame_state
+            else 0,
             source_status=self._store.source_status,
             memory_mb=round(memory_mb, 1),
             gpu_memory_mb=round(gpu_mem_mb, 1) if gpu_mem_mb is not None else None,
@@ -1016,13 +1051,19 @@ class InferencePipeline:
                 float(getattr(self._store, "jpeg_encode_latency_ms", 0.0)), 3
             ),
             foul_inference_count=self.foul_inference_count,
+            decoded_frames=int(stream_metrics.get("decoded_frame_count", 0)),
+            decode_dropped_frames=int(stream_metrics.get("decode_dropped_frames", 0)),
+            join_missing_frames=int(stream_metrics.get("join_missing_count", 0)),
+            inference_dropped_frames=self._buffer.dropped_frames,
+            field_session_id=field_session_id,
+            field_stream_epoch=field_stream_epoch,
         )
         self._store.metrics = metrics
 
 
 def detection_confidence(detection: Any) -> float:
     try:
-        if hasattr(detection, 'confidence') and len(detection) > 2:
+        if hasattr(detection, "confidence") and len(detection) > 2:
             return float(detection.confidence[0]) if detection.confidence is not None else 0.0
         return 0.0
     except (IndexError, TypeError):
