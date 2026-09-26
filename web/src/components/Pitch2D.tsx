@@ -55,11 +55,10 @@ function drawPitch(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
 const Pitch2D: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const players = useDashboardStore((s) => s.frameState?.players ?? []);
-  const ball = useDashboardStore((s) => s.frameState?.ball ?? null);
-  const homographyStatus = useDashboardStore(
-    (s) => s.frameState?.homography_status ?? 'unavailable'
-  );
+  const frameState = useDashboardStore((s) => s.frameState);
+  const players = frameState?.players ?? [];
+  const ball = frameState?.ball ?? null;
+  const homographyStatus = frameState?.homography_status ?? 'unavailable';
 
   useEffect(() => {
     const canvas = canvasRef.current;

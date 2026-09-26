@@ -254,6 +254,7 @@ class InferencePipeline:
         enable_foul_detection: bool = False,
         foul_checkpoint_path: Optional[str] = None,
         foul_confidence_threshold: float = 0.48,
+        foul_cooldown_frames: int = 25,
         foul_detector: Optional[object] = None,
         enable_recording: bool = False,
         target_video_path: Optional[str] = None,
@@ -294,6 +295,7 @@ class InferencePipeline:
         self._enable_foul_detection = enable_foul_detection
         self._foul_checkpoint_path = foul_checkpoint_path or FOUL_MODEL_PATH
         self._foul_confidence_threshold = foul_confidence_threshold
+        self._foul_cooldown_frames = foul_cooldown_frames
         self._recorder: Optional[VideoRecorder] = None
         if enable_recording:
             recording_path = target_video_path or self._default_recording_path()
@@ -483,6 +485,8 @@ class InferencePipeline:
                 self._foul_detector = FoulDetector(
                     checkpoint_path=self._foul_checkpoint_path,
                     device=self._device,
+                    confidence_threshold=self._foul_confidence_threshold,
+                    cooldown_frames=self._foul_cooldown_frames,
                 )
             except Exception as exc:
                 logger.warning("Foul detector unavailable; continuing without foul events: %s", exc)
@@ -761,7 +765,7 @@ class InferencePipeline:
         if foul_detector is None:
             return None
         try:
-            prediction = foul_detector.update(frame)
+            prediction = foul_detector.update(frame, frame_index=frame_id)
             self.foul_inference_count += 1
             field_xy = (
                 (ball_state.field_x, ball_state.field_y)

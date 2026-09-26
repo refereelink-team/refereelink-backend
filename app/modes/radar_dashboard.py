@@ -35,7 +35,7 @@ from app.constants.paths import (
     PLAYER_DETECTION_MODEL_PATH,
 )
 
-QML_PATH = Path(__file__).with_name('radar_dashboard.qml')
+QML_PATH = Path(__file__).with_name("radar_dashboard.qml")
 LOG_BUFFER_SIZE = 14
 TRACKING_PANEL_RATIO = 0.68
 LOG_PANEL_RATIO = 0.28
@@ -49,7 +49,7 @@ try:
     from PySide6.QtWidgets import QApplication
 
     HAVE_PYSIDE6 = True
-    PYSIDE6_IMPORT_ERROR = ''
+    PYSIDE6_IMPORT_ERROR = ""
 except ImportError as error:  # pragma: no cover - exercised only without Qt installed
     HAVE_PYSIDE6 = False
     PYSIDE6_IMPORT_ERROR = str(error)
@@ -84,7 +84,7 @@ def _decorate_panel(panel: np.ndarray, title: str) -> np.ndarray:
     return decorated
 
 
-def frame_to_qimage(frame: np.ndarray) -> 'QImage':
+def frame_to_qimage(frame: np.ndarray) -> "QImage":
     image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     height, width, channels = image.shape
     return QImage(
@@ -114,7 +114,7 @@ def resize_with_letterbox(
 
     offset_x = (target_width - resized_width) // 2
     offset_y = (target_height - resized_height) // 2
-    canvas[offset_y:offset_y + resized_height, offset_x:offset_x + resized_width] = resized
+    canvas[offset_y : offset_y + resized_height, offset_x : offset_x + resized_width] = resized
     return canvas
 
 
@@ -128,7 +128,7 @@ def render_log_panel(
     cv2.rectangle(panel, (0, 0), (width, 54), (28, 32, 38), -1)
     cv2.putText(
         panel,
-        'Runtime Log',
+        "Runtime Log",
         (20, 34),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.82,
@@ -138,7 +138,7 @@ def render_log_panel(
     )
     cv2.putText(
         panel,
-        'live pipeline events',
+        "live pipeline events",
         (20, 50),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.42,
@@ -179,8 +179,8 @@ def compose_dashboard_frame(
     radar_panel = resize_with_letterbox(radar_frame, (right_width, top_height))
     log_panel = render_log_panel(log_lines, (frame_width, log_height))
 
-    tracking_panel = _decorate_panel(tracking_panel, 'Tracking View')
-    radar_panel = _decorate_panel(radar_panel, '2D Projection')
+    tracking_panel = _decorate_panel(tracking_panel, "Tracking View")
+    radar_panel = _decorate_panel(radar_panel, "2D Projection")
 
     return np.vstack([np.hstack([tracking_panel, radar_panel]), log_panel])
 
@@ -223,7 +223,7 @@ class RadarDashboardWorker(Thread):
     def append_log(self, message: str) -> None:
         self.log_lines.append(message)
         self.log_lines = self.log_lines[-LOG_BUFFER_SIZE:]
-        self.event_queue.put(('log', '\n'.join(self.log_lines)))
+        self.event_queue.put(("log", "\n".join(self.log_lines)))
 
     def run(self) -> None:
         try:
@@ -250,16 +250,6 @@ class RadarDashboardWorker(Thread):
                     # Apply foul HUD to the tracking panel when a prediction
                     # is available and passes the confidence filter.
                     tracked_frame = update.tracked_frame
-                    if update.foul_prediction is not None:
-                        from offside.foul_overlay import _hud_show_prediction, draw_foul_hud
-                        if _hud_show_prediction(
-                            update.foul_prediction,
-                            min_offence_confidence=0.48,
-                            min_action_confidence=0.45,
-                            strict_hud_filter=True,
-                        ):
-                            tracked_frame = tracked_frame.copy()
-                            draw_foul_hud(tracked_frame, update.foul_prediction)
 
                     dashboard_frame = compose_dashboard_frame(
                         tracked_frame=tracked_frame,
@@ -269,24 +259,25 @@ class RadarDashboardWorker(Thread):
                     sink.write_frame(dashboard_frame)
                     self.event_queue.put(
                         (
-                            'frame',
+                            "frame",
                             RadarDashboardFrame(
                                 frame_index=update.frame_index,
                                 tracked_frame=tracked_frame,
                                 radar_frame=update.radar_frame,
-                                log_text='\n'.join(self.log_lines),
+                                log_text="\n".join(self.log_lines),
                                 foul_location=update.foul_location,
                             ),
                         )
                     )
         except Exception as error:  # pragma: no cover - requires runtime dependencies
-            self.append_log(f'error: {error}')
-            self.event_queue.put(('error', str(error)))
+            self.append_log(f"error: {error}")
+            self.event_queue.put(("error", str(error)))
         finally:
-            self.event_queue.put(('finished', None))
+            self.event_queue.put(("finished", None))
 
 
 if HAVE_PYSIDE6:
+
     class RadarFrameProvider(QQuickImageProvider):
         def __init__(self) -> None:
             super().__init__(QQuickImageProvider.Image)
@@ -294,8 +285,8 @@ if HAVE_PYSIDE6:
             self.placeholder = QImage(640, 360, QImage.Format_RGB888)
             self.placeholder.fill(Qt.black)
             self.images = {
-                'tracking': self.placeholder,
-                'radar': self.placeholder,
+                "tracking": self.placeholder,
+                "radar": self.placeholder,
             }
 
         def update_frame(self, name: str, frame: np.ndarray) -> None:
@@ -304,7 +295,7 @@ if HAVE_PYSIDE6:
                 self.images[name] = image
 
         def requestImage(self, image_id, size, requested_size):  # type: ignore[override]
-            frame_name = image_id.split('?', 1)[0]
+            frame_name = image_id.split("?", 1)[0]
             with self.lock:
                 image = self.images.get(frame_name, self.placeholder)
 
@@ -321,7 +312,6 @@ if HAVE_PYSIDE6:
 
             return image
 
-
     class RadarDashboardController(QObject):
         trackingRevisionChanged = Signal()
         radarRevisionChanged = Signal()
@@ -334,7 +324,7 @@ if HAVE_PYSIDE6:
             source_video_path: str,
             target_video_path: str,
             device: str,
-            frame_provider: 'RadarFrameProvider',
+            frame_provider: "RadarFrameProvider",
             foul_checkpoint_path: Optional[str] = None,
             player_model_path: str = PLAYER_DETECTION_MODEL_PATH,
             pitch_model_path: str = PITCH_DETECTION_MODEL_PATH,
@@ -366,8 +356,8 @@ if HAVE_PYSIDE6:
 
             self._tracking_revision = 0
             self._radar_revision = 0
-            self._log_text = ''
-            self._status_text = 'Starting radar dashboard...'
+            self._log_text = ""
+            self._status_text = "Starting radar dashboard..."
             self._finished = False
 
         @Property(int, notify=trackingRevisionChanged)
@@ -425,23 +415,23 @@ if HAVE_PYSIDE6:
                 except Empty:
                     break
 
-                if event_type == 'log':
+                if event_type == "log":
                     self.set_log_text(payload)
-                elif event_type == 'frame':
-                    self.frame_provider.update_frame('tracking', payload.tracked_frame)
-                    self.frame_provider.update_frame('radar', payload.radar_frame)
+                elif event_type == "frame":
+                    self.frame_provider.update_frame("tracking", payload.tracked_frame)
+                    self.frame_provider.update_frame("radar", payload.radar_frame)
                     self._tracking_revision += 1
                     self._radar_revision += 1
                     self.trackingRevisionChanged.emit()
                     self.radarRevisionChanged.emit()
                     self.set_log_text(payload.log_text)
-                    self.set_status_text(f'Frame {payload.frame_index}')
-                elif event_type == 'error':
-                    self.set_status_text(f'Error: {payload}')
-                elif event_type == 'finished':
+                    self.set_status_text(f"Frame {payload.frame_index}")
+                elif event_type == "error":
+                    self.set_status_text(f"Error: {payload}")
+                elif event_type == "finished":
                     self.timer.stop()
                     self.set_finished(True)
-                    self.set_status_text('Processing finished')
+                    self.set_status_text("Processing finished")
 
 
 def run_radar_dashboard(
@@ -459,9 +449,9 @@ def run_radar_dashboard(
 ) -> None:
     if not HAVE_PYSIDE6:
         raise RuntimeError(
-            'PySide6 is required for RADAR_DASHBOARD mode. '
-            f'Current interpreter: {sys.executable}. '
-            f'Import error: {PYSIDE6_IMPORT_ERROR}'
+            "PySide6 is required for RADAR_DASHBOARD mode. "
+            f"Current interpreter: {sys.executable}. "
+            f"Import error: {PYSIDE6_IMPORT_ERROR}"
         )
 
     app = QApplication.instance() or QApplication([])
@@ -482,11 +472,11 @@ def run_radar_dashboard(
         imgsz=imgsz,
     )
 
-    engine.addImageProvider('radarFrames', frame_provider)
-    engine.rootContext().setContextProperty('dashboard', controller)
+    engine.addImageProvider("radarFrames", frame_provider)
+    engine.rootContext().setContextProperty("dashboard", controller)
     engine.load(QUrl.fromLocalFile(str(QML_PATH.resolve())))
     if not engine.rootObjects():
-        raise RuntimeError(f'Failed to load QML UI: {QML_PATH}')
+        raise RuntimeError(f"Failed to load QML UI: {QML_PATH}")
 
     app.aboutToQuit.connect(controller.shutdown)
     controller.start()
