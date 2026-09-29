@@ -40,9 +40,7 @@ def _field_authorized(websocket: WebSocket) -> bool:
     """The downlink reuses the field-ingest bearer token boundary, exactly like
     the sibling ``/ws/v1/field/*`` routes: unconfigured or mismatched tokens are
     rejected before ``accept()``."""
-    field_ingest: FieldIngestService | None = getattr(
-        websocket.app.state, "field_ingest", None
-    )
+    field_ingest: FieldIngestService | None = getattr(websocket.app.state, "field_ingest", None)
     if field_ingest is None or not field_ingest.settings.auth_token:
         return False
     return field_ingest.authorize(_bearer(websocket.headers.get("authorization")))
