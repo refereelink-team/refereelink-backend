@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
+from app.field_ingest.service import FieldIngestService
 from app.referee_alerts.models import (
     CreateRefereeAlertRequest,
     RefereeAlert,
@@ -26,6 +27,25 @@ logger = logging.getLogger(__name__)
 
 def _service(request: Request) -> RefereeAlertService:
     return request.app.state.referee_alerts  # type: ignore[attr-defined]
+
+
+def _bearer(value: str | None) -> str | None:
+    if not value:
+        return None
+    scheme, _, token = value.partition(" ")
+    return token if scheme.lower() == "bearer" and token else None
+
+
+def _field_authorized(websocket: WebSocket) -> bool:
+    """The downlink reuses the field-ingest bearer token boundary, exactly like
+    the sibling ``/ws/v1/field/*`` routes: unconfigured or mismatched tokens are
+    rejected before ``accept()``."""
+    field_ingest: FieldIngestService | None = getattr(
+        websocket.app.state, "field_ingest", None
+    )
+    if field_ingest is None or not field_ingest.settings.auth_token:
+        return False
+    return field_ingest.authorize(_bearer(websocket.headers.get("authorization")))
 
 
 @router.post("/api/referee-alerts", response_model=RefereeAlert)
@@ -58,6 +78,9 @@ async def alerts_socket(websocket: WebSocket) -> None:
     """Field downlink: pushes raw ``RefereeAlert`` JSON frames and records
     ``{"type": "acknowledged", "event_id": ...}`` confirmations in memory."""
     service: RefereeAlertService = websocket.app.state.referee_alerts  # type: ignore[attr-defined]
+    if not _field_authorized(websocket):
+        await websocket.close(code=1008, reason="invalid field ingest bearer token")
+        return
     await service.connect(websocket)
     try:
         while True:

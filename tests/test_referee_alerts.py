@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from app.field_ingest.config import FieldIngestSettings
+from app.field_ingest.service import FieldIngestService
 from app.referee_alerts.api import router as referee_alert_router
 from app.referee_alerts.models import (
     RefereeAlert,
@@ -21,6 +26,8 @@ from app.state.models import FrameState
 from app.state.store import StateStore
 
 CONTRACT_FIELDS = {"event_id", "type", "timestamp", "confidence", "evidence", "case_id", "source"}
+
+FIELD_TEST_TOKEN = "field-test-token"
 
 
 class _FakeDownlinkClient:
@@ -187,9 +194,24 @@ def test_manual_alert_is_visible_in_the_events_rest_list(alert_client):
     assert matches[0]["severity"] == "candidate"
 
 
-def _make_alerts_app() -> FastAPI:
+def _make_alerts_app(
+    auth_token: str | None = FIELD_TEST_TOKEN, root: Path | None = None
+) -> FastAPI:
     application = FastAPI()
     application.state.referee_alerts = RefereeAlertService(StateStore())
+    # The downlink shares the field-ingest bearer token boundary; attach a real
+    # FieldIngestService so the websocket gate exercises the same authorize().
+    application.state.field_ingest = FieldIngestService(
+        FieldIngestSettings(
+            auth_token=auth_token,
+            root=root or Path(tempfile.mkdtemp(prefix="referee-alerts-test-")),
+            srt_bind_host=None,
+            srt_advertise_host=None,
+            srt_port=10000,
+            ffmpeg_bin="ffmpeg",
+            ffprobe_bin="ffprobe",
+        )
+    )
     application.include_router(referee_alert_router)
     return application
 
@@ -200,7 +222,9 @@ def test_alert_socket_receives_alert_frame_and_records_acknowledgement():
     client = TestClient(application)
     alert = _alert(type=RefereeAlertType.OFFSIDE_CANDIDATE)
 
-    with client.websocket_connect("/ws/v1/field/alerts") as websocket:
+    with client.websocket_connect(
+        "/ws/v1/field/alerts", headers={"Authorization": f"Bearer {FIELD_TEST_TOKEN}"}
+    ) as websocket:
         # Publish on the session's own loop so the push is deterministic.
         assert websocket.portal.call(service.publish_referee_alert, alert) is True
         assert websocket.receive_json() == alert.model_dump(mode="json")
@@ -229,3 +253,29 @@ def test_alert_socket_receives_alert_frame_and_records_acknowledgement():
     while time.time() < deadline and service.client_count:
         time.sleep(0.01)
     assert service.client_count == 0
+
+
+def test_alert_socket_rejects_missing_or_wrong_bearer_token(tmp_path):
+    application = _make_alerts_app(root=tmp_path)
+    service: RefereeAlertService = application.state.referee_alerts
+    client = TestClient(application)
+
+    for headers in ({}, {"Authorization": "Bearer wrong-token"}):
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with client.websocket_connect("/ws/v1/field/alerts", headers=headers):
+                pass  # pragma: no cover - the socket is closed before accept
+        assert excinfo.value.code == 1008
+
+    assert service.client_count == 0
+
+
+def test_alert_socket_rejects_when_field_token_is_unconfigured(tmp_path):
+    application = _make_alerts_app(auth_token=None, root=tmp_path)
+    client = TestClient(application)
+
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect(
+            "/ws/v1/field/alerts", headers={"Authorization": f"Bearer {FIELD_TEST_TOKEN}"}
+        ):
+            pass  # pragma: no cover - the socket is closed before accept
+    assert excinfo.value.code == 1008
