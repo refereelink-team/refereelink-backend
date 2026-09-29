@@ -1,6 +1,10 @@
 # RefereeLink Field Ingest and Replay Design
 
-Status: receiver boundary implemented on `feat/backend-field-ingest-receiver`. This document describes the versioned contract and the current receiver-only implementation. Production deployment, replay workers, inference integration, and training behavior remain out of scope for this phase.
+Status: receiver boundary and live Field Ingest to Inference bridge implemented
+on `feat/backend-field-inference-bridge`. This document describes the versioned
+contract and the live path through `InferencePipeline`; production deployment,
+offline replay workers, and training behavior remain out of scope for this
+phase.
 
 ## Scope
 
@@ -146,7 +150,9 @@ CapturedFrame {
 
 `FrameJoiner` associates a decoded video frame with the newest camera-motion sample at or before the frame, waiting at most 50 ms. No matching sample is a valid result and must carry `pose_missing_reason`; the video still proceeds. DockKit motion data is optional diagnostics and is never substituted for Core Motion.
 
-The existing source interfaces remain compatible. The new source is an additive field-ingest adapter, not a replacement for `/ws/state` or `/video/stream`. The receiver-only phase keeps `FrameState` and the dashboard contract unchanged; future inference integration must synchronize optional source/session fields across:
+The existing source interfaces remain compatible. The new source is an additive
+field-ingest adapter, not a replacement for `/ws/state` or `/video/stream`. The
+live bridge synchronizes optional source/session fields across:
 
 - `app/state/models.py`;
 - REST and WebSocket publishers;
@@ -194,14 +200,22 @@ Upload objects are immutable and at most 8 MiB. Larger files are split into fixe
 
 ## Implementation status and remaining work
 
-The current branch implements the first four receiver-boundary steps:
+The current branch implements the receiver boundary and live inference bridge:
 
 1. Pydantic wire models, compatibility aliases, and contract tests.
 2. SQLite session/artifact persistence and idempotent APIs.
 3. WSS telemetry, ACK/gap accounting, clock probes, and bounded NDJSON output.
-4. FFmpeg/libsrt SRT receive, PTS-preserving output, decode metrics, and receiver-only startup.
+4. FFmpeg/libsrt SRT receive, PTS-preserving output, raw decoded-frame delivery,
+   decode metrics, and receiver-only startup.
+5. Bounded latest-frame queue, PTS-based `FrameJoiner`, and explicit single-consumer
+   `FieldIngestSource` lifecycle.
+6. Explicit field session/epoch pipeline startup with optional capture metadata
+   propagated to `FrameState`, metrics, `/ws/state`, and `/video/stream`.
 
-Remaining work is `CaptureReplaySource`, ZIP/directory import, production quotas and auth rotation, restart recovery, and inference integration. Field acceptance uses the iOS transport branch and must be recorded separately from production backend validation.
+Remaining work is `CaptureReplaySource`, ZIP/directory import, production quotas
+and auth rotation, restart recovery, and real-model field-effect validation.
+Field acceptance uses the iOS transport branch and must be recorded separately
+from production backend validation.
 
 No step should automatically start training or generate labels.
 
