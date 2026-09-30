@@ -77,8 +77,7 @@ def _render_panel(frame: np.ndarray, state: FrameState, panel_width: int) -> np.
     _draw_text(panel, f"homography: {status}", (18, 82), status_color, 0.55, 2)
 
     valid_players = sum(
-        player.field_x is not None and player.field_y is not None
-        for player in state.players
+        player.field_x is not None and player.field_y is not None for player in state.players
     )
     ball_status = state.ball.status.value if state.ball is not None else "unavailable"
     _draw_text(
@@ -86,7 +85,12 @@ def _render_panel(frame: np.ndarray, state: FrameState, panel_width: int) -> np.
         f"players: {len(state.players)}  projected: {valid_players}",
         (18, 108),
     )
-    _draw_text(panel, f"ball: {ball_status}", (18, 132), (0, 215, 255) if ball_status != "unavailable" else (160, 160, 160))
+    _draw_text(
+        panel,
+        f"ball: {ball_status}",
+        (18, 132),
+        (0, 215, 255) if ball_status != "unavailable" else (160, 160, 160),
+    )
 
     padding = 18
     pitch_top = 160

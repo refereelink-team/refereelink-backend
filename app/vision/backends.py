@@ -99,8 +99,7 @@ def _normalize_backend(backend: str) -> BackendName:
     except KeyError as exc:
         supported = ", ".join(sorted({"pytorch", "onnx", "tensorrt"}))
         raise ValueError(
-            f"Unsupported inference backend '{backend}'. "
-            f"Supported backends: {supported}."
+            f"Unsupported inference backend '{backend}'. Supported backends: {supported}."
         ) from exc
 
 

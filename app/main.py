@@ -16,15 +16,15 @@ from app.constants.paths import (
 
 
 class Mode(Enum):
-    PITCH_DETECTION = 'PITCH_DETECTION'
-    PLAYER_DETECTION = 'PLAYER_DETECTION'
-    PLAYER_TRACKING = 'PLAYER_TRACKING'
-    TEAM_CLASSIFICATION = 'TEAM_CLASSIFICATION'
-    RADAR = 'RADAR'
-    RADAR_DASHBOARD = 'RADAR_DASHBOARD'
-    RADAR_DASHBOARD_LEGACY = 'RADAR_DASHBOARD_LEGACY'
-    FOUL_DETECTION = 'FOUL_DETECTION'
-    SERVER = 'SERVER'
+    PITCH_DETECTION = "PITCH_DETECTION"
+    PLAYER_DETECTION = "PLAYER_DETECTION"
+    PLAYER_TRACKING = "PLAYER_TRACKING"
+    TEAM_CLASSIFICATION = "TEAM_CLASSIFICATION"
+    RADAR = "RADAR"
+    RADAR_DASHBOARD = "RADAR_DASHBOARD"
+    RADAR_DASHBOARD_LEGACY = "RADAR_DASHBOARD_LEGACY"
+    FOUL_DETECTION = "FOUL_DETECTION"
+    SERVER = "SERVER"
 
 
 def main(
@@ -87,27 +87,40 @@ def main(
     if mode == Mode.SERVER:
         from app.server.main import main as server_main
         import sys
+
         sys.argv = [
             sys.argv[0],
-            '--video_source', source_video_path,
-            '--device', device,
-            '--inference_backend', inference_backend,
-            '--player_model_path', player_model_path,
-            '--pitch_model_path', pitch_model_path,
-            '--camera_calibration_path', camera_calibration_path or '',
-            '--calibration_alpha', str(calibration_alpha),
-            '--pitch_detection_interval', str(pitch_detection_interval),
-            '--imgsz', str(imgsz),
-            '--role_model_path', role_model_path,
-            '--role_detection_interval', str(role_detection_interval),
-            '--team_classification_interval', str(team_classification_interval),
+            "--video_source",
+            source_video_path,
+            "--device",
+            device,
+            "--inference_backend",
+            inference_backend,
+            "--player_model_path",
+            player_model_path,
+            "--pitch_model_path",
+            pitch_model_path,
+            "--camera_calibration_path",
+            camera_calibration_path or "",
+            "--calibration_alpha",
+            str(calibration_alpha),
+            "--pitch_detection_interval",
+            str(pitch_detection_interval),
+            "--imgsz",
+            str(imgsz),
+            "--role_model_path",
+            role_model_path,
+            "--role_detection_interval",
+            str(role_detection_interval),
+            "--team_classification_interval",
+            str(team_classification_interval),
         ]
         if team_classifier_path:
-            sys.argv += ['--team_classifier_path', team_classifier_path]
+            sys.argv += ["--team_classifier_path", team_classifier_path]
         if not enable_undistortion:
-            sys.argv.append('--disable_undistortion')
+            sys.argv.append("--disable_undistortion")
         if foul_checkpoint_path:
-            sys.argv += ['--foul_checkpoint_path', foul_checkpoint_path, '--enable_foul_detection']
+            sys.argv += ["--foul_checkpoint_path", foul_checkpoint_path, "--enable_foul_detection"]
         server_main()
         return
 
@@ -180,6 +193,7 @@ def main(
 
         if foul_checkpoint_path is None:
             from app.constants.paths import FOUL_MODEL_PATH
+
             foul_checkpoint_path = FOUL_MODEL_PATH
 
         frame_generator = run_foul_detection(
@@ -204,33 +218,38 @@ def main(
         cv2.destroyAllWindows()
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--source_video_path', type=str, required=True)
-    parser.add_argument('--target_video_path', type=str, required=True)
-    parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--inference_backend', type=str, choices=('auto', 'pytorch', 'onnx', 'tensorrt'), default='auto')
-    parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
-    parser.add_argument('--player_model_path', type=str, default=PLAYER_DETECTION_MODEL_PATH)
-    parser.add_argument('--pitch_model_path', type=str, default=PITCH_DETECTION_MODEL_PATH)
-    parser.add_argument('--camera_calibration_path', type=str, default=CAMERA_CALIBRATION_PATH)
-    parser.add_argument('--disable_undistortion', action='store_false', dest='enable_undistortion')
-    parser.set_defaults(enable_undistortion=True)
-    parser.add_argument('--calibration_alpha', type=float, default=0.0)
-    parser.add_argument('--pitch_detection_interval', type=int, default=5)
-    parser.add_argument('--imgsz', type=int, default=640)
-    parser.add_argument('--role_model_path', type=str, default=ROLE_DETECTION_MODEL_PATH)
-    parser.add_argument('--team_classifier_path', type=str, default=TEAM_CLASSIFIER_PATH)
-    parser.add_argument('--role_detection_interval', type=int, default=3)
-    parser.add_argument('--team_classification_interval', type=int, default=5)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--source_video_path", type=str, required=True)
+    parser.add_argument("--target_video_path", type=str, required=True)
+    parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument(
-        '--foul_checkpoint_path',
+        "--inference_backend",
+        type=str,
+        choices=("auto", "pytorch", "onnx", "tensorrt"),
+        default="auto",
+    )
+    parser.add_argument("--mode", type=Mode, default=Mode.PLAYER_DETECTION)
+    parser.add_argument("--player_model_path", type=str, default=PLAYER_DETECTION_MODEL_PATH)
+    parser.add_argument("--pitch_model_path", type=str, default=PITCH_DETECTION_MODEL_PATH)
+    parser.add_argument("--camera_calibration_path", type=str, default=CAMERA_CALIBRATION_PATH)
+    parser.add_argument("--disable_undistortion", action="store_false", dest="enable_undistortion")
+    parser.set_defaults(enable_undistortion=True)
+    parser.add_argument("--calibration_alpha", type=float, default=0.0)
+    parser.add_argument("--pitch_detection_interval", type=int, default=5)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--role_model_path", type=str, default=ROLE_DETECTION_MODEL_PATH)
+    parser.add_argument("--team_classifier_path", type=str, default=TEAM_CLASSIFIER_PATH)
+    parser.add_argument("--role_detection_interval", type=int, default=3)
+    parser.add_argument("--team_classification_interval", type=int, default=5)
+    parser.add_argument(
+        "--foul_checkpoint_path",
         type=str,
         default=None,
         help=(
-            'Path to MVFoul checkpoint (.pth.tar). '
-            'Required for FOUL_DETECTION mode (falls back to assets/weights/mvfoul.pth.tar). '
-            'Optional for RADAR / RADAR_DASHBOARD — enables the foul HUD overlay when provided.'
+            "Path to MVFoul checkpoint (.pth.tar). "
+            "Required for FOUL_DETECTION mode (falls back to assets/weights/mvfoul.pth.tar). "
+            "Optional for RADAR / RADAR_DASHBOARD — enables the foul HUD overlay when provided."
         ),
     )
     args = parser.parse_args()

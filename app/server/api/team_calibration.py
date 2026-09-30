@@ -183,7 +183,9 @@ async def start_team_calibration(
             calibration_session=session,
         )
         attach_and_start(pipeline)
-        store.update_config({"video_source": source, "device": payload.device or store.config.device})
+        store.update_config(
+            {"video_source": source, "device": payload.device or store.config.device}
+        )
     except Exception as exc:
         logger.exception("Failed to start team calibration")
         session.reset()
@@ -247,10 +249,12 @@ def _video_response(path, request: Request):
         raise HTTPException(status_code=416, detail="byte range is outside the video")
     end = min(end, size - 1)
     length = end - start + 1
-    headers.update({
-        "Content-Length": str(length),
-        "Content-Range": f"bytes {start}-{end}/{size}",
-    })
+    headers.update(
+        {
+            "Content-Length": str(length),
+            "Content-Range": f"bytes {start}-{end}/{size}",
+        }
+    )
 
     def iterator():
         with path.open("rb") as handle:
