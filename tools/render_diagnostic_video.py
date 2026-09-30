@@ -20,7 +20,6 @@ import numpy as np
 from app.annotators.pitch import draw_pitch
 from app.config.pitch import SoccerPitchConfiguration
 from app.constants.paths import (
-    BALL_DETECTION_MODEL_PATH,
     CAMERA_CALIBRATION_PATH,
     PITCH_DETECTION_MODEL_PATH,
     PLAYER_DETECTION_MODEL_PATH,
@@ -209,7 +208,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--player-model-path", default=PLAYER_DETECTION_MODEL_PATH)
     parser.add_argument("--pitch-model-path", default=PITCH_DETECTION_MODEL_PATH)
-    parser.add_argument("--ball-model-path", default=BALL_DETECTION_MODEL_PATH)
     parser.add_argument("--camera-calibration-path", default=CAMERA_CALIBRATION_PATH)
     parser.add_argument("--pitch-detection-interval", type=int, default=5)
     parser.add_argument("--imgsz", type=int, default=640)
@@ -255,8 +253,6 @@ def main() -> int:
         enable_undistortion=not args.disable_undistortion,
         pitch_detection_interval=args.pitch_detection_interval,
         imgsz=args.imgsz,
-        ball_model_path=args.ball_model_path,
-        enable_ball=True,
         enable_foul_detection=False,
         frame_sink=frame_sink,
     )
