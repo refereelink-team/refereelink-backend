@@ -10,6 +10,7 @@ import LogPanel from './components/LogPanel';
 import TeamCalibrationPanel from './components/TeamCalibrationPanel';
 import MultiviewReviewPage from './pages/MultiviewReviewPage';
 import './styles/global.css';
+import FoulAlert from './components/FoulAlert';
 
 const Dashboard: React.FC = () => {
   const { sendCommand } = useWebSocket();
@@ -32,6 +33,7 @@ const Dashboard: React.FC = () => {
         </a>
       )}
       <VideoPanel />
+      <FoulAlert />
       <Pitch2D />
       <StatusCards />
       <EventAlerts />
