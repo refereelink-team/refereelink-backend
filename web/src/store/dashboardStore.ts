@@ -29,6 +29,11 @@ interface DashboardState {
   setTeamCalibration: (state: TeamCalibrationState) => void;
 }
 
+const EMPTY_PLAYERS: FrameState['players'] = [];
+
+export const selectPitchPlayers = (state: DashboardState): FrameState['players'] =>
+  state.frameState?.players ?? EMPTY_PLAYERS;
+
 export const useDashboardStore = create<DashboardState>((set) => ({
   frameState: null,
   metrics: null,
@@ -51,16 +56,12 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     team_classifier_path: null,
     team_calibration_path: null,
     require_team_calibration: true,
-    ball_model_path: 'assets/weights/football-ball-detection.pt',
-    enable_ball: true,
     role_detection_interval: 3,
     team_classification_interval: 5,
     track_activation_threshold: 0.25,
     track_lost_buffer: 45,
     track_matching_threshold: 0.8,
     track_minimum_consecutive_frames: 2,
-    ball_detection_interval: 2,
-    ball_max_prediction_frames: 8,
     camera_calibration_path: 'assets/calibration/camera.npz',
     enable_undistortion: true,
     calibration_alpha: 0,

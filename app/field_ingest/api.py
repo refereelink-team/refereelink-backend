@@ -83,6 +83,8 @@ def create_router(service: FieldIngestService) -> APIRouter:
             raise HTTPException(status_code=404, detail="session not found") from exc
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return allocation.model_dump(mode="json", by_alias=True)

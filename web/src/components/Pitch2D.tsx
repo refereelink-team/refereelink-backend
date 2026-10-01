@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { useDashboardStore } from '../store/dashboardStore';
+import { selectPitchPlayers, useDashboardStore } from '../store/dashboardStore';
 
 const PITCH_W = 12000;
 const PITCH_H = 7000;
@@ -55,10 +55,11 @@ function drawPitch(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
 const Pitch2D: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const frameState = useDashboardStore((s) => s.frameState);
-  const players = frameState?.players ?? [];
-  const ball = frameState?.ball ?? null;
-  const homographyStatus = frameState?.homography_status ?? 'unavailable';
+  const players = useDashboardStore(selectPitchPlayers);
+  const ball = useDashboardStore((s) => s.frameState?.ball ?? null);
+  const homographyStatus = useDashboardStore(
+    (s) => s.frameState?.homography_status ?? 'unavailable'
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;

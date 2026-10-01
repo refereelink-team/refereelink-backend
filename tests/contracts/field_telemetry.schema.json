@@ -23,6 +23,7 @@
           "sample_id": {"type": "integer", "minimum": 0},
           "t_us": {"type": "integer"},
           "transport_pts90k": {"type": "integer"},
+          "capture_unix_us": {"type": ["integer", "null"]},
           "pose_missing_reason": {"type": ["string", "null"]}
         },
         "additionalProperties": true

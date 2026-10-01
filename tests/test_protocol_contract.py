@@ -10,6 +10,7 @@ from app.server.main import app
 from app.state.models import (
     BallState,
     BallStatus,
+    CaptureSourceMetadata,
     FrameState,
     GameEvent,
     HomographyStatus,
@@ -72,6 +73,29 @@ def test_frame_state_json_contract_preserves_unknown_and_unavailable() -> None:
     roundtrip = FrameState.model_validate_json(json.dumps(payload))
     assert roundtrip.frame_id == 42
     assert roundtrip.players[0].role is PlayerRole.UNKNOWN
+
+
+def test_frame_state_contract_preserves_field_capture_metadata() -> None:
+    frame = _sample_frame().model_copy(
+        update={
+            "capture_source": CaptureSourceMetadata(
+                kind="field",
+                session_id="session",
+                stream_epoch=3,
+                source_frame_id=42,
+                t_us=1_200_000,
+                transport_pts90k=108_000,
+                camera_motion={"pitch": 0.2},
+                pose_missing_reason=None,
+                backend_received_at_ms=1005.0,
+            )
+        }
+    )
+
+    payload = json.loads(frame.model_dump_json())
+    _validate_frame_payload(payload)
+    assert payload["capture_source"]["stream_epoch"] == 3
+    assert payload["capture_source"]["transport_pts90k"] == 108_000
 
 
 def test_metrics_snapshot_json_contract_has_stable_disconnected_defaults() -> None:

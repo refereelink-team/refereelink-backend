@@ -39,6 +39,12 @@
     "events": {
       "type": "array",
       "items": { "$ref": "#/$defs/event" }
+    },
+    "capture_source": {
+      "anyOf": [
+        { "$ref": "#/$defs/capture_source" },
+        { "type": "null" }
+      ]
     }
   },
   "$defs": {
@@ -78,6 +84,21 @@
         "severity": { "type": "string" },
         "timestamp": { "type": "number" },
         "frame_id": { "type": "integer" }
+      }
+    },
+    "capture_source": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string" },
+        "session_id": { "type": ["string", "null"] },
+        "stream_epoch": { "type": ["integer", "null"] },
+        "source_frame_id": { "type": ["integer", "null"] },
+        "t_us": { "type": ["integer", "null"] },
+        "transport_pts90k": { "type": ["integer", "null"] },
+        "camera_motion": { "type": ["object", "null"] },
+        "pose_missing_reason": { "type": ["string", "null"] },
+        "backend_received_at_ms": { "type": ["number", "null"] }
       }
     }
   }
