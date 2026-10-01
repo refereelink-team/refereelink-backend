@@ -247,8 +247,7 @@ class RadarDashboardWorker(Thread):
                     if self.stop_event.is_set():
                         break
 
-                    # Apply foul HUD to the tracking panel when a prediction
-                    # is available and passes the confidence filter.
+                    # iter_radar_analysis already renders candidate notices.
                     tracked_frame = update.tracked_frame
 
                     dashboard_frame = compose_dashboard_frame(

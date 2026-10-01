@@ -130,6 +130,8 @@ class MViTFoulPredictor:
         act_probs = torch.softmax(act_logits.float().reshape(-1, 8), dim=-1)[0]
         sev_index = int(torch.argmax(off_probs).item())
         act_index = int(torch.argmax(act_probs).item())
+        if sev_index == 0:
+            return None
         confidence = float((off_probs[sev_index].item() + act_probs[act_index].item()) / 2.0)
         return FoulPrediction(
             confidence=confidence,

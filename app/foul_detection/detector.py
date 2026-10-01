@@ -73,7 +73,7 @@ class FoulDetector:
             self._frames_since_inference = 0
 
         prediction = self._latest_prediction
-        if prediction is None:
+        if prediction is None or prediction.decision == "no_offence":
             return None
         if prediction.confidence < self._confidence_threshold:
             return None

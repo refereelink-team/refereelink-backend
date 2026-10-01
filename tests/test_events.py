@@ -86,3 +86,13 @@ def test_foul_adapter_preserves_explainable_details() -> None:
     assert event.event_type == "foul_candidate"
     assert event.foul_details == {"offence": "high", "action": "pushing"}
     assert event.evidence["source"] == "mvfoul"
+
+
+def test_foul_adapter_ignores_confident_no_offence() -> None:
+    event = FoulEventAdapter().update(
+        SimpleNamespace(confidence=0.99, decision="no_offence"),
+        frame_id=12,
+        timestamp=1.0,
+    )
+
+    assert event is None

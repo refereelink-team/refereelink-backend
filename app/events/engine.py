@@ -84,7 +84,9 @@ class EventEngine:
                 events.extend(
                     self._emit(
                         event_type="shot_candidate",
-                        confidence=float(np.clip(speed / (self.config.shot_speed_mm_s * 2), 0.5, 0.99)),
+                        confidence=float(
+                            np.clip(speed / (self.config.shot_speed_mm_s * 2), 0.5, 0.99)
+                        ),
                         timestamp=timestamp,
                         frame=frame,
                         involved=[possession] if possession is not None else [],
@@ -114,14 +116,14 @@ class EventEngine:
             if len(defenders) < 2:
                 continue
             defenders.sort(key=lambda player: float(player.field_x))
-            second_last = (
-                defenders[-2] if attacking_team == 0 else defenders[1]
-            )
+            second_last = defenders[-2] if attacking_team == 0 else defenders[1]
             line_x = float(second_last.field_x)
             for attacker in attackers:
                 attacker_x = float(attacker.field_x)
                 beyond_line = attacker_x > line_x if attacking_team == 0 else attacker_x < line_x
-                beyond_ball = attacker_x > ball.field_x if attacking_team == 0 else attacker_x < ball.field_x
+                beyond_ball = (
+                    attacker_x > ball.field_x if attacking_team == 0 else attacker_x < ball.field_x
+                )
                 if not (beyond_line and beyond_ball):
                     continue
                 results.extend(
@@ -185,6 +187,9 @@ class FoulEventAdapter:
         field_xy: Optional[tuple[float, float]] = None,
     ) -> Optional[GameEvent]:
         if prediction is None:
+            return None
+        decision = getattr(prediction, "decision", None)
+        if getattr(decision, "value", decision) == "no_offence":
             return None
         confidence = _prediction_confidence(prediction)
         if confidence < self.confidence_threshold:

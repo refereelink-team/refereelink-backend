@@ -181,6 +181,9 @@ def iter_radar_analysis(
     emit_radar_log(log_callback, "shared vision core ready")
 
     foul_detector = None
+    from app.foul_detection.overlay import FoulCandidateOverlay
+
+    foul_overlay = FoulCandidateOverlay(fps=video_info.fps)
     if foul_checkpoint_path is not None:
         from app.foul_detection.detector import FoulDetector
 
@@ -224,6 +227,7 @@ def iter_radar_analysis(
             foul_location=foul_location,
         )
         radar_available = projection.available
+        tracked_frame = foul_overlay.annotate(tracked_frame, foul_prediction, frame_index)
         if projection.homography_status == "unavailable":
             emit_radar_log(log_callback, f"frame={frame_index} radar projection unavailable")
         elif projection.homography_status == "stale":

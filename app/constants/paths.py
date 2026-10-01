@@ -16,5 +16,5 @@ LEGACY_PLAYER_DETECTION_MODEL_PATH = str(WEIGHTS_DIR / "football-player-detectio
 PITCH_DETECTION_MODEL_PATH = str(WEIGHTS_DIR / "football-pitch-detection.pt")
 ROLE_DETECTION_MODEL_PATH = str(WEIGHTS_DIR / "player-role-yolo11n.pt")
 TEAM_CLASSIFIER_PATH = str(WEIGHTS_DIR / "team-classifier.joblib")
-FOUL_MODEL_PATH = str(WEIGHTS_DIR / "mvfoul.pth.tar")
+FOUL_MODEL_PATH = str(WEIGHTS_DIR / "14_model.pth.tar")
 CAMERA_CALIBRATION_PATH = str(ASSETS_DIR / "calibration" / "camera.npz")

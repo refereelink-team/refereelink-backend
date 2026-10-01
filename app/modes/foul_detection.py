@@ -1,8 +1,8 @@
 """FOUL_DETECTION mode — standalone foul detection pipeline.
 
 Streams frames from a source video, maintains a rolling frame buffer via
-:class:`~app.foul_detection.detector.FoulDetector`, and yields frames.
-Candidate events are surfaced by the caller, not drawn on the frame.
+:class:`~app.foul_detection.detector.FoulDetector`, and overlays candidates
+for two seconds so exported videos show the detector's output.
 """
 
 from typing import Iterator, Optional
@@ -12,6 +12,7 @@ import supervision as sv
 
 from app.constants.paths import CAMERA_CALIBRATION_PATH
 from app.foul_detection.detector import FoulDetector
+from app.foul_detection.overlay import FoulCandidateOverlay
 from app.geometry.camera import build_undistorter
 
 
@@ -25,7 +26,7 @@ def run_foul_detection(
     enable_undistortion: bool = True,
     calibration_alpha: float = 0.0,
 ) -> Iterator[np.ndarray]:
-    """Yield BGR frames after running the rolling foul detector.
+    """Yield BGR frames annotated with suspicious foul candidates.
 
     Args:
         source_video_path: Path to the input video file.
@@ -49,8 +50,10 @@ def run_foul_detection(
         alpha=calibration_alpha,
     )
 
+    video_info = sv.VideoInfo.from_video_path(source_video_path)
+    overlay = FoulCandidateOverlay(fps=video_info.fps)
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     for frame_index, frame in enumerate(frame_generator, start=1):
         undistorted_frame = undistorter.apply(frame)
-        detector.update(undistorted_frame, frame_index=frame_index)
-        yield undistorted_frame
+        prediction = detector.update(undistorted_frame, frame_index=frame_index)
+        yield overlay.annotate(undistorted_frame, prediction, frame_index)
