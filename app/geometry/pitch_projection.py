@@ -69,6 +69,109 @@ def build_pitch_point_references(
     ]
 
 
+def translate_homography(
+    homography: np.ndarray,
+    shift_xy: Tuple[float, float],
+) -> np.ndarray:
+    """Compensate a pure image translation since ``homography`` was fitted.
+
+    ``shift_xy`` is the displacement of image content in the current frame
+    relative to the reference frame (``CameraMotionEstimator`` convention), so a
+    current pixel ``p`` corresponds to ``p - shift`` in the reference frame.
+    """
+
+    translation = np.array(
+        [[1.0, 0.0, -float(shift_xy[0])], [0.0, 1.0, -float(shift_xy[1])], [0.0, 0.0, 1.0]]
+    )
+    return np.asarray(homography, dtype=np.float64) @ translation
+
+
+def homography_deviation(
+    previous: np.ndarray,
+    current: np.ndarray,
+    image_points: np.ndarray,
+) -> Optional[float]:
+    """Median pitch-space distance between two homographies at image points."""
+
+    points = np.asarray(image_points, dtype=np.float64).reshape(-1, 2)
+    if len(points) == 0:
+        return None
+    homogeneous = np.hstack([points, np.ones((len(points), 1))])
+    projected = []
+    for matrix in (previous, current):
+        mapped = homogeneous @ np.asarray(matrix, dtype=np.float64).T
+        with np.errstate(divide="ignore", invalid="ignore"):
+            projected.append(mapped[:, :2] / mapped[:, 2:3])
+    distances = np.linalg.norm(projected[1] - projected[0], axis=1)
+    distances = distances[np.isfinite(distances)]
+    if len(distances) == 0:
+        return None
+    return float(np.median(distances))
+
+
+def blend_homographies(
+    previous: np.ndarray,
+    current: np.ndarray,
+    alpha: float,
+    frame_shape: Sequence[int],
+    pitch_length: float,
+    pitch_width: float,
+    grid_size: int = 6,
+) -> np.ndarray:
+    """Move ``previous`` towards ``current`` by ``alpha`` in pitch space.
+
+    A grid of image points is projected through both matrices, the pitch
+    positions are linearly blended, and a homography is refitted.  Only grid
+    points that land on (a margin around) the pitch under both matrices are
+    used, so points above the horizon cannot poison the fit.  Falls back to
+    ``current`` when too few points are usable.
+    """
+
+    alpha = float(np.clip(alpha, 0.0, 1.0))
+    if alpha >= 1.0:
+        return np.asarray(current, dtype=np.float64)
+    height, width = int(frame_shape[0]), int(frame_shape[1])
+    xs = np.linspace(0.0, width - 1.0, grid_size)
+    ys = np.linspace(0.0, height - 1.0, grid_size)
+    image_points = np.array([[x, y] for y in ys for x in xs], dtype=np.float64)
+
+    def project(matrix: np.ndarray) -> np.ndarray:
+        homogeneous = (
+            np.hstack([image_points, np.ones((len(image_points), 1))])
+            @ np.asarray(matrix, dtype=np.float64).T
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return homogeneous[:, :2] / homogeneous[:, 2:3], homogeneous[:, 2]
+
+    previous_world, previous_w = project(previous)
+    current_world, current_w = project(current)
+    margin_x = 0.5 * pitch_length
+    margin_y = 0.5 * pitch_width
+
+    def usable(world: np.ndarray, w: np.ndarray) -> np.ndarray:
+        return (
+            np.isfinite(world).all(axis=1)
+            & (w > 0)
+            & (world[:, 0] >= -margin_x)
+            & (world[:, 0] <= pitch_length + margin_x)
+            & (world[:, 1] >= -margin_y)
+            & (world[:, 1] <= pitch_width + margin_y)
+        )
+
+    mask = usable(previous_world, previous_w) & usable(current_world, current_w)
+    if int(np.count_nonzero(mask)) < MIN_KEYPOINTS_FOR_HOMOGRAPHY + 2:
+        return np.asarray(current, dtype=np.float64)
+    blended_world = (1.0 - alpha) * previous_world[mask] + alpha * current_world[mask]
+    blended, _ = cv2.findHomography(
+        image_points[mask].astype(np.float32),
+        blended_world.astype(np.float32),
+        0,
+    )
+    if blended is None or not np.isfinite(blended).all():
+        return np.asarray(current, dtype=np.float64)
+    return blended
+
+
 class PitchProjectionEngine:
     def __init__(
         self,
@@ -79,12 +182,8 @@ class PitchProjectionEngine:
     ) -> None:
         self.config = config
         self.references = build_pitch_point_references(config)
-        self.reference_by_label = {
-            reference.label: reference for reference in self.references
-        }
-        self.references_by_index = {
-            reference.index: reference for reference in self.references
-        }
+        self.reference_by_label = {reference.label: reference for reference in self.references}
+        self.references_by_index = {reference.index: reference for reference in self.references}
         self.min_keypoint_confidence = min_keypoint_confidence
         self.max_reprojection_error_px = max_reprojection_error_px
         self.max_stale_frames = max(1, int(round(max(fps, 1.0) * MAX_STALE_SECONDS)))
@@ -105,16 +204,14 @@ class PitchProjectionEngine:
     ) -> PitchProjectionResult:
         observations = self._extract_model_observations(frame, keypoints)
 
-        homography, inlier_labels, reprojection_error = self._estimate_homography(
-            observations
-        )
+        homography, inlier_labels, reprojection_error = self._estimate_homography(observations)
 
-        homography_status = 'unavailable'
+        homography_status = "unavailable"
         projected_keypoints: List[ProjectedPitchKeypoint] = []
         display_tracking = list(observations.values())
 
         if homography is not None:
-            homography_status = 'fresh'
+            homography_status = "fresh"
             self.prev_valid_homography = homography
             self.stale_frames = 0
             inlier_set = set(inlier_labels)
@@ -125,18 +222,12 @@ class PitchProjectionEngine:
             ]
             projected_keypoints = self._project_keypoints(
                 homography,
-                [
-                    observations[label]
-                    for label in inlier_labels
-                ],
+                [observations[label] for label in inlier_labels],
             )
-        elif (
-            self.prev_valid_homography is not None
-            and self.stale_frames < self.max_stale_frames
-        ):
+        elif self.prev_valid_homography is not None and self.stale_frames < self.max_stale_frames:
             homography = self.prev_valid_homography
             self.stale_frames += 1
-            homography_status = 'stale'
+            homography_status = "stale"
             reprojection_error = None
             projected_keypoints = []
         else:
@@ -159,17 +250,14 @@ class PitchProjectionEngine:
         frames, so a fixed camera cannot silently keep an old calibration
         forever.
         """
-        if (
-            self.prev_valid_homography is None
-            or self.stale_frames >= self.max_stale_frames
-        ):
+        if self.prev_valid_homography is None or self.stale_frames >= self.max_stale_frames:
             self.prev_valid_homography = None
             self.stale_frames = 0
             return PitchProjectionResult(
                 tracking_observations=[],
                 projected_keypoints=[],
                 homography=None,
-                homography_status='unavailable',
+                homography_status="unavailable",
                 reprojection_error=None,
             )
 
@@ -178,7 +266,7 @@ class PitchProjectionEngine:
             tracking_observations=[],
             projected_keypoints=[],
             homography=self.prev_valid_homography,
-            homography_status='reused',
+            homography_status="reused",
             reprojection_error=None,
         )
 
@@ -218,7 +306,7 @@ class PitchProjectionEngine:
                 reference=reference,
                 image_xy=(x_value, y_value),
                 confidence=float(confidence[index]),
-                source='model',
+                source="model",
             )
         return observations
 
@@ -260,9 +348,7 @@ class PitchProjectionEngine:
                 continue
 
             inlier_mask = (
-                np.ones(len(ordered), dtype=bool)
-                if mask is None
-                else mask.flatten().astype(bool)
+                np.ones(len(ordered), dtype=bool) if mask is None else mask.flatten().astype(bool)
             )
             if int(np.count_nonzero(inlier_mask)) < max(
                 MIN_KEYPOINTS_FOR_HOMOGRAPHY,
@@ -308,7 +394,10 @@ class PitchProjectionEngine:
         return [
             ProjectedPitchKeypoint(
                 reference=observation.reference,
-                projected_world_xy=(float(projected_points[index][0]), float(projected_points[index][1])),
+                projected_world_xy=(
+                    float(projected_points[index][0]),
+                    float(projected_points[index][1]),
+                ),
                 source=observation.source,
             )
             for index, observation in enumerate(observations)
@@ -329,7 +418,4 @@ class PitchProjectionEngine:
     ) -> bool:
         height = int(frame_shape[0])
         width = int(frame_shape[1])
-        return (
-            margin <= point[0] < width - margin
-            and margin <= point[1] < height - margin
-        )
+        return margin <= point[0] < width - margin and margin <= point[1] < height - margin
